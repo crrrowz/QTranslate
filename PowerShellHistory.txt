@@ -1,0 +1,10 @@
+./gradlew build
+npx skills@latest add mattpocock/skills
+npm config get prefix
+npm config get cache
+New-Item -ItemType Directory -Force "D:\nodejs\npm-global"
+New-Item -ItemType Directory -Force "D:\nodejs\npm-cache"
+npx skills@latest add mattpocock/skills
+npx skills@latest
+npx skills list
+npx skills list -g

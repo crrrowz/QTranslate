@@ -78,3 +78,4 @@ logs/
 # =============================================================================
 # Add local IDE or tool config files that should not be committed
 local.properties
+/build-output

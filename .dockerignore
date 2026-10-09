@@ -1,0 +1,9 @@
+.git
+.gradle
+build
+**/build
+build-output/
+.idea
+*.iml
+.DS_Store
+PowerShellHistory.txt
