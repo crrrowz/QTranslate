@@ -6,6 +6,7 @@ import com.github.michaelbull.result.get
 import com.github.michaelbull.result.getError
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -36,9 +37,8 @@ class VoskLiveIntegrationTest {
 
         val started = System.currentTimeMillis()
         val events = async {
-            live.events.toList().onEach { event ->
-                println("+${System.currentTimeMillis() - started} ms  $event")
-            }
+            // Printed as each arrives, so the times show the real latency.
+            live.events.onEach { event -> println("+${System.currentTimeMillis() - started} ms  $event") }.toList()
         }
         // 100 ms chunks at real-time pace, as a microphone delivers them.
         val pcm = wav!!.readBytes().copyOfRange(44, wav.length().toInt())
