@@ -13,6 +13,7 @@ import com.github.michaelbull.result.Err
 import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.andThen
+import com.github.michaelbull.result.getError
 import com.github.michaelbull.result.map
 import com.github.michaelbull.result.toResultOr
 import kotlinx.serialization.json.Json
@@ -236,7 +237,24 @@ class AIServiceClient(
         audio: SpeechAudio,
         language: String?,
         prompt: String?
-    ): Result<String, ServiceError> {
+    ): Result<TranscriptionResponse, ServiceError> {
+        // Word timings let the host replay a single word, but not every compatible server offers
+        // the verbose format (gpt-4o-transcribe and some local servers reject it). One retry in
+        // the plain format keeps those working, just without timings.
+        val verbose = transcribe(audio, language, prompt, verbose = true)
+        val error = verbose.getError() ?: return verbose
+        if (error is ServiceError.AuthenticationError || error is ServiceError.NetworkError ||
+            error is ServiceError.RateLimitError || error is ServiceError.ConfigurationError
+        ) return verbose
+        return transcribe(audio, language, prompt, verbose = false)
+    }
+
+    private suspend fun transcribe(
+        audio: SpeechAudio,
+        language: String?,
+        prompt: String?,
+        verbose: Boolean
+    ): Result<TranscriptionResponse, ServiceError> {
         val current = settings()
         current.missingSpeechKeyError()?.let { return Err(it) }
 
@@ -256,7 +274,12 @@ class AIServiceClient(
                 bytes       = audio.bytes
             ))
             add(MultipartPart.Text("model", current.speechModel.ifBlank { AISettings().speechModel }))
-            add(MultipartPart.Text("response_format", "json"))
+            if (verbose) {
+                add(MultipartPart.Text("response_format", "verbose_json"))
+                add(MultipartPart.Text("timestamp_granularities[]", "word"))
+            } else {
+                add(MultipartPart.Text("response_format", "json"))
+            }
             add(MultipartPart.Text("temperature", "0"))
             language?.let { add(MultipartPart.Text("language", it)) }
             // Whisper reads only the last 224 tokens of a prompt; a tail of the conversation is
@@ -274,7 +297,7 @@ class AIServiceClient(
             .andThen { body -> transcriptionParser.parse(body) }
             .andThen { response ->
                 response.error?.let { return@andThen Err(mapError(it)) }
-                Ok(response.text.orEmpty().trim())
+                Ok(response.copy(text = response.text.orEmpty().trim()))
             }
     }
 

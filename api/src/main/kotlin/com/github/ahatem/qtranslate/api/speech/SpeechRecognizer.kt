@@ -53,7 +53,24 @@ public data class SpeechRecognitionRequest(
  */
 public data class SpeechRecognitionResponse(
     val text: String,
-    val detectedLanguage: LanguageCode? = null
+    val detectedLanguage: LanguageCode? = null,
+    /**
+     * Each recognised word with where it falls in the clip, when the service reports timings.
+     * Lets the host replay a single word. Empty when the service has no word timestamps.
+     */
+    val words: List<RecognizedWord> = emptyList()
+)
+
+/**
+ * One recognised word and its position in the clip.
+ *
+ * @param startMillis Offset from the start of the clip.
+ * @param endMillis   Offset from the start of the clip; never before [startMillis].
+ */
+public data class RecognizedWord(
+    val text: String,
+    val startMillis: Long,
+    val endMillis: Long
 )
 
 /**

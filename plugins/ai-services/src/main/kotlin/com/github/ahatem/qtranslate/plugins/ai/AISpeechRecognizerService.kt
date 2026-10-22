@@ -4,6 +4,7 @@ import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
 import com.github.ahatem.qtranslate.api.plugin.ServiceMetadata
 import com.github.ahatem.qtranslate.api.plugin.SupportedLanguages
+import com.github.ahatem.qtranslate.api.speech.RecognizedWord
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionRequest
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognizer
@@ -36,14 +37,38 @@ class AISpeechRecognizerService(
             audio    = request.audio,
             language = whisperLanguage(request.language),
             prompt   = request.prompt
-        ).map { text ->
+        ).map { response ->
             SpeechRecognitionResponse(
-                text = text,
+                text = response.text.orEmpty(),
                 detectedLanguage = request.language.takeUnless { it == LanguageCode.AUTO }
+                    ?: response.language?.let(::languageFromName),
+                words = response.words.orEmpty()
+                    .filter { it.word.isNotBlank() }
+                    .map { word ->
+                        val start = (word.start * 1000).toLong().coerceAtLeast(0)
+                        RecognizedWord(
+                            text = word.word.trim(),
+                            startMillis = start,
+                            endMillis = (word.end * 1000).toLong().coerceAtLeast(start)
+                        )
+                    }
             )
         }
 
     internal companion object {
+        /**
+         * Whisper's verbose format names the language in English ("english", "arabic") rather
+         * than coding it. Matched against the JDK's own English language names.
+         */
+        fun languageFromName(name: String): LanguageCode? {
+            val wanted = name.trim().lowercase()
+            if (wanted.isEmpty()) return null
+            if (wanted.length in 2..3) return LanguageCode(wanted)
+            return java.util.Locale.getISOLanguages()
+                .firstOrNull { java.util.Locale(it).getDisplayLanguage(java.util.Locale.ENGLISH).lowercase() == wanted }
+                ?.let(::LanguageCode)
+        }
+
         /** The ISO-639-1 code Whisper expects, or null to let it detect the language. */
         fun whisperLanguage(language: LanguageCode): String? =
             language.takeUnless { it == LanguageCode.AUTO }

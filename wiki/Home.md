@@ -10,6 +10,7 @@ Welcome to the QTranslate documentation wiki.
 - [Hotkeys](Hotkeys.md) — global vs. app-local hotkeys, switching presets, and troubleshooting one that won't fire
 - [System Services](System-Services.md) — the bundled offline OCR/TTS/spell-check plugin, and what each platform needs
 - [AI Services](AI-Services.md) — point translation, summarizing, rewriting, and Vision OCR at a local Ollama/LM Studio server or a cloud OpenAI-compatible endpoint
+- [Conversation Sessions](Conversation-Sessions.md) — record a Discord call, read the live transcript and translate any word by hovering it
 - [Adding a Language](Adding-a-Language.md) — translate the QTranslate interface into your language
 - [Adding a Theme](Adding-a-Theme.md) — install community themes or create your own
 
