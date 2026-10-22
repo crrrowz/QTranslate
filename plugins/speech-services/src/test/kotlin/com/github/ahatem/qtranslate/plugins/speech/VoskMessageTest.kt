@@ -29,4 +29,9 @@ class VoskMessageTest {
         assertEquals(VoskMessage.Other, parseVoskMessage("not json"))
         assertEquals(VoskMessage.Other, parseVoskMessage("""{"type":"something-new"}"""))
     }
+
+    @Test
+    fun `vosk native library loads successfully`() {
+        org.vosk.LibVosk.setLogLevel(org.vosk.LogLevel.WARNINGS)
+    }
 }

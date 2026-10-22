@@ -26,9 +26,13 @@ class SpeechPlugin : Plugin<SpeechSettings> {
     private val http: HttpClient get() = context.http
     private var settings = SpeechSettings()
     private var services: List<Service> = emptyList()
+    private lateinit var modelManager: VoskModelManager
+    private var builtinService: VoskBuiltinService? = null
 
     override suspend fun initialize(context: PluginContext): Result<Unit, ServiceError> {
         this.context = context
+        modelManager = VoskModelManager({ context.getPluginDataDirectory() })
+        builtinService = VoskBuiltinService(modelManager, { settings })
         settings = SpeechSettings(
             provider = context.settings.getString(KEY_PROVIDER) ?: SpeechProvider.GROQ.label,
             baseUrl = context.settings.getString(KEY_BASE_URL).orEmpty(),
@@ -37,16 +41,21 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             liveServerUrl = context.settings.getString(KEY_LIVE_URL).orEmpty(),
             // Saved before the engine choice existed: an address alone meant Vosk was wanted.
             liveEngine = context.settings.getString(KEY_LIVE_ENGINE)
-                ?: if (context.settings.getString(KEY_LIVE_URL).isNullOrBlank()) LIVE_OFF else LIVE_VOSK,
-            liveAutoLanguage = context.settings.getString(KEY_LIVE_AUTO_LANGUAGE) ?: "en"
-        )
+                ?: if (context.settings.getString(KEY_LIVE_URL).isNullOrBlank()) LIVE_OFF else LIVE_VOSK_SERVER,
+            liveAutoLanguage = context.settings.getString(KEY_LIVE_AUTO_LANGUAGE) ?: "en",
+            voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.DEFAULT_MODEL_NAME
+        ).apply {
+            this.modelManager = this@SpeechPlugin.modelManager
+        }
         return Ok(Unit)
     }
 
     override suspend fun onEnable(): Result<Unit, ServiceError> {
+        val builtin = builtinService ?: VoskBuiltinService(modelManager, { settings }).also { builtinService = it }
         services = listOf(
             SpeechRecognitionService(SpeechClient(context, http) { settings }) { settings },
-            VoskLiveService { settings }
+            VoskLiveService({ settings }, builtin),
+            builtin
         )
         return Ok(Unit)
     }
@@ -58,9 +67,12 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             apiKey = settings.apiKey.trim(),
             model = settings.model.trim(),
             liveServerUrl = settings.liveServerUrl.trim(),
-            liveEngine = if (settings.liveEngine == LIVE_VOSK) LIVE_VOSK else LIVE_OFF,
-            liveAutoLanguage = settings.liveAutoLanguage.trim().ifEmpty { "en" }
-        )
+            liveEngine = if (settings.liveEngine in listOf(LIVE_VOSK_BUILTIN, LIVE_VOSK_SERVER)) settings.liveEngine else LIVE_OFF,
+            liveAutoLanguage = settings.liveAutoLanguage.trim().ifEmpty { "en" },
+            voskBuiltinModel = settings.voskBuiltinModel.trim().ifEmpty { VoskModelManager.DEFAULT_MODEL_NAME }
+        ).apply {
+            this.modelManager = this@SpeechPlugin.modelManager
+        }
         // A missing key is fine to save (the user may add it later); an unusable URL is not.
         cleaned.urlError()?.let { return Err(ServiceError.ValidationError(it.message)) }
 
@@ -70,16 +82,19 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.settings.put(KEY_LIVE_URL, cleaned.liveServerUrl)
         context.settings.put(KEY_LIVE_ENGINE, cleaned.liveEngine)
         context.settings.put(KEY_LIVE_AUTO_LANGUAGE, cleaned.liveAutoLanguage)
+        context.settings.put(KEY_VOSK_BUILTIN_MODEL, cleaned.voskBuiltinModel)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
         this.settings = cleaned
         return Ok(Unit)
     }
 
     override suspend fun onDisable() {
+        builtinService?.close()
         services = emptyList()
     }
 
     override suspend fun shutdown() {
+        builtinService?.close()
         services = emptyList()
     }
 
@@ -94,6 +109,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         const val KEY_LIVE_URL = "liveServerUrl"
         const val KEY_LIVE_ENGINE = "liveEngine"
         const val KEY_LIVE_AUTO_LANGUAGE = "liveAutoLanguage"
+        const val KEY_VOSK_BUILTIN_MODEL = "voskBuiltinModel"
     }
 }
 

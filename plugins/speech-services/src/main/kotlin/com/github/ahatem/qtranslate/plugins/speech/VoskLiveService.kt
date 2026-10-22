@@ -44,29 +44,58 @@ import java.util.concurrent.CompletionStage
  * Off until a server URL is set: a live recognizer is an optional extra, and trying to reach a
  * server nobody runs would only produce errors.
  */
-class VoskLiveService(private val settings: () -> SpeechSettings) : LiveSpeechRecognizer {
+class VoskLiveService(
+    private val settings: () -> SpeechSettings,
+    private val builtinService: LiveSpeechRecognizer? = null
+) : LiveSpeechRecognizer {
+    constructor(settings: () -> SpeechSettings) : this(settings, null)
     override val metadata = ServiceMetadata()
     override val key: String = "vosk-live"
-    override val name: String = "Vosk (live)"
+    override val name: String
+        get() = when (settings().liveEngine) {
+            LIVE_VOSK_BUILTIN -> "Vosk (built-in)"
+            LIVE_VOSK_SERVER -> "Vosk (local server)"
+            else -> "Vosk (live)"
+        }
     override val version: String = "1.0.0"
     override val iconPath: String = "assets/speech.svg"
     override val supportedLanguages: SupportedLanguages = SupportedLanguages.Dynamic
 
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
         val current = settings()
-        if (!current.liveEnabled) {
-            return Err(ServiceError.ConfigurationError("Live text is off in Settings > Plugins > Speech Recognition."))
+        return when (current.liveEngine) {
+            LIVE_VOSK_BUILTIN -> {
+                val builtin = builtinService
+                    ?: return Err(ServiceError.ConfigurationError("Built-in Vosk engine is not available."))
+                builtin.openSession(language)
+            }
+            LIVE_VOSK_SERVER -> {
+                val url = current.liveServerUrl.trim()
+                if (url.isEmpty()) {
+                    return Err(ServiceError.ConfigurationError("Vosk server URL is blank in Settings > Plugins > Speech Recognition."))
+                }
+                val lang = SpeechClient.primaryTag(language) ?: current.liveAutoLanguage.trim().ifEmpty { "en" }
+                VoskSession.open(url, lang)
+            }
+            else -> Err(ServiceError.ConfigurationError("Live text is off in Settings > Plugins > Speech Recognition."))
         }
-        val url = current.liveServerUrl.trim()
-        val lang = SpeechClient.primaryTag(language) ?: current.liveAutoLanguage.trim().ifEmpty { "en" }
-        return VoskSession.open(url, lang)
     }
 
     /** Answers whether the server is there and which models it has, without recognising anything. */
     override suspend fun validate(): Result<Unit, ServiceError> {
         val current = settings()
-        if (!current.liveEnabled) return Ok(Unit)
-        return VoskSession.ping(current.liveServerUrl.trim())
+        return when (current.liveEngine) {
+            LIVE_VOSK_BUILTIN -> builtinService?.validate() ?: Ok(Unit)
+            LIVE_VOSK_SERVER -> {
+                val url = current.liveServerUrl.trim()
+                if (url.isEmpty()) {
+                    Err(ServiceError.ConfigurationError("Vosk server URL is blank in Settings > Plugins > Speech Recognition."))
+                } else {
+                    VoskSession.ping(url)
+                }
+            }
+            else -> Ok(Unit)
+        }
     }
 }
 

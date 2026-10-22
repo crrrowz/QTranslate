@@ -8,6 +8,8 @@ dependencies {
     implementation(project(":api"))
     implementation(project(":plugins:common"))
     implementation(libs.kotlinxSerialization)
+    implementation(libs.vosk)
+    implementation(libs.jna)
 
     testImplementation(kotlin("test"))
     testImplementation(testFixtures(project(":plugins:common")))

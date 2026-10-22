@@ -1,0 +1,371 @@
+package com.github.ahatem.qtranslate.plugins.speech
+
+import com.github.ahatem.qtranslate.api.plugin.ServiceError
+import com.github.michaelbull.result.Err
+import com.github.michaelbull.result.Ok
+import com.github.michaelbull.result.Result
+import com.github.michaelbull.result.fold
+import com.github.michaelbull.result.getError
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URI
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+
+/**
+ * Metadata for a downloadable Vosk speech recognition model.
+ *
+ * Hosted on alphacephei.com/vosk/models. Small models (~30-50 MB) run fast with low memory;
+ * large models offer higher accuracy at the cost of more disk and memory.
+ */
+data class VoskModel(
+    val name: String,
+    val language: String,
+    val label: String,
+    val sizeBytes: Long,
+    val url: String,
+    val isLarge: Boolean = false
+) {
+    val sizeMb: Int get() = (sizeBytes / (1024 * 1024)).toInt()
+}
+
+/**
+ * Manages local Vosk speech models: listing available models, checking disk installation,
+ * downloading archives from alphacephei.com with progress, unzipping, verifying, and deleting.
+ *
+ * Models are stored inside the plugin's dedicated data directory under `vosk-models/`.
+ */
+class VoskModelManager(
+    private val dataDirectory: () -> File,
+    private val downloader: suspend (url: String, targetZip: File, onProgress: ((Long, Long) -> Unit)?) -> Result<Unit, ServiceError> = ::defaultDownload
+) {
+    val modelsDirectory: File
+        get() = File(dataDirectory(), "vosk-models").apply { if (!exists()) mkdirs() }
+
+    fun isInstalled(modelName: String): Boolean {
+        val dir = File(modelsDirectory, modelName)
+        return dir.isDirectory && (dir.list()?.isNotEmpty() == true)
+    }
+
+    fun listInstalledModels(): List<File> {
+        val root = modelsDirectory
+        if (!root.exists() || !root.isDirectory) return emptyList()
+        return root.listFiles { file -> file.isDirectory && file.list()?.isNotEmpty() == true }?.toList() ?: emptyList()
+    }
+
+    /**
+     * Resolves an installed model directory for [language] (e.g. "en", "ar").
+     *
+     * If [preferredModelName] is installed, it is returned first. Otherwise returns any installed
+     * model matching the language prefix.
+     */
+    fun findModelForLanguage(language: String, preferredModelName: String? = null): File? {
+        val lang = language.lowercase().take(2)
+        if (!preferredModelName.isNullOrBlank()) {
+            val preferredDir = File(modelsDirectory, preferredModelName)
+            if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
+                // If it matches the language or if language is generic, return it
+                val info = MODELS_BY_NAME[preferredModelName]
+                if (info == null || info.language == lang) {
+                    return preferredDir
+                }
+            }
+        }
+
+        // Check installed models matching language
+        val installed = listInstalledModels()
+        val matchingInstalled = installed.firstOrNull { dir ->
+            val info = MODELS_BY_NAME[dir.name]
+            info?.language == lang || dir.name.contains("-$lang-") || dir.name.contains("-$lang")
+        }
+        if (matchingInstalled != null) return matchingInstalled
+
+        // Fallback: if preferredModel is installed regardless of language tag
+        if (!preferredModelName.isNullOrBlank()) {
+            val preferredDir = File(modelsDirectory, preferredModelName)
+            if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
+                return preferredDir
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Downloads [model] archive from alphacephei.com, extracts it into [modelsDirectory],
+     * verifies the extracted files, and removes the archive.
+     */
+    suspend fun downloadModel(
+        model: VoskModel,
+        onProgress: ((downloadedBytes: Long, totalBytes: Long) -> Unit)? = null
+    ): Result<File, ServiceError> = withContext(Dispatchers.IO) {
+        val targetDir = File(modelsDirectory, model.name)
+        if (isInstalled(model.name)) {
+            return@withContext Ok(targetDir)
+        }
+
+        val tempZip = File(modelsDirectory, "${model.name}.zip.tmp")
+        try {
+            val downloadError = downloader(model.url, tempZip, onProgress).getError()
+            if (downloadError != null) {
+                tempZip.delete()
+                return@withContext Err(downloadError)
+            }
+
+            extractZip(tempZip, modelsDirectory)
+            tempZip.delete()
+
+            if (!targetDir.isDirectory) {
+                // If the archive unzipped into an inner or slightly different folder name
+                val found = modelsDirectory.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith(model.name) }
+                if (found != null && found != targetDir) {
+                    found.renameTo(targetDir)
+                }
+            }
+
+            if (!isInstalled(model.name)) {
+                return@withContext Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
+            }
+
+            Ok(targetDir)
+        } catch (e: Exception) {
+            tempZip.delete()
+            targetDir.deleteRecursively()
+            Err(ServiceError.NetworkError("Failed to download or extract model '${model.name}': ${e.message}", e))
+        }
+    }
+
+    fun deleteModel(modelName: String): Boolean {
+        val dir = File(modelsDirectory, modelName)
+        return if (dir.exists()) dir.deleteRecursively() else false
+    }
+
+    /** Message for the settings "Check Models" action. */
+    fun statusAction(): String {
+        val installed = listInstalledModels()
+        if (installed.isEmpty()) {
+            return "No built-in Vosk models downloaded yet.\nChoose a model from the dropdown and click 'Download Model'."
+        }
+        val lines = installed.map { dir ->
+            val info = MODELS_BY_NAME[dir.name]
+            val desc = info?.label ?: dir.name
+            "• $desc (${dir.name})"
+        }
+        return "Installed Vosk models (${installed.size}):\n" + lines.joinToString("\n")
+    }
+
+    /** Message for the settings "Download Model" action. */
+    suspend fun downloadAction(modelName: String): String {
+        val model = MODELS_BY_NAME[modelName]
+            ?: return "Unknown model '$modelName'. Please choose a model from the list."
+        if (isInstalled(model.name)) {
+            return "Model '${model.label}' is already downloaded and ready to use."
+        }
+        return downloadModel(model).fold(
+            success = { "Model '${model.label}' (~${model.sizeMb} MB) downloaded and installed successfully." },
+            failure = { error -> "Download failed: ${error.message}" }
+        )
+    }
+
+    companion object {
+        val AVAILABLE_MODELS = listOf(
+            VoskModel(
+                name = "vosk-model-small-en-us-0.15",
+                language = "en",
+                label = "English (US) small ~40MB",
+                sizeBytes = 40 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-en-us-0.22-lgraph",
+                language = "en",
+                label = "English (US) large ~128MB",
+                sizeBytes = 128 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
+                isLarge = true
+            ),
+            VoskModel(
+                name = "vosk-model-small-ar-mgb2-0.4",
+                language = "ar",
+                label = "Arabic small ~31MB",
+                sizeBytes = 31 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-ar-mgb2-0.4.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-ar-0.22-linto-1.1.0",
+                language = "ar",
+                label = "Arabic large ~318MB",
+                sizeBytes = 318 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-ar-0.22-linto-1.1.0.zip",
+                isLarge = true
+            ),
+            VoskModel(
+                name = "vosk-model-small-de-0.15",
+                language = "de",
+                label = "German small ~45MB",
+                sizeBytes = 45 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-fr-0.22",
+                language = "fr",
+                label = "French small ~41MB",
+                sizeBytes = 41 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-es-0.42",
+                language = "es",
+                label = "Spanish small ~39MB",
+                sizeBytes = 39 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-it-0.22",
+                language = "it",
+                label = "Italian small ~48MB",
+                sizeBytes = 48 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-ru-0.22",
+                language = "ru",
+                label = "Russian small ~45MB",
+                sizeBytes = 45 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-tr-0.3",
+                language = "tr",
+                label = "Turkish small ~35MB",
+                sizeBytes = 35 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-pt-0.3",
+                language = "pt",
+                label = "Portuguese small ~31MB",
+                sizeBytes = 31 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-ja-0.22",
+                language = "ja",
+                label = "Japanese small ~48MB",
+                sizeBytes = 48 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-cn-0.22",
+                language = "zh",
+                label = "Chinese small ~42MB",
+                sizeBytes = 42 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip",
+                isLarge = false
+            ),
+            VoskModel(
+                name = "vosk-model-small-uk-v3-nano",
+                language = "uk",
+                label = "Ukrainian small ~73MB",
+                sizeBytes = 73 * 1024 * 1024L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-small-uk-v3-nano.zip",
+                isLarge = false
+            )
+        )
+
+        val MODELS_BY_NAME: Map<String, VoskModel> = AVAILABLE_MODELS.associateBy { it.name }
+        const val DEFAULT_MODEL_NAME = "vosk-model-small-en-us-0.15"
+
+        const val DROPDOWN_OPTIONS: String =
+            "vosk-model-small-en-us-0.15,vosk-model-en-us-0.22-lgraph,vosk-model-small-ar-mgb2-0.4,vosk-model-ar-0.22-linto-1.1.0,vosk-model-small-de-0.15,vosk-model-small-fr-0.22,vosk-model-small-es-0.42,vosk-model-small-it-0.22,vosk-model-small-ru-0.22,vosk-model-small-tr-0.3,vosk-model-small-pt-0.3,vosk-model-small-ja-0.22,vosk-model-small-cn-0.22,vosk-model-small-uk-v3-nano"
+
+        private suspend fun defaultDownload(
+            urlStr: String,
+            targetZip: File,
+            onProgress: ((Long, Long) -> Unit)?
+        ): Result<Unit, ServiceError> = withContext(Dispatchers.IO) {
+            try {
+                val url = URI(urlStr).toURL()
+                val connection = url.openConnection() as HttpURLConnection
+                connection.connectTimeout = 15_000
+                connection.readTimeout = 60_000
+                connection.instanceFollowRedirects = true
+
+                var code = connection.responseCode
+                var redirectedConn = connection
+                var redirects = 0
+                while ((code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP || code == 307 || code == 308) && redirects < 5) {
+                    val newLocation = redirectedConn.getHeaderField("Location") ?: break
+                    redirectedConn.disconnect()
+                    val nextUrl = URI(newLocation).toURL()
+                    redirectedConn = nextUrl.openConnection() as HttpURLConnection
+                    redirectedConn.connectTimeout = 15_000
+                    redirectedConn.readTimeout = 60_000
+                    code = redirectedConn.responseCode
+                    redirects++
+                }
+
+                if (code !in 200..299) {
+                    return@withContext Err(ServiceError.NetworkError("HTTP $code while downloading $urlStr"))
+                }
+
+                val totalLength = redirectedConn.contentLengthLong
+                targetZip.parentFile?.mkdirs()
+
+                redirectedConn.inputStream.use { input ->
+                    FileOutputStream(targetZip).use { output ->
+                        val buffer = ByteArray(32 * 1024)
+                        var bytesRead: Int
+                        var accumulated = 0L
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            accumulated += bytesRead
+                            onProgress?.invoke(accumulated, totalLength)
+                        }
+                    }
+                }
+                Ok(Unit)
+            } catch (e: Exception) {
+                Err(ServiceError.NetworkError("Download failed: ${e.message}", e))
+            }
+        }
+
+        fun extractZip(zipFile: File, destinationDir: File) {
+            val destCanonical = destinationDir.canonicalPath
+            ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
+                var entry: ZipEntry? = zis.nextEntry
+                while (entry != null) {
+                    val destFile = File(destinationDir, entry.name)
+                    val canonicalPath = destFile.canonicalPath
+                    if (!canonicalPath.startsWith(destCanonical + File.separator) && canonicalPath != destCanonical) {
+                        throw SecurityException("Zip traversal detected: ${entry.name}")
+                    }
+                    if (entry.isDirectory) {
+                        destFile.mkdirs()
+                    } else {
+                        destFile.parentFile?.mkdirs()
+                        FileOutputStream(destFile).use { fos ->
+                            zis.copyTo(fos)
+                        }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+        }
+    }
+}

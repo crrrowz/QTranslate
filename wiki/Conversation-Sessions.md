@@ -46,9 +46,23 @@ report. Without them everything else still works; only **Play** on a single word
 
 With an accurate provider alone, a line appears only after its speaker pauses and the provider
 answers, which with a slow model can take 20 seconds. **Live text** shows words while people are still
-talking, from a [Vosk](https://alphacephei.com/vosk/) server on your own computer or network.
-Nothing goes to the internet: QTranslate talks to the server over a local WebSocket API. Measured on a
-home network, words appear about one second after they are spoken.
+talking, using [Vosk](https://alphacephei.com/vosk/). Words appear about one second after they are spoken,
+completely offline with zero data leaving your machine.
+
+#### Option A: Built-in engine (no server, no Docker — recommended)
+
+QTranslate includes Vosk's native offline recognition engine directly inside the Speech Recognition plugin:
+
+1. In **Settings > Plugins > Speech Recognition**, under **Live text**, set **Live engine** to **Vosk (built-in)**.
+2. Select a model from **Built-in model** (for example, `vosk-model-small-en-us-0.15` for English ~40MB, or `vosk-model-small-ar-mgb2-0.4` for Arabic ~31MB).
+3. Click **Download Model** to download and install the model into local storage directly from alphacephei.com.
+4. Click **Check Models** anytime to inspect installed models on disk.
+
+No Docker, Python, or extra background processes are required.
+
+#### Option B: External Vosk server (local network or Docker)
+
+If you prefer to run Vosk on a separate server or machine on your local network:
 
 **1. Run a Vosk server.** QTranslate speaks the protocol of the Vosk STT extension's
 `vosk_server.py` (`configure`, raw PCM, `partial`/`result`, `stop`). Models go in a folder laid out

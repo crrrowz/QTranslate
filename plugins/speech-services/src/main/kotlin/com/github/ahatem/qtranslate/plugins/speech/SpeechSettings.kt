@@ -2,21 +2,28 @@ package com.github.ahatem.qtranslate.plugins.speech
 
 import com.github.ahatem.qtranslate.api.plugin.PluginSettings
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
+import com.github.ahatem.qtranslate.api.settings.PluginAction
 import com.github.ahatem.qtranslate.api.settings.Setting
 import com.github.ahatem.qtranslate.api.settings.SettingGroup
 import com.github.ahatem.qtranslate.api.settings.SettingGroups
 import com.github.ahatem.qtranslate.api.settings.SettingType
 import java.net.URI
 
+const val LIVE_OFF = "Off"
+const val LIVE_VOSK_BUILTIN = "Vosk (built-in)"
+const val LIVE_VOSK_SERVER = "Vosk (local server)"
+const val LIVE_VOSK = LIVE_VOSK_SERVER
+const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER"
+
 /**
- * Two jobs, two groups. Live text appears while people talk (a local Vosk server); accurate text
- * replaces each finished line (a Whisper-style provider). Either can be off; with both on, the live
+ * Two jobs, two groups. Live text appears while people talk (a local Vosk server or built-in Vosk engine);
+ * accurate text replaces each finished line (a Whisper-style provider). Either can be off; with both on, the live
  * words show at once and the accurate ones take their place.
  */
 @SettingGroups(
     SettingGroup(
         key = "live", title = "Live text", order = 10,
-        description = "Words appear while people are still talking, from a Vosk server on your computer or network."
+        description = "Words appear while people are still talking, locally via built-in Vosk or a Vosk server on your network."
     ),
     SettingGroup(
         key = "accurate", title = "Accurate text", order = 20,
@@ -69,7 +76,7 @@ data class SpeechSettings(
 
     @field:Setting(
         label = "Live engine",
-        description = "Off records and transcribes line by line. Vosk shows words as they are spoken.",
+        description = "Off records and transcribes line by line. Vosk (built-in) runs completely offline without extra software. Vosk (local server) connects to an external server.",
         type = SettingType.DROPDOWN,
         options = LIVE_ENGINE_OPTIONS,
         defaultValue = LIVE_OFF,
@@ -79,11 +86,23 @@ data class SpeechSettings(
     var liveEngine: String = LIVE_OFF,
 
     @field:Setting(
+        label = "Built-in model",
+        description = "Model for built-in Vosk engine. Click 'Download Model' to fetch it from alphacephei.com.",
+        type = SettingType.DROPDOWN,
+        options = VoskModelManager.DROPDOWN_OPTIONS,
+        defaultValue = VoskModelManager.DEFAULT_MODEL_NAME,
+        group = "live",
+        showIf = "liveEngine=$LIVE_VOSK_BUILTIN",
+        order = 40
+    )
+    var voskBuiltinModel: String = VoskModelManager.DEFAULT_MODEL_NAME,
+
+    @field:Setting(
         label = "Vosk server URL",
         description = "The Vosk server's local WebSocket address, e.g. ws://localhost:8765 or ws://192.168.1.20:8765.",
         type = SettingType.TEXT,
         group = "live",
-        showIf = "liveEngine=$LIVE_VOSK",
+        showIf = "liveEngine=$LIVE_VOSK_SERVER",
         order = 50
     )
     var liveServerUrl: String = "",
@@ -95,15 +114,44 @@ data class SpeechSettings(
         type = SettingType.TEXT,
         defaultValue = "en",
         group = "live",
-        showIf = "liveEngine=$LIVE_VOSK",
         order = 60
     )
     var liveAutoLanguage: String = "en"
 ) : PluginSettings.Configurable() {
 
+    @Transient
+    var modelManager: VoskModelManager? = null
+
+    @PluginAction(
+        label = "Download Model",
+        group = "live",
+        order = 1,
+        tooltip = "Downloads and installs the selected Vosk model from alphacephei.com"
+    )
+    suspend fun downloadSelectedModel(): String? {
+        val manager = modelManager ?: return "Model manager not initialized."
+        return manager.downloadAction(voskBuiltinModel)
+    }
+
+    @PluginAction(
+        label = "Check Models",
+        group = "live",
+        order = 2,
+        tooltip = "Lists locally downloaded Vosk models"
+    )
+    suspend fun checkModels(): String? {
+        val manager = modelManager ?: return "Model manager not initialized."
+        return manager.statusAction()
+    }
+
     val speechProvider: SpeechProvider get() = SpeechProvider.fromLabel(provider)
 
-    val liveEnabled: Boolean get() = liveEngine == LIVE_VOSK && liveServerUrl.isNotBlank()
+    val liveEnabled: Boolean
+        get() = when (liveEngine) {
+            LIVE_VOSK_BUILTIN -> true
+            LIVE_VOSK_SERVER -> liveServerUrl.isNotBlank()
+            else -> false
+        }
 
     /** The address requests go to: the user's, or the provider's when left blank. */
     val effectiveBaseUrl: String get() = baseUrl.trim().trimEnd('/').ifEmpty { speechProvider.defaultBaseUrl }
@@ -153,7 +201,3 @@ data class SpeechSettings(
         host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" ||
             host.endsWith(".local") || host.startsWith("192.168.") || host.startsWith("10.")
 }
-
-const val LIVE_OFF = "Off"
-const val LIVE_VOSK = "Vosk (local server)"
-const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK"
