@@ -12,18 +12,20 @@ import java.net.URI
 const val LIVE_OFF = "Off"
 const val LIVE_VOSK_BUILTIN = "Vosk (built-in)"
 const val LIVE_VOSK_SERVER = "Vosk (local server)"
+const val LIVE_DEEPGRAM = "Deepgram (live)"
+const val LIVE_OPENAI = "OpenAI Realtime"
 const val LIVE_VOSK = LIVE_VOSK_SERVER
-const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER"
+const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER,$LIVE_DEEPGRAM,$LIVE_OPENAI"
 
 /**
- * Two jobs, two groups. Live text appears while people talk (a local Vosk server or built-in Vosk engine);
+ * Two jobs, two groups. Live text appears while people talk (Vosk, Deepgram live, OpenAI Realtime);
  * accurate text replaces each finished line (a Whisper-style provider). Either can be off; with both on, the live
  * words show at once and the accurate ones take their place.
  */
 @SettingGroups(
     SettingGroup(
         key = "live", title = "Live text", order = 10,
-        description = "Words appear while people are still talking, locally via built-in Vosk or a Vosk server on your network."
+        description = "Words appear while people are still talking, locally via built-in Vosk or cloud streaming (Deepgram, OpenAI Realtime)."
     ),
     SettingGroup(
         key = "accurate", title = "Accurate text", order = 20,
@@ -51,6 +53,7 @@ data class SpeechSettings(
         description = "Leave blank for the provider's own address. Required for Custom and Audio chat model.",
         type = SettingType.TEXT,
         group = "accurate",
+        showIf = "provider=Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible),Local Whisper server",
         order = 20
     )
     var baseUrl: String = "",
@@ -60,6 +63,7 @@ data class SpeechSettings(
         description = "Required by Groq, OpenAI and Deepgram. Usually left blank for a local server.",
         type = SettingType.PASSWORD,
         group = "accurate",
+        showIf = "provider=Groq,OpenAI,Deepgram,Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible)",
         order = 30
     )
     var apiKey: String = "",
@@ -70,13 +74,14 @@ data class SpeechSettings(
             "Deepgram: nova-3). Required for Audio chat model.",
         type = SettingType.TEXT,
         group = "accurate",
+        showIf = "provider=Groq,OpenAI,Deepgram,Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible),Local Whisper server",
         order = 40
     )
     var model: String = "",
 
     @field:Setting(
         label = "Live engine",
-        description = "Off records and transcribes line by line. Vosk (built-in) runs completely offline without extra software. Vosk (local server) connects to an external server.",
+        description = "Off records and transcribes line by line. Vosk runs locally. Deepgram live and OpenAI Realtime provide cloud streaming.",
         type = SettingType.DROPDOWN,
         options = LIVE_ENGINE_OPTIONS,
         defaultValue = LIVE_OFF,
@@ -114,9 +119,20 @@ data class SpeechSettings(
         type = SettingType.TEXT,
         defaultValue = "en",
         group = "live",
+        showIf = "liveEngine=$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER",
         order = 60
     )
-    var liveAutoLanguage: String = "en"
+    var liveAutoLanguage: String = "en",
+
+    @field:Setting(
+        label = "Live API Key",
+        description = "API key for Deepgram live or OpenAI Realtime. If left blank, uses the API Key from above.",
+        type = SettingType.PASSWORD,
+        group = "live",
+        showIf = "liveEngine=$LIVE_DEEPGRAM,$LIVE_OPENAI",
+        order = 70
+    )
+    var liveApiKey: String = ""
 ) : PluginSettings.Configurable() {
 
     @Transient
@@ -146,10 +162,14 @@ data class SpeechSettings(
 
     val speechProvider: SpeechProvider get() = SpeechProvider.fromLabel(provider)
 
+    val effectiveLiveApiKey: String get() = liveApiKey.trim().ifEmpty { apiKey.trim() }
+
     val liveEnabled: Boolean
         get() = when (liveEngine) {
             LIVE_VOSK_BUILTIN -> true
             LIVE_VOSK_SERVER -> liveServerUrl.isNotBlank()
+            LIVE_DEEPGRAM -> effectiveLiveApiKey.isNotBlank()
+            LIVE_OPENAI -> effectiveLiveApiKey.isNotBlank()
             else -> false
         }
 

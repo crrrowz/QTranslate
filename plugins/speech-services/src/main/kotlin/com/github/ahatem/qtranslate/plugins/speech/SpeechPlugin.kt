@@ -43,7 +43,8 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             liveEngine = context.settings.getString(KEY_LIVE_ENGINE)
                 ?: if (context.settings.getString(KEY_LIVE_URL).isNullOrBlank()) LIVE_OFF else LIVE_VOSK_SERVER,
             liveAutoLanguage = context.settings.getString(KEY_LIVE_AUTO_LANGUAGE) ?: "en",
-            voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.DEFAULT_MODEL_NAME
+            voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.DEFAULT_MODEL_NAME,
+            liveApiKey = context.secrets.get(KEY_LIVE_API_KEY).orEmpty()
         ).apply {
             this.modelManager = this@SpeechPlugin.modelManager
         }
@@ -52,10 +53,14 @@ class SpeechPlugin : Plugin<SpeechSettings> {
 
     override suspend fun onEnable(): Result<Unit, ServiceError> {
         val builtin = builtinService ?: VoskBuiltinService(modelManager, { settings }).also { builtinService = it }
+        val deepgramLive = DeepgramLiveService { settings }
+        val openAiRealtime = OpenAiRealtimeService { settings }
         services = listOf(
             SpeechRecognitionService(SpeechClient(context, http) { settings }) { settings },
-            VoskLiveService({ settings }, builtin),
-            builtin
+            VoskLiveService({ settings }, builtin, deepgramLive, openAiRealtime),
+            builtin,
+            deepgramLive,
+            openAiRealtime
         )
         return Ok(Unit)
     }
@@ -67,9 +72,10 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             apiKey = settings.apiKey.trim(),
             model = settings.model.trim(),
             liveServerUrl = settings.liveServerUrl.trim(),
-            liveEngine = if (settings.liveEngine in listOf(LIVE_VOSK_BUILTIN, LIVE_VOSK_SERVER)) settings.liveEngine else LIVE_OFF,
+            liveEngine = if (settings.liveEngine in listOf(LIVE_VOSK_BUILTIN, LIVE_VOSK_SERVER, LIVE_DEEPGRAM, LIVE_OPENAI)) settings.liveEngine else LIVE_OFF,
             liveAutoLanguage = settings.liveAutoLanguage.trim().ifEmpty { "en" },
-            voskBuiltinModel = settings.voskBuiltinModel.trim().ifEmpty { VoskModelManager.DEFAULT_MODEL_NAME }
+            voskBuiltinModel = settings.voskBuiltinModel.trim().ifEmpty { VoskModelManager.DEFAULT_MODEL_NAME },
+            liveApiKey = settings.liveApiKey.trim()
         ).apply {
             this.modelManager = this@SpeechPlugin.modelManager
         }
@@ -84,6 +90,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.settings.put(KEY_LIVE_AUTO_LANGUAGE, cleaned.liveAutoLanguage)
         context.settings.put(KEY_VOSK_BUILTIN_MODEL, cleaned.voskBuiltinModel)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
+        context.secrets.put(KEY_LIVE_API_KEY, cleaned.liveApiKey)
         this.settings = cleaned
         return Ok(Unit)
     }
@@ -110,6 +117,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         const val KEY_LIVE_ENGINE = "liveEngine"
         const val KEY_LIVE_AUTO_LANGUAGE = "liveAutoLanguage"
         const val KEY_VOSK_BUILTIN_MODEL = "voskBuiltinModel"
+        const val KEY_LIVE_API_KEY = "liveApiKey"
     }
 }
 

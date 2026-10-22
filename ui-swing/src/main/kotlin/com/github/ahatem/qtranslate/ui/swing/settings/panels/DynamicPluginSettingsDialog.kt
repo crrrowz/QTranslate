@@ -588,7 +588,12 @@ class DynamicPluginSettingsDialog(
         val currentValues = components.mapValues { it.value.getValue() }
         settingsModel.schema.forEach { setting ->
             val rule = setting.showIf ?: return@forEach
-            val visible = currentValues[rule.propertyName] == rule.requiredValue
+            val currentVal = currentValues[rule.propertyName]
+            val visible = if (rule.requiredValue.startsWith("!")) {
+                currentVal != rule.requiredValue.removePrefix("!")
+            } else {
+                rule.requiredValue.split(',').map { it.trim() }.contains(currentVal)
+            }
             components[setting.propertyName]?.fieldBlock?.isVisible = visible
         }
         // Force layout update

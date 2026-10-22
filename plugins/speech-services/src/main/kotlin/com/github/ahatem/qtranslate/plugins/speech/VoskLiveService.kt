@@ -46,15 +46,20 @@ import java.util.concurrent.CompletionStage
  */
 class VoskLiveService(
     private val settings: () -> SpeechSettings,
-    private val builtinService: LiveSpeechRecognizer? = null
+    private val builtinService: LiveSpeechRecognizer? = null,
+    private val deepgramService: LiveSpeechRecognizer? = null,
+    private val openAiService: LiveSpeechRecognizer? = null
 ) : LiveSpeechRecognizer {
-    constructor(settings: () -> SpeechSettings) : this(settings, null)
+    constructor(settings: () -> SpeechSettings) : this(settings, null, null, null)
+
     override val metadata = ServiceMetadata()
     override val key: String = "vosk-live"
     override val name: String
         get() = when (settings().liveEngine) {
             LIVE_VOSK_BUILTIN -> "Vosk (built-in)"
             LIVE_VOSK_SERVER -> "Vosk (local server)"
+            LIVE_DEEPGRAM -> "Deepgram (live)"
+            LIVE_OPENAI -> "OpenAI Realtime"
             else -> "Vosk (live)"
         }
     override val version: String = "1.0.0"
@@ -77,6 +82,16 @@ class VoskLiveService(
                 val lang = SpeechClient.primaryTag(language) ?: current.liveAutoLanguage.trim().ifEmpty { "en" }
                 VoskSession.open(url, lang)
             }
+            LIVE_DEEPGRAM -> {
+                val deepgram = deepgramService
+                    ?: return Err(ServiceError.ConfigurationError("Deepgram live engine is not available."))
+                deepgram.openSession(language)
+            }
+            LIVE_OPENAI -> {
+                val openAi = openAiService
+                    ?: return Err(ServiceError.ConfigurationError("OpenAI Realtime engine is not available."))
+                openAi.openSession(language)
+            }
             else -> Err(ServiceError.ConfigurationError("Live text is off in Settings > Plugins > Speech Recognition."))
         }
     }
@@ -94,11 +109,12 @@ class VoskLiveService(
                     VoskSession.ping(url)
                 }
             }
+            LIVE_DEEPGRAM -> deepgramService?.validate() ?: Ok(Unit)
+            LIVE_OPENAI -> openAiService?.validate() ?: Ok(Unit)
             else -> Ok(Unit)
         }
     }
 }
-
 /** One connection to a Vosk server. */
 internal class VoskSession private constructor() : LiveSpeechSession {
     private val channel = Channel<LiveSpeechEvent>(Channel.UNLIMITED)
