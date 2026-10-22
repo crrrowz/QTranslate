@@ -17,6 +17,11 @@ const val LIVE_OPENAI = "OpenAI Realtime"
 const val LIVE_VOSK = LIVE_VOSK_SERVER
 const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER,$LIVE_DEEPGRAM,$LIVE_OPENAI"
 
+const val MODE_LOCAL = "Local only"
+const val MODE_CLOUD = "Cloud only"
+const val MODE_HYBRID = "Hybrid"
+const val MODE_OPTIONS = "$MODE_LOCAL,$MODE_CLOUD,$MODE_HYBRID"
+
 /**
  * Two jobs, two groups. Live text appears while people talk (Vosk, Deepgram live, OpenAI Realtime);
  * accurate text replaces each finished line (a Whisper-style provider). Either can be off; with both on, the live
@@ -34,6 +39,18 @@ const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER,
 )
 data class SpeechSettings(
     @field:Setting(
+        label = "Mode",
+        description = "Local only uses offline Vosk with zero data leaving your machine. " +
+            "Cloud only transcribes through your speech provider. " +
+            "Hybrid shows live text instantly then refines each finished line with the accurate provider.",
+        type = SettingType.DROPDOWN,
+        options = MODE_OPTIONS,
+        defaultValue = MODE_HYBRID,
+        order = 1
+    )
+    var mode: String = MODE_HYBRID,
+
+    @field:Setting(
         label = "Provider",
         description = "None keeps only the live text, with nothing sent outside your network. " +
             "Groq is fast and has a free tier. A local Whisper server keeps audio on your computer. " +
@@ -44,6 +61,7 @@ data class SpeechSettings(
         options = SpeechProvider.DROPDOWN_OPTIONS,
         defaultValue = "Groq",
         group = "accurate",
+        showIf = "mode=!Local only",
         order = 10
     )
     var provider: String = SpeechProvider.GROQ.label,
@@ -86,6 +104,7 @@ data class SpeechSettings(
         options = LIVE_ENGINE_OPTIONS,
         defaultValue = LIVE_OFF,
         group = "live",
+        showIf = "mode=!Cloud only",
         order = 5
     )
     var liveEngine: String = LIVE_OFF,
@@ -111,18 +130,6 @@ data class SpeechSettings(
         order = 50
     )
     var liveServerUrl: String = "",
-
-    @field:Setting(
-        label = "Language for Auto-Detect",
-        description = "Vosk cannot detect the language, so this model is used when a language is set to " +
-            "Auto-Detect in the conversation window (for example en or ar).",
-        type = SettingType.TEXT,
-        defaultValue = "en",
-        group = "live",
-        showIf = "liveEngine=$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER",
-        order = 60
-    )
-    var liveAutoLanguage: String = "en",
 
     @field:Setting(
         label = "Live API Key",
@@ -160,16 +167,21 @@ data class SpeechSettings(
         return manager.statusAction()
     }
 
-    val speechProvider: SpeechProvider get() = SpeechProvider.fromLabel(provider)
+    val speechProvider: SpeechProvider
+        get() = if (mode == MODE_LOCAL) SpeechProvider.NONE else SpeechProvider.fromLabel(provider)
 
     val effectiveLiveApiKey: String get() = liveApiKey.trim().ifEmpty { apiKey.trim() }
 
     val liveEnabled: Boolean
-        get() = when (liveEngine) {
-            LIVE_VOSK_BUILTIN -> true
-            LIVE_VOSK_SERVER -> liveServerUrl.isNotBlank()
-            LIVE_DEEPGRAM -> effectiveLiveApiKey.isNotBlank()
-            LIVE_OPENAI -> effectiveLiveApiKey.isNotBlank()
+        get() = when (mode) {
+            MODE_CLOUD -> false
+            MODE_LOCAL, MODE_HYBRID -> when (liveEngine) {
+                LIVE_VOSK_BUILTIN -> true
+                LIVE_VOSK_SERVER -> liveServerUrl.isNotBlank()
+                LIVE_DEEPGRAM -> effectiveLiveApiKey.isNotBlank()
+                LIVE_OPENAI -> effectiveLiveApiKey.isNotBlank()
+                else -> false
+            }
             else -> false
         }
 
@@ -180,7 +192,7 @@ data class SpeechSettings(
 
     /** What is wrong with the address, or null when it is usable. */
     fun urlError(): ServiceError? {
-        if (speechProvider == SpeechProvider.NONE) return null
+        if (mode == MODE_LOCAL || speechProvider == SpeechProvider.NONE) return null
         val url = effectiveBaseUrl
         if (url.isEmpty()) {
             return ServiceError.ConfigurationError(

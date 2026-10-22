@@ -33,16 +33,21 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         this.context = context
         modelManager = VoskModelManager({ context.getPluginDataDirectory() })
         builtinService = VoskBuiltinService(modelManager, { settings })
+        val rawProvider = context.settings.getString(KEY_PROVIDER) ?: SpeechProvider.GROQ.label
+        val rawLiveUrl = context.settings.getString(KEY_LIVE_URL).orEmpty()
+        val rawLiveEngine = context.settings.getString(KEY_LIVE_ENGINE)
+            ?: if (rawLiveUrl.isNullOrBlank()) LIVE_OFF else LIVE_VOSK_SERVER
+        val rawMode = context.settings.getString(KEY_MODE)
+        val resolvedMode = migrateSpeechMode(rawMode, rawLiveEngine, rawProvider)
+
         settings = SpeechSettings(
-            provider = context.settings.getString(KEY_PROVIDER) ?: SpeechProvider.GROQ.label,
+            mode = resolvedMode,
+            provider = rawProvider,
             baseUrl = context.settings.getString(KEY_BASE_URL).orEmpty(),
             apiKey = context.secrets.get(KEY_API_KEY).orEmpty(),
             model = context.settings.getString(KEY_MODEL).orEmpty(),
-            liveServerUrl = context.settings.getString(KEY_LIVE_URL).orEmpty(),
-            // Saved before the engine choice existed: an address alone meant Vosk was wanted.
-            liveEngine = context.settings.getString(KEY_LIVE_ENGINE)
-                ?: if (context.settings.getString(KEY_LIVE_URL).isNullOrBlank()) LIVE_OFF else LIVE_VOSK_SERVER,
-            liveAutoLanguage = context.settings.getString(KEY_LIVE_AUTO_LANGUAGE) ?: "en",
+            liveServerUrl = rawLiveUrl,
+            liveEngine = if (resolvedMode == MODE_LOCAL && rawLiveEngine == LIVE_OFF) LIVE_VOSK_BUILTIN else rawLiveEngine,
             voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.DEFAULT_MODEL_NAME,
             liveApiKey = context.secrets.get(KEY_LIVE_API_KEY).orEmpty()
         ).apply {
@@ -67,13 +72,13 @@ class SpeechPlugin : Plugin<SpeechSettings> {
 
     override suspend fun onSettingsChanged(settings: SpeechSettings): Result<Unit, ServiceError> {
         val cleaned = settings.copy(
+            mode = if (settings.mode in listOf(MODE_LOCAL, MODE_CLOUD, MODE_HYBRID)) settings.mode else MODE_HYBRID,
             provider = SpeechProvider.fromLabel(settings.provider).label,
             baseUrl = settings.baseUrl.trim().trimEnd('/'),
             apiKey = settings.apiKey.trim(),
             model = settings.model.trim(),
             liveServerUrl = settings.liveServerUrl.trim(),
             liveEngine = if (settings.liveEngine in listOf(LIVE_VOSK_BUILTIN, LIVE_VOSK_SERVER, LIVE_DEEPGRAM, LIVE_OPENAI)) settings.liveEngine else LIVE_OFF,
-            liveAutoLanguage = settings.liveAutoLanguage.trim().ifEmpty { "en" },
             voskBuiltinModel = settings.voskBuiltinModel.trim().ifEmpty { VoskModelManager.DEFAULT_MODEL_NAME },
             liveApiKey = settings.liveApiKey.trim()
         ).apply {
@@ -82,12 +87,12 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         // A missing key is fine to save (the user may add it later); an unusable URL is not.
         cleaned.urlError()?.let { return Err(ServiceError.ValidationError(it.message)) }
 
+        context.settings.put(KEY_MODE, cleaned.mode)
         context.settings.put(KEY_PROVIDER, cleaned.provider)
         context.settings.put(KEY_BASE_URL, cleaned.baseUrl)
         context.settings.put(KEY_MODEL, cleaned.model)
         context.settings.put(KEY_LIVE_URL, cleaned.liveServerUrl)
         context.settings.put(KEY_LIVE_ENGINE, cleaned.liveEngine)
-        context.settings.put(KEY_LIVE_AUTO_LANGUAGE, cleaned.liveAutoLanguage)
         context.settings.put(KEY_VOSK_BUILTIN_MODEL, cleaned.voskBuiltinModel)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
         context.secrets.put(KEY_LIVE_API_KEY, cleaned.liveApiKey)
@@ -108,16 +113,31 @@ class SpeechPlugin : Plugin<SpeechSettings> {
     override fun getServices(): List<Service> = services
     override fun getSettings(): SpeechSettings = settings
 
-    private companion object {
+    companion object {
+        const val KEY_MODE = "mode"
         const val KEY_PROVIDER = "provider"
         const val KEY_BASE_URL = "baseUrl"
         const val KEY_API_KEY = "apiKey"
         const val KEY_MODEL = "model"
         const val KEY_LIVE_URL = "liveServerUrl"
         const val KEY_LIVE_ENGINE = "liveEngine"
-        const val KEY_LIVE_AUTO_LANGUAGE = "liveAutoLanguage"
         const val KEY_VOSK_BUILTIN_MODEL = "voskBuiltinModel"
         const val KEY_LIVE_API_KEY = "liveApiKey"
+
+        fun migrateSpeechMode(savedMode: String?, liveEngine: String, provider: String): String {
+            if (!savedMode.isNullOrBlank() && savedMode in listOf(MODE_LOCAL, MODE_CLOUD, MODE_HYBRID)) {
+                return savedMode
+            }
+            val isVosk = liveEngine == LIVE_VOSK_BUILTIN || liveEngine == LIVE_VOSK_SERVER
+            val hasAccurate = provider.isNotBlank() && provider != SpeechProvider.NONE.label
+            return when {
+                isVosk && hasAccurate -> MODE_HYBRID
+                isVosk && !hasAccurate -> MODE_LOCAL
+                liveEngine == LIVE_OFF -> MODE_CLOUD
+                hasAccurate -> MODE_HYBRID
+                else -> MODE_LOCAL
+            }
+        }
     }
 }
 

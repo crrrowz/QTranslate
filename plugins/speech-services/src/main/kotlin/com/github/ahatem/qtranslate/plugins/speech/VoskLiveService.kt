@@ -68,6 +68,9 @@ class VoskLiveService(
 
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
         val current = settings()
+        if (current.mode == MODE_CLOUD) {
+            return Err(ServiceError.ConfigurationError("Live text is off in Cloud only mode."))
+        }
         return when (current.liveEngine) {
             LIVE_VOSK_BUILTIN -> {
                 val builtin = builtinService
@@ -79,7 +82,7 @@ class VoskLiveService(
                 if (url.isEmpty()) {
                     return Err(ServiceError.ConfigurationError("Vosk server URL is blank in Settings > Plugins > Speech Recognition."))
                 }
-                val lang = SpeechClient.primaryTag(language) ?: current.liveAutoLanguage.trim().ifEmpty { "en" }
+                val lang = SpeechClient.primaryTag(language) ?: "en"
                 VoskSession.open(url, lang)
             }
             LIVE_DEEPGRAM -> {

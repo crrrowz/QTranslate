@@ -89,14 +89,14 @@ as `models/<lang>/<model-folder>/`, for example `models/en/vosk-model-en-us-0.22
 `--preload` loads models at startup, so the first sentence is not delayed.
 
 **2. Point QTranslate at it.** In **Settings > Plugins > Speech Recognition**, under **Live text**,
-set **Live engine** to **Vosk (local server)**, **Vosk server URL** to the server (e.g.
-`ws://localhost:8765` or `ws://192.168.1.20:8765`), and **Language for Auto-Detect** to the model to
-use when a language is left on Auto-Detect (Vosk cannot detect languages). **Test connection** checks
-that the server answers.
+set **Live engine** to **Vosk (local server)** and **Vosk server URL** to the server (e.g.
+`ws://localhost:8765` or `ws://192.168.1.20:8765`). Languages are selected directly in the conversation window.
+**Test connection** checks that the server answers.
 
-**Hybrid mode.** Under **Accurate text**, keep a provider to have each finished line replaced by its
-more accurate text; live words show at once, in italics while provisional. Choose **None (live text
-only)** to keep just the live text, with nothing sent outside your network.
+**Modes:**
+- **Local only**: Speech is transcribed offline with Vosk. Nothing leaves your machine, and provider fields are hidden.
+- **Cloud only**: Transcribes line by line through your chosen provider.
+- **Hybrid**: Shows instant live text from Vosk, and refines each finished line with the accurate provider.
 
 If the server drops out, recording carries on: lines are cut at pauses the usual way while
 QTranslate reconnects, and live text returns when the server is back.

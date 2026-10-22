@@ -589,7 +589,8 @@ class DynamicPluginSettingsDialog(
         settingsModel.schema.forEach { setting ->
             val rule = setting.showIf ?: return@forEach
             val currentVal = currentValues[rule.propertyName]
-            val visible = if (rule.requiredValue.startsWith("!")) {
+            val controllingFieldVisible = components[rule.propertyName]?.fieldBlock?.isVisible ?: true
+            val visible = controllingFieldVisible && if (rule.requiredValue.startsWith("!")) {
                 currentVal != rule.requiredValue.removePrefix("!")
             } else {
                 rule.requiredValue.split(',').map { it.trim() }.contains(currentVal)
