@@ -29,9 +29,10 @@ pick a provider:
 | **Deepgram** | API key from [console.deepgram.com](https://console.deepgram.com/) | Default model `nova-3`. |
 | **Local Whisper server** | Nothing, or the server's URL and model | Nothing leaves your computer. Default `http://localhost:8000/v1` (Speaches, faster-whisper-server, LocalAI). |
 | **Custom (OpenAI-compatible)** | Server URL, model, and a key if it needs one | Any server with an OpenAI-style `/audio/transcriptions` endpoint, local or cloud. |
+| **Audio chat model (OpenAI-compatible)** | Server URL, model, and a key if it needs one | A multimodal chat model (Gemini, gpt-4o-audio) behind an OpenAI-compatible gateway such as LiteLLM. The audio goes to `/chat/completions`. No word timings. |
 
 Leave **Server URL** and **Model** blank to use the provider's defaults. Press **Test Connection** to
-check the settings. The window shows which provider is in use next to **Speech settings...**.
+check what is on screen (it applies the values first). The window shows which provider is in use next to **Speech settings...**.
 
 Set **My language** and **Their language** in the window (or leave them on Auto-Detect). Naming the
 language noticeably improves accuracy on short lines, and you and the people on the call often speak

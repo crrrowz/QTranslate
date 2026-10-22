@@ -34,7 +34,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             baseUrl = context.settings.getString(KEY_BASE_URL).orEmpty(),
             apiKey = context.secrets.get(KEY_API_KEY).orEmpty(),
             model = context.settings.getString(KEY_MODEL).orEmpty()
-        ).attach(context) { http }
+        )
         return Ok(Unit)
     }
 
@@ -57,7 +57,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.settings.put(KEY_BASE_URL, cleaned.baseUrl)
         context.settings.put(KEY_MODEL, cleaned.model)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
-        this.settings = cleaned.attach(context) { http }
+        this.settings = cleaned
         return Ok(Unit)
     }
 
@@ -95,4 +95,7 @@ class SpeechRecognitionService(
 
     override suspend fun transcribe(request: SpeechRecognitionRequest): Result<SpeechRecognitionResponse, ServiceError> =
         client.transcribe(request)
+
+    /** Backs the settings dialog's Test button, which applies what is on screen first. */
+    override suspend fun validate(): Result<Unit, ServiceError> = client.testConnection()
 }

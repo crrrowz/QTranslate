@@ -17,7 +17,13 @@ import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.andThen
 import com.github.michaelbull.result.getError
 import com.github.michaelbull.result.map
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.nio.ByteBuffer
+import java.util.Base64
 import java.nio.ByteOrder
 import java.util.Locale
 
@@ -30,6 +36,7 @@ class SpeechClient(
     private val logger = context.logger
     private val openAiParser = createJsonParser<OpenAiTranscription>(context)
     private val deepgramParser = createJsonParser<DeepgramResponse>(context)
+    private val chatParser = createJsonParser<ChatReply>(context)
 
     suspend fun transcribe(request: SpeechRecognitionRequest): Result<SpeechRecognitionResponse, ServiceError> {
         val current = settings()
@@ -41,6 +48,7 @@ class SpeechClient(
         return when (current.speechProvider.protocol) {
             SpeechProtocol.OPENAI_COMPATIBLE -> openAi(uploads, current, request, language)
             SpeechProtocol.DEEPGRAM -> deepgram(uploads, current, request.audio, language)
+            SpeechProtocol.CHAT_AUDIO -> chatAudio(current, request, language)
         }.map { response ->
             response.copy(detectedLanguage = request.language.takeUnless { it == LanguageCode.AUTO } ?: response.detectedLanguage)
         }
@@ -126,6 +134,55 @@ class SpeechClient(
             headers = authorization(settings, "Token"),
             queryParams = query
         ).andThen { deepgramParser.parse(it) }.map { it.toResponse() }
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Multimodal chat model
+    // -------------------------------------------------------------------------------------------
+
+    private suspend fun chatAudio(
+        settings: SpeechSettings,
+        request: SpeechRecognitionRequest,
+        language: String?
+    ): Result<SpeechRecognitionResponse, ServiceError> {
+        val instruction = buildString {
+            append("Transcribe the speech in this audio exactly as spoken, in the language it is spoken in. ")
+            append("Do not translate, summarise or explain. Reply with the transcript only, without quotes. ")
+            append("If there is no speech, reply with nothing.")
+            language?.let { append(" The speaker is expected to speak language code '$it'.") }
+            request.prompt?.takeIf { it.isNotBlank() }?.let {
+                append(" For spelling of names and terms, the conversation so far was: ")
+                append(it.takeLast(MAX_PROMPT_CHARS))
+            }
+        }
+        val body = buildJsonObject {
+            put("model", settings.effectiveModel)
+            put("temperature", 0)
+            putJsonArray("messages") {
+                addJsonObject {
+                    put("role", "user")
+                    putJsonArray("content") {
+                        addJsonObject { put("type", "text"); put("text", instruction) }
+                        addJsonObject {
+                            put("type", "input_audio")
+                            putJsonObject("input_audio") {
+                                put("data", Base64.getEncoder().encodeToString(request.audio.bytes))
+                                put("format", request.audio.encoding.extension)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return http.post(
+            url = "${settings.effectiveBaseUrl}/chat/completions",
+            headers = authorization(settings, "Bearer") + ("Content-Type" to "application/json"),
+            body = body.toString()
+        ).andThen { chatParser.parse(it) }.andThen { reply ->
+            reply.error?.let { return@andThen Err(ServiceError.InvalidResponseError(it.message)) }
+            val text = reply.choices.firstOrNull()?.message?.content.orEmpty().trim().trim('"', '“', '”').trim()
+            Ok(SpeechRecognitionResponse(text = text))
+        }
     }
 
     private fun authorization(settings: SpeechSettings, scheme: String): Map<String, String> =

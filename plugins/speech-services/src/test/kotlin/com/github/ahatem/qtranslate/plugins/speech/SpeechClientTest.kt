@@ -42,7 +42,11 @@ class SpeechClientTest {
         }
 
         override suspend fun get(url: String, headers: Map<String, String>, queryParams: Map<String, Any?>) = error("unused")
-        override suspend fun post(url: String, headers: Map<String, String>, body: String?, queryParams: Map<String, Any?>) = error("unused")
+        val bodies = mutableListOf<String>()
+        override suspend fun post(url: String, headers: Map<String, String>, body: String?, queryParams: Map<String, Any?>): Result<String, ServiceError> {
+            bodies += body.orEmpty()
+            return next(Recorded(url, headers, emptyMap(), queryParams))
+        }
         override suspend fun getBytes(url: String, headers: Map<String, String>, queryParams: Map<String, Any?>) = error("unused")
         override suspend fun postForm(url: String, formData: Map<String, String>, headers: Map<String, String>, queryParams: Map<String, Any?>, cookies: Map<String, String>) = error("unused")
         override suspend fun postFormBytes(url: String, formData: Map<String, String>, headers: Map<String, String>, queryParams: Map<String, Any?>, cookies: Map<String, String>) = error("unused")
@@ -119,6 +123,30 @@ class SpeechClientTest {
             .transcribe(SpeechRecognitionRequest(clip))
         assertEquals("http://box:9000/v1/audio/transcriptions", http.requests.single().url)
         assertEquals("large-v3", http.requests.single().fields["model"])
+    }
+
+    @Test
+    fun `an audio chat model gets the clip as input_audio in a chat request`() = runBlocking {
+        val http = FakeUploads(listOf(Ok("""{"choices":[{"message":{"content":"\"see you tomorrow\""}}]}""")))
+        val result = client(http, SpeechSettings(
+            provider = "Audio chat model (OpenAI-compatible)",
+            baseUrl = "http://192.168.1.5:20128/v1", apiKey = "k", model = "gemini-flash"
+        )).transcribe(SpeechRecognitionRequest(clip, LanguageCode("ar")))
+
+        val request = http.requests.single()
+        assertEquals("http://192.168.1.5:20128/v1/chat/completions", request.url)
+        assertEquals("Bearer k", request.headers["Authorization"])
+        val body = http.bodies.single()
+        assertTrue("\"input_audio\"" in body && "\"format\":\"wav\"" in body && "\"model\":\"gemini-flash\"" in body)
+        assertTrue("'ar'" in body, "the language hint is in the instruction")
+        assertEquals("see you tomorrow", result.get()?.text, "surrounding quotes are dropped")
+    }
+
+    @Test
+    fun `an audio chat model needs a model name`() = runBlocking {
+        val error = client(FakeUploads(), SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://x/v1"))
+            .transcribe(SpeechRecognitionRequest(clip)).getError()
+        assertTrue(error is ServiceError.ConfigurationError && "Model" in error.message)
     }
 
     @Test

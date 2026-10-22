@@ -1,21 +1,18 @@
 package com.github.ahatem.qtranslate.plugins.speech
 
-import com.github.ahatem.qtranslate.api.plugin.HttpClient
-import com.github.ahatem.qtranslate.api.plugin.PluginContext
 import com.github.ahatem.qtranslate.api.plugin.PluginSettings
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
-import com.github.ahatem.qtranslate.api.settings.PluginAction
 import com.github.ahatem.qtranslate.api.settings.Setting
 import com.github.ahatem.qtranslate.api.settings.SettingType
-import com.github.michaelbull.result.fold
-import kotlinx.coroutines.runBlocking
 import java.net.URI
 
 data class SpeechSettings(
     @field:Setting(
         label = "Provider",
         description = "Groq is fast and has a free tier. A local Whisper server keeps audio on your computer. " +
-            "Custom works with any server that offers an OpenAI-style /audio/transcriptions endpoint.",
+            "Custom works with any server that offers an OpenAI-style /audio/transcriptions endpoint. " +
+            "Audio chat model sends the audio to a multimodal chat model (Gemini, gpt-4o-audio) through " +
+            "an OpenAI-compatible gateway's /chat/completions.",
         type = SettingType.DROPDOWN,
         options = SpeechProvider.DROPDOWN_OPTIONS,
         defaultValue = "Groq",
@@ -25,7 +22,7 @@ data class SpeechSettings(
 
     @field:Setting(
         label = "Server URL",
-        description = "Leave blank for the provider's own address. Required for Custom.",
+        description = "Leave blank for the provider's own address. Required for Custom and Audio chat model.",
         type = SettingType.TEXT,
         order = 20
     )
@@ -42,15 +39,12 @@ data class SpeechSettings(
     @field:Setting(
         label = "Model",
         description = "Leave blank for the provider's default (Groq: whisper-large-v3-turbo, OpenAI: whisper-1, " +
-            "Deepgram: nova-3).",
+            "Deepgram: nova-3). Required for Audio chat model.",
         type = SettingType.TEXT,
         order = 40
     )
     var model: String = ""
 ) : PluginSettings.Configurable() {
-
-    @Transient private var context: PluginContext? = null
-    @Transient private var clientProvider: (() -> HttpClient)? = null
 
     val speechProvider: SpeechProvider get() = SpeechProvider.fromLabel(provider)
 
@@ -64,7 +58,7 @@ data class SpeechSettings(
         val url = effectiveBaseUrl
         if (url.isEmpty()) {
             return ServiceError.ConfigurationError(
-                "Speech Recognition needs a Server URL for a custom provider. Set it in Settings > Plugins > Speech Recognition."
+                "Speech Recognition needs a Server URL for ${speechProvider.label}. Set it in Settings > Plugins > Speech Recognition."
             )
         }
         val uri = runCatching { URI(url) }.getOrNull()
@@ -77,6 +71,11 @@ data class SpeechSettings(
     /** Why requests would fail before any is sent, or null when the settings are usable. */
     fun configurationError(): ServiceError? {
         urlError()?.let { return it }
+        if (effectiveModel.isEmpty()) {
+            return ServiceError.ConfigurationError(
+                "Speech Recognition needs a Model for ${speechProvider.label}. Set it in Settings > Plugins > Speech Recognition."
+            )
+        }
         val host = URI(effectiveBaseUrl).host
         if (speechProvider.requiresKey && apiKey.isBlank() && !isLocal(host)) {
             return ServiceError.ConfigurationError(
@@ -85,27 +84,6 @@ data class SpeechSettings(
             )
         }
         return null
-    }
-
-    internal fun attach(context: PluginContext, clientProvider: () -> HttpClient): SpeechSettings = apply {
-        this.context = context
-        this.clientProvider = clientProvider
-    }
-
-    @PluginAction(
-        label = "Test Connection",
-        order = 50,
-        tooltip = "Sends one second of silence to the saved provider and reports whether it answered."
-    )
-    fun testConnection(): String = runBlocking {
-        val context = context ?: return@runBlocking "Speech Recognition is not initialized."
-        val client = clientProvider?.invoke() ?: return@runBlocking "Speech Recognition is not initialized."
-        SpeechClient(context, client) { this@SpeechSettings }
-            .testConnection()
-            .fold(
-                success = { "Connected to ${speechProvider.label} ($effectiveModel)." },
-                failure = { "Connection failed: ${it.message}" }
-            )
     }
 
     private fun isLocal(host: String): Boolean =

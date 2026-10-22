@@ -868,6 +868,12 @@ class PluginsPanel(
                         settingsInstance    = instance,
                         onSave = { map ->
                             scope.launch { pluginManager.applySettingsFromMap(plugin.manifest.id, map) }
+                        },
+                        // Same rule as the Services page: only for plugins that need setting up,
+                        // and applied first so the test uses what is on screen.
+                        onTestConnection = if (plugin.services.none { it.metadata.requiresConfiguration }) null else { values ->
+                            pluginManager.applySettingsFromMap(plugin.manifest.id, values)
+                            pluginManager.validateServices(plugin.manifest.id)
                         }
                     ).isVisible = true
                 } else {

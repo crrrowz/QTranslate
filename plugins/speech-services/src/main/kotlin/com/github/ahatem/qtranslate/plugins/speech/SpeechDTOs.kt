@@ -20,6 +20,19 @@ data class OpenAiWord(val word: String, val start: Double, val end: Double)
 @Serializable
 data class OpenAiError(val message: String)
 
+/** A `/chat/completions` reply; only the fields used are declared. */
+@Serializable
+data class ChatReply(
+    val choices: List<ChatChoice> = emptyList(),
+    val error: OpenAiError? = null
+)
+
+@Serializable
+data class ChatChoice(val message: ChatMessage? = null)
+
+@Serializable
+data class ChatMessage(val content: String? = null)
+
 /** A Deepgram `/listen` reply; only the fields used are declared. */
 @Serializable
 data class DeepgramResponse(val results: DeepgramResults? = null)

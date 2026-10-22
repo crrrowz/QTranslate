@@ -6,7 +6,14 @@ enum class SpeechProtocol {
     OPENAI_COMPATIBLE,
 
     /** `POST {baseUrl}/listen` with the audio as the body — Deepgram. */
-    DEEPGRAM
+    DEEPGRAM,
+
+    /**
+     * `POST {baseUrl}/chat/completions` with the audio as an `input_audio` part, asking the model
+     * to transcribe it. For multimodal chat models (Gemini, gpt-4o-audio) behind an
+     * OpenAI-compatible gateway, which offer no transcription endpoint. No word timings.
+     */
+    CHAT_AUDIO
 }
 
 /**
@@ -47,11 +54,17 @@ enum class SpeechProvider(
         "Custom (OpenAI-compatible)", SpeechProtocol.OPENAI_COMPATIBLE,
         "", "whisper-1", false,
         "whatever the server expects"
+    ),
+    CHAT_MODEL(
+        "Audio chat model (OpenAI-compatible)", SpeechProtocol.CHAT_AUDIO,
+        "", "", false,
+        "whatever the gateway expects"
     );
 
     companion object {
         /** The `options` string of the provider dropdown, in display order. */
-        const val DROPDOWN_OPTIONS = "Groq,OpenAI,Deepgram,Local Whisper server,Custom (OpenAI-compatible)"
+        const val DROPDOWN_OPTIONS =
+            "Groq,OpenAI,Deepgram,Local Whisper server,Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible)"
 
         fun fromLabel(label: String?): SpeechProvider = entries.firstOrNull { it.label == label } ?: GROQ
     }
