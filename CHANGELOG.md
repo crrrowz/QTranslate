@@ -11,7 +11,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 - **Conversation Sessions.** Record a voice call — a Discord call, for example — as two separate streams (your microphone and the call's audio, captured through WASAPI loopback on Windows), read a live transcript, and hover any word to see its translation and the sentence's meaning. Select a phrase to translate it, look up dictionary meanings, and replay any line or single word. Sessions are saved locally with search, rename, export and delete; failed transcriptions keep their audio for a retry, and a session cut off by a crash is recovered with its audio. See [Conversation Sessions](wiki/Conversation-Sessions.md)
-- **Speech Recognition plugin.** Speech-to-text through Groq, OpenAI, Deepgram, a local Whisper server, or any OpenAI-compatible endpoint, each with its own URL, key and model, and a Test Connection button. Plugin API 2.2.0 adds the `SpeechRecognizer` service role and `MultipartHttpClient` for audio uploads
+- **Speech Recognition plugin.** Speech-to-text through Groq, OpenAI, Deepgram, a local Whisper server, or any OpenAI-compatible endpoint, each with its own URL, key and model, and a Test Connection button. Plugin API 2.2.0 adds the `SpeechRecognizer` and `LiveSpeechRecognizer` service roles and `MultipartHttpClient` for audio uploads
+- **Live transcription with Vosk.** A local Vosk server (over a local WebSocket API) shows words while people are still talking; with an accurate provider also set up, each finished line is replaced by its text (hybrid mode)
 
 ## [1.5.0] — 2026-09-29
 

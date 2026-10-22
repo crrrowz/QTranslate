@@ -45,6 +45,9 @@ class SpeechSegmenter(
     private var silentFrames = 0
     private var onsetFrames = 0
 
+    /** Where the utterance now in progress started (pre-roll included), or null between utterances. */
+    val activeStartSample: Long? get() = if (current != null) currentStart else null
+
     /** Loudness of the most recent frame, 0..1, for a level meter. */
     var level: Float = 0f
         private set

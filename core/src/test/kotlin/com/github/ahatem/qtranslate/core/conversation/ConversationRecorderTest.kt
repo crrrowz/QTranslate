@@ -74,6 +74,7 @@ class ConversationRecorderTest {
     private fun recorder(
         mic: ScriptedDevice,
         system: ScriptedDevice,
+        openLive: OpenLive = { null },
         recognize: Recognize
     ) = ConversationRecorder(
         scope = scope,
@@ -81,8 +82,19 @@ class ConversationRecorderTest {
         microphoneBackend = ScriptedBackend(mapOf("mic" to mic)),
         systemBackend = ScriptedBackend(mapOf("out" to system)),
         recognize = recognize,
-        logger = logger
+        logger = logger,
+        openLive = openLive
     )
+
+    /** A live session the test speaks for: it pushes the events a live server would send. */
+    private class ScriptedLive : com.github.ahatem.qtranslate.api.speech.LiveSpeechSession {
+        val channel = kotlinx.coroutines.channels.Channel<com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val received = java.util.concurrent.atomic.AtomicLong()
+        override val events = channel.let { c -> kotlinx.coroutines.flow.flow { for (e in c) emit(e) } }
+        override fun sendAudio(pcm: ByteArray) { received.addAndGet(pcm.size.toLong()) }
+        override suspend fun finish() { channel.close() }
+        override fun cancel() { channel.close() }
+    }
 
     private fun options(keepAudio: Boolean = true) = RecordingOptions(
         title = "Test call",
@@ -121,6 +133,61 @@ class ConversationRecorderTest {
         assertTrue(repository.hasAudio(saved.id, AudioSource.MICROPHONE))
         assertTrue(repository.hasAudio(saved.id, AudioSource.SYSTEM))
         assertEquals(RecorderPhase.IDLE, recorder.state.value.phase)
+    }
+
+    @Test
+    fun `hybrid mode shows live words at once and replaces them with the accurate text`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+        val clips = java.util.Collections.synchronizedList(mutableListOf<Long>())
+        val recorder = recorder(mic, ScriptedDevice(), openLive = { Ok(live) }) { request ->
+            clips += request.audio.durationMillis
+            Ok(SpeechRecognitionResponse("See you tomorrow."))
+        }
+        recorder.start(options().copy(systemOutput = null))
+        mic.push(silence(500))
+        waitUntil { live.received.get() > 0 }
+
+        mic.push(tone(1_500))
+        waitUntil { live.received.get() >= 32_000L * 2 - 2 }
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial("see you"))
+        waitUntil { recorder.state.value.live[AudioSource.MICROPHONE]?.text == "see you" }
+
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("see you to morrow"))
+        waitUntil { recorder.state.value.session?.segments?.singleOrNull()?.text == "See you tomorrow." }
+        val segment = recorder.state.value.session!!.segments.single()
+        assertTrue(!segment.draft, "the accurate text is final")
+        assertTrue(recorder.state.value.live.isEmpty(), "the live line clears once settled")
+        assertTrue(clips.single() >= 1_400, "the accurate recognizer got the spoken stretch, was ${clips.single()} ms")
+        recorder.stop()
+    }
+
+    @Test
+    fun `live text stands on its own without an accurate recognizer`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+        val recorder = recorder(mic, ScriptedDevice(), openLive = { Ok(live) }) { null }
+        recorder.start(options().copy(systemOutput = null))
+        mic.push(tone(800))
+        waitUntil { live.received.get() > 0 }
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("hello there"))
+        waitUntil { recorder.state.value.session?.segments?.singleOrNull()?.draft == false }
+        assertEquals("hello there", recorder.state.value.session!!.segments.single().text)
+        assertEquals(null, recorder.state.value.notice, "no accurate recognizer is not an error in live mode")
+        recorder.stop()
+    }
+
+    @Test
+    fun `an unconfigured live recognizer falls back to cutting at pauses, silently`() = runBlocking {
+        val mic = ScriptedDevice()
+        val recorder = recorder(mic, ScriptedDevice(),
+            openLive = { Err(ServiceError.ConfigurationError("no live server set")) }) { Ok(SpeechRecognitionResponse("clip text")) }
+        recorder.start(options().copy(systemOutput = null))
+        waitUntil { recorder.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+        mic.push(tone(1_000) + silence(1_000))
+        waitUntil { recorder.state.value.session?.segments?.any { it.text == "clip text" } == true }
+        assertEquals(null, recorder.state.value.notice)
+        recorder.stop()
     }
 
     @Test

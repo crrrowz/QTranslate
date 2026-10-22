@@ -43,7 +43,26 @@ data class SpeechSettings(
         type = SettingType.TEXT,
         order = 40
     )
-    var model: String = ""
+    var model: String = "",
+
+    @field:Setting(
+        label = "Live server URL (Vosk)",
+        description = "Optional. A Vosk WebSocket server such as ws://localhost:8765 shows text while people are " +
+            "still talking. With a provider above too, its more accurate text replaces each live line.",
+        type = SettingType.TEXT,
+        order = 50
+    )
+    var liveServerUrl: String = "",
+
+    @field:Setting(
+        label = "Live language for Auto-Detect",
+        description = "Vosk cannot detect the language, so this model is used when a language is set to " +
+            "Auto-Detect in the conversation window (for example en or ar).",
+        type = SettingType.TEXT,
+        defaultValue = "en",
+        order = 60
+    )
+    var liveAutoLanguage: String = "en"
 ) : PluginSettings.Configurable() {
 
     val speechProvider: SpeechProvider get() = SpeechProvider.fromLabel(provider)

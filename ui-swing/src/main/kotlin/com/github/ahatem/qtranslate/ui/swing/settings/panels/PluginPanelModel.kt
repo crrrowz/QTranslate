@@ -32,7 +32,7 @@ internal object PluginPanelModel {
                     // is the only source and it already appears under Dictionaries.
                     ServiceRole.IMAGE_SEARCH -> PluginCategory.OTHER
                     // Transcription is an AI service in every plugin that offers it so far.
-                    ServiceRole.SPEECH_RECOGNIZER -> PluginCategory.AI
+                    ServiceRole.SPEECH_RECOGNIZER, ServiceRole.LIVE_SPEECH_RECOGNIZER -> PluginCategory.AI
                 }
             }
         }.toSet()

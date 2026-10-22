@@ -128,6 +128,23 @@ class ConversationWindow(
     private val deleteButton = JButton(strings.delete)
 
     private val transcript = TranscriptView(strings)
+
+    /**
+     * What is being said right now, one line per source, while a live recognizer is in use. Kept out
+     * of the transcript document: it changes several times a second, and rebuilding the document
+     * that often would break selection and hovering.
+     */
+    private val liveLines = AudioSource.entries.associateWith { source ->
+        JLabel().apply {
+            foreground = TranscriptView.sourceColor(source)
+            border = BorderFactory.createEmptyBorder(2, 16, 2, 16)
+            font = font.deriveFont(java.awt.Font.ITALIC, font.size2D + 1f)
+        }
+    }
+    private val liveStrip = JPanel(MigLayout("fillx, wrap 1, insets 4 0 4 0, gap 0", "[grow,fill]")).apply {
+        liveLines.values.forEach { add(it, "wmin 0") }
+        isVisible = false
+    }
     private val transcriptScroll = JScrollPane(transcript)
     private val popup = HoverTranslationPopup(this, strings)
 
@@ -255,9 +272,12 @@ class ConversationWindow(
         transcriptScroll.border = BorderFactory.createMatteBorder(1, 0, 1, 0, UIManager.getColor("Component.borderColor"))
         transcriptScroll.verticalScrollBar.unitIncrement = 16
         add(transcriptScroll, BorderLayout.CENTER)
-        add(JLabel(strings.interactionHint).apply {
-            foreground = UIManager.getColor("Label.disabledForeground")
-            border = BorderFactory.createEmptyBorder(6, 12, 6, 12)
+        add(JPanel(BorderLayout()).apply {
+            add(liveStrip, BorderLayout.NORTH)
+            add(JLabel(strings.interactionHint).apply {
+                foreground = UIManager.getColor("Label.disabledForeground")
+                border = BorderFactory.createEmptyBorder(6, 12, 6, 12)
+            }, BorderLayout.SOUTH)
         }, BorderLayout.SOUTH)
     }
 
@@ -458,6 +478,7 @@ class ConversationWindow(
         noticeText.text = state.notice?.let(::noticeMessage).orEmpty()
 
         if (active || state.phase == RecorderPhase.STOPPING) transcript.render(state.session)
+        renderLive(state)
 
         if (lastPhase != RecorderPhase.IDLE && state.phase == RecorderPhase.IDLE) {
             viewed = state.session
@@ -473,6 +494,7 @@ class ConversationWindow(
         is RecorderNotice.TranscriptionFailed -> strings.noticeTranscriptionFailed(notice.error.message.trimEnd('.'))
         is RecorderNotice.DeviceLost -> strings.noticeDeviceLost(sourceName(notice.source), notice.message.trimEnd('.'))
         is RecorderNotice.SaveFailed -> strings.noticeSaveFailed(notice.message.trimEnd('.'))
+        is RecorderNotice.LiveFailed -> strings.noticeLiveFailed(sourceName(notice.source), notice.message.trimEnd('.'))
     }
 
     private fun sourceName(source: AudioSource) = if (source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
@@ -781,9 +803,34 @@ class ConversationWindow(
 
     private fun renderSpeechStatus() {
         val name = feature.speechServiceName
-        speechLabel.text = if (name != null) strings.speechService(name) else strings.speechNone
-        speechLabel.foreground = if (name != null) UIManager.getColor("Label.disabledForeground")
+        val live = feature.liveServiceName
+        speechLabel.text = when {
+            name != null && live != null -> strings.speechHybrid(live, name)
+            name != null -> strings.speechService(name)
+            live != null -> strings.speechLiveOnly(live)
+            else -> strings.speechNone
+        }
+        speechLabel.foreground = if (name != null || live != null) UIManager.getColor("Label.disabledForeground")
         else UIManager.getColor("Actions.Red") ?: Color.RED
+    }
+
+    private fun renderLive(state: RecorderState) {
+        liveLines.forEach { (source, label) ->
+            val line = state.live[source]
+            label.isVisible = line != null
+            label.text = line?.let { "${sourceName(source)} · ${formatTimestamp(it.startMillis)} — ${it.text}" }
+            // Each line keeps its own direction: Arabic speech reads right to left.
+            label.componentOrientation = if (line != null && line.text.firstOrNull { Character.isLetter(it) }
+                    ?.let { Character.getDirectionality(it) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC ||
+                        Character.getDirectionality(it) == Character.DIRECTIONALITY_RIGHT_TO_LEFT } == true
+            ) ComponentOrientation.RIGHT_TO_LEFT else ComponentOrientation.LEFT_TO_RIGHT
+            label.horizontalAlignment = javax.swing.SwingConstants.LEADING
+        }
+        val visible = state.live.isNotEmpty()
+        if (liveStrip.isVisible != visible) {
+            liveStrip.isVisible = visible
+            liveStrip.parent?.revalidate()
+        }
     }
 
     private fun renderRetryButton() {

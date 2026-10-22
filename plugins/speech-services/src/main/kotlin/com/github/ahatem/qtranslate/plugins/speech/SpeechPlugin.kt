@@ -33,13 +33,18 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             provider = context.settings.getString(KEY_PROVIDER) ?: SpeechProvider.GROQ.label,
             baseUrl = context.settings.getString(KEY_BASE_URL).orEmpty(),
             apiKey = context.secrets.get(KEY_API_KEY).orEmpty(),
-            model = context.settings.getString(KEY_MODEL).orEmpty()
+            model = context.settings.getString(KEY_MODEL).orEmpty(),
+            liveServerUrl = context.settings.getString(KEY_LIVE_URL).orEmpty(),
+            liveAutoLanguage = context.settings.getString(KEY_LIVE_AUTO_LANGUAGE) ?: "en"
         )
         return Ok(Unit)
     }
 
     override suspend fun onEnable(): Result<Unit, ServiceError> {
-        services = listOf(SpeechRecognitionService(SpeechClient(context, http) { settings }) { settings })
+        services = listOf(
+            SpeechRecognitionService(SpeechClient(context, http) { settings }) { settings },
+            VoskLiveService { settings }
+        )
         return Ok(Unit)
     }
 
@@ -48,7 +53,9 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             provider = SpeechProvider.fromLabel(settings.provider).label,
             baseUrl = settings.baseUrl.trim().trimEnd('/'),
             apiKey = settings.apiKey.trim(),
-            model = settings.model.trim()
+            model = settings.model.trim(),
+            liveServerUrl = settings.liveServerUrl.trim(),
+            liveAutoLanguage = settings.liveAutoLanguage.trim().ifEmpty { "en" }
         )
         // A missing key is fine to save (the user may add it later); an unusable URL is not.
         cleaned.urlError()?.let { return Err(ServiceError.ValidationError(it.message)) }
@@ -56,6 +63,8 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.settings.put(KEY_PROVIDER, cleaned.provider)
         context.settings.put(KEY_BASE_URL, cleaned.baseUrl)
         context.settings.put(KEY_MODEL, cleaned.model)
+        context.settings.put(KEY_LIVE_URL, cleaned.liveServerUrl)
+        context.settings.put(KEY_LIVE_AUTO_LANGUAGE, cleaned.liveAutoLanguage)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
         this.settings = cleaned
         return Ok(Unit)
@@ -77,6 +86,8 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         const val KEY_BASE_URL = "baseUrl"
         const val KEY_API_KEY = "apiKey"
         const val KEY_MODEL = "model"
+        const val KEY_LIVE_URL = "liveServerUrl"
+        const val KEY_LIVE_AUTO_LANGUAGE = "liveAutoLanguage"
     }
 }
 

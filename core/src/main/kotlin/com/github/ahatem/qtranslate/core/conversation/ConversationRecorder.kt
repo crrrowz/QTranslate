@@ -3,7 +3,12 @@ package com.github.ahatem.qtranslate.core.conversation
 import com.github.ahatem.qtranslate.api.core.Logger
 import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
+import com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent
+import com.github.ahatem.qtranslate.api.speech.LiveSpeechSession
+import com.github.michaelbull.result.fold
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -41,7 +46,13 @@ sealed interface RecorderNotice {
     data class TranscriptionFailed(val error: ServiceError) : RecorderNotice
     data class DeviceLost(val source: AudioSource, val message: String) : RecorderNotice
     data class SaveFailed(val message: String) : RecorderNotice
+
+    /** The live recognizer dropped out; recording carries on without live text while it reconnects. */
+    data class LiveFailed(val source: AudioSource, val message: String) : RecorderNotice
 }
+
+/** What the live recognizer currently thinks is being said, not yet settled into a segment. */
+data class LiveLine(val startMillis: Long, val text: String)
 
 data class RecorderState(
     val phase: RecorderPhase = RecorderPhase.IDLE,
@@ -49,7 +60,9 @@ data class RecorderState(
     val session: ConversationSession? = null,
     val elapsedMillis: Long = 0,
     val streams: Map<AudioSource, StreamStatus> = AudioSource.entries.associateWith { StreamStatus() },
-    val notice: RecorderNotice? = null
+    val notice: RecorderNotice? = null,
+    /** Words being spoken right now, per source, while a live recognizer is in use. */
+    val live: Map<AudioSource, LiveLine> = emptyMap()
 ) {
     val isActive: Boolean get() = phase == RecorderPhase.RECORDING || phase == RecorderPhase.PAUSED
 }
@@ -83,7 +96,9 @@ class ConversationRecorder(
     private val systemBackend: AudioBackend,
     recognize: Recognize,
     private val logger: Logger,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    /** The active live recognizer, if any. Without one, speech is cut at pauses and sent as clips. */
+    private val openLive: OpenLive = { null }
 ) {
     private val transcriber = SegmentTranscriber(recognize)
 
@@ -201,7 +216,7 @@ class ConversationRecorder(
             withContext(Dispatchers.IO) { repository.deleteAudio(session.id) }
         }
         streams = emptyList()
-        _state.update { it.copy(phase = RecorderPhase.IDLE, streams = AudioSource.entries.associateWith { StreamStatus() }) }
+        _state.update { it.copy(phase = RecorderPhase.IDLE, streams = AudioSource.entries.associateWith { StreamStatus() }, live = emptyMap()) }
         logger.info("Conversation recording stopped after ${formatTimestamp(duration)}")
     }
 
@@ -311,26 +326,82 @@ class ConversationRecorder(
         @Volatile
         private var stopping = false
 
+        // ---- live recognition ----
+        @Volatile
+        private var live: LiveSpeechSession? = null
+        private var liveEvents: Job? = null
+        private var liveConnecting: Job? = null
+        /** No live recognizer is set up: never try again in this session, and say nothing. */
+        @Volatile
+        private var liveUnavailable = false
+        private var liveFailures = 0
+        /** Stream sample at which the current live session started; its event times count from here. */
+        private var liveStartSample = 0L
+        /** Stream sample where the last settled segment ended. */
+        private var lastFinalSample = 0L
+        /** Stream sample where the speech now being heard began, once a partial has arrived. */
+        private var utteranceStartSample: Long? = null
+        /** Where the voice detector heard speech begin since the last settled segment. */
+        @Volatile
+        private var voicedStartSample: Long? = null
+
         var captureJob: Job? = null
         var transcriptionJob: Job? = null
         val level: Float get() = if (paused) 0f else segmenter.level
 
+        private val samplesWritten: Long get() = writer?.sampleCount ?: 0
+
         fun start() {
             captureJob = scope.launch(Dispatchers.IO) { capture() }
             transcriptionJob = scope.launch {
-                for ((placeholder, audio) in utterances) {
-                    val session = _state.value.session ?: continue
-                    val outcome = transcriber.transcribe(
-                        placeholder, audio, LanguageCode(session.languageOf(source)), promptBefore(session, placeholder)
-                    )
-                    report(outcome)
-                    // A clip that held no speech (a cough, a door) comes back blank: drop it.
-                    if (outcome is SegmentTranscriber.Outcome.Done && outcome.segment.text.isBlank()) {
-                        updateSession { s -> s.copy(segments = s.segments.filterNot { it.id == placeholder.id }) }
-                    } else {
-                        updateSession { it.withSegment(outcome.segment) }
+                // Several at once: a slow provider (a chat model takes 20 s or more) would otherwise
+                // fall further behind with every line.
+                val slots = Semaphore(MAX_CONCURRENT_TRANSCRIPTIONS)
+                coroutineScope {
+                    for ((placeholder, audio) in utterances) {
+                        slots.acquire()
+                        launch {
+                            try {
+                                transcribe(placeholder, audio)
+                            } finally {
+                                slots.release()
+                            }
+                        }
                     }
                 }
+            }
+        }
+
+        private suspend fun transcribe(placeholder: TranscriptSegment, audio: ByteArray) {
+            val session = _state.value.session ?: return
+            val outcome = transcriber.transcribe(
+                placeholder, audio, LanguageCode(session.languageOf(source)), promptBefore(session, placeholder)
+            )
+            if (placeholder.draft) {
+                // Refining a live line: the live text stands unless something better comes back.
+                when (outcome) {
+                    is SegmentTranscriber.Outcome.Done ->
+                        if (outcome.segment.text.isBlank()) {
+                            // The accurate recognizer heard no speech where the live one guessed words.
+                            updateSession { s -> s.copy(segments = s.segments.filterNot { it.id == placeholder.id }) }
+                        } else {
+                            updateSession { it.withSegment(outcome.segment) }
+                        }
+                    // Live text alone is a legitimate setup, not an error.
+                    is SegmentTranscriber.Outcome.NoService -> updateSession { it.withSegment(placeholder.copy(draft = false)) }
+                    is SegmentTranscriber.Outcome.Failed -> {
+                        report(outcome)
+                        updateSession { it.withSegment(placeholder.copy(draft = false)) }
+                    }
+                }
+                return
+            }
+            report(outcome)
+            // A clip that held no speech (a cough, a door) comes back blank: drop it.
+            if (outcome is SegmentTranscriber.Outcome.Done && outcome.segment.text.isBlank()) {
+                updateSession { s -> s.copy(segments = s.segments.filterNot { it.id == placeholder.id }) }
+            } else {
+                updateSession { it.withSegment(outcome.segment) }
             }
         }
 
@@ -339,17 +410,23 @@ class ConversationRecorder(
                 val stream = backend.open(device).also { pcm = it }
                 writer = WavFileWriter(repository.audioFile(sessionId, source))
                 setStream(source) { it.copy(state = StreamState.LIVE, error = null) }
+                connectLive()
                 var flushedForPause = false
                 while (!stopping) {
                     val chunk = stream.read() ?: break
                     // While paused the device keeps being read, so its buffer never overflows and
                     // nothing stale is replayed on resume, but nothing is kept. The utterance in
-                    // progress ends at the pause.
+                    // progress ends at the pause, and a live session is closed (its server would
+                    // otherwise wait mid-sentence) and reopened on resume.
                     if (paused) {
-                        if (!flushedForPause) segmenter.flush()?.let(::announce)
+                        if (!flushedForPause) {
+                            segmenter.flush()?.let(::announce)
+                            closeLive()
+                        }
                         flushedForPause = true
                         continue
                     }
+                    if (flushedForPause) connectLive()
                     flushedForPause = false
                     if (chunk.isEmpty()) continue
                     if (offsetMillis == null) {
@@ -358,7 +435,18 @@ class ConversationRecorder(
                         updateSession { it.copy(streams = it.streams + SessionStream(source, device.name, offset)) }
                     }
                     writer?.write(chunk)
-                    segmenter.accept(chunk).forEach(::announce)
+                    val session = live
+                    if (session != null) {
+                        session.sendAudio(chunk)
+                        // The live recognizer decides where lines end; the voice detector still
+                        // knows where speech began, which a late partial cannot tell.
+                        val completed = segmenter.accept(chunk)
+                        if (voicedStartSample == null) {
+                            voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
+                        }
+                    } else {
+                        segmenter.accept(chunk).forEach(::announce)
+                    }
                 }
             } catch (e: Exception) {
                 if (!stopping) {
@@ -370,12 +458,143 @@ class ConversationRecorder(
                     }
                 }
             } finally {
-                segmenter.flush()?.let(::announce)
+                liveConnecting?.cancel()
+                // The last words: the live recognizer settles them, or the segmenter cuts them.
+                if (live != null) closeLive() else segmenter.flush()?.let(::announce)
                 utterances.close()
                 runCatching { pcm?.close() }
                 runCatching { writer?.close() }
             }
         }
+
+        /** Opens a live session in the background; audio goes through the segmenter until it is ready. */
+        private fun connectLive() {
+            if (liveUnavailable || live != null || liveConnecting?.isActive == true) return
+            liveConnecting = scope.launch {
+                val language = LanguageCode(_state.value.session?.languageOf(source) ?: "auto")
+                val result = openLive(language)
+                if (result == null) {
+                    liveUnavailable = true
+                    return@launch
+                }
+                result.fold(
+                    success = { session ->
+                        if (stopping || paused) {
+                            session.cancel()
+                            return@fold
+                        }
+                        // What the segmenter was in the middle of is finished the old way.
+                        segmenter.flush()?.let(::announce)
+                        liveFailures = 0
+                        liveStartSample = samplesWritten
+                        lastFinalSample = samplesWritten
+                        utteranceStartSample = null
+                        live = session
+                        liveEvents = scope.launch { session.events.collect { onLiveEvent(session, it) } }
+                        logger.info("Live recognition active for $source")
+                    },
+                    failure = { error ->
+                        if (error is ServiceError.ConfigurationError) {
+                            liveUnavailable = true
+                        } else {
+                            liveFailed(error.message)
+                        }
+                    }
+                )
+            }
+        }
+
+        /** Settles and closes the live session, waiting for its last words. */
+        private suspend fun closeLive() {
+            val session = live ?: return
+            live = null
+            withTimeoutOrNull(LIVE_FINISH_MILLIS) {
+                session.finish()
+                liveEvents?.join()
+            }
+            liveEvents?.cancel()
+            clearLiveLine()
+        }
+
+        private suspend fun onLiveEvent(session: LiveSpeechSession, event: LiveSpeechEvent) {
+            when (event) {
+                is LiveSpeechEvent.Partial -> {
+                    if (event.text.isBlank()) return
+                    val startSample = utteranceStartSample
+                        ?: (samplesWritten - LEAD_SAMPLES).coerceAtLeast(lastFinalSample).also { utteranceStartSample = it }
+                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(startSample), event.text))) }
+                }
+                is LiveSpeechEvent.Final -> settle(event)
+                is LiveSpeechEvent.Failed -> {
+                    if (live === session) {
+                        live = null
+                        clearLiveLine()
+                        liveFailed(event.error.message)
+                    }
+                }
+            }
+        }
+
+        /** Turns a live final into a segment, and hands its audio to the accurate recognizer. */
+        private fun settle(event: LiveSpeechEvent.Final) {
+            val endSample = samplesWritten
+            var startSample = listOfNotNull(voicedStartSample, utteranceStartSample).minOrNull()
+                ?.coerceIn(lastFinalSample, endSample) ?: lastFinalSample
+            utteranceStartSample = null
+            voicedStartSample = null
+            lastFinalSample = endSample
+            clearLiveLine()
+            if (event.text.isBlank()) return
+
+            val words = event.words.map { word ->
+                TranscriptWord(
+                    text = word.text,
+                    startMillis = toSessionMillis(liveStartSample) + word.startMillis,
+                    endMillis = toSessionMillis(liveStartSample) + word.endMillis
+                )
+            }
+            words.firstOrNull()?.let { first ->
+                startSample = ((first.startMillis - (offsetMillis ?: 0)) * PcmStream.SAMPLE_RATE / 1000 - LEAD_SAMPLES / 2)
+                    .coerceIn(0, endSample)
+            }
+            val draft = TranscriptSegment(
+                id = UUID.randomUUID().toString(),
+                source = source,
+                startMillis = toSessionMillis(startSample),
+                endMillis = toSessionMillis(endSample),
+                text = event.text,
+                words = words,
+                draft = true
+            )
+            scope.launch { updateSession { it.withSegment(draft) } }
+            val audio = WavFiles.readRange(
+                repository.audioFile(sessionId, source),
+                startSample * 1000 / PcmStream.SAMPLE_RATE,
+                endSample * 1000 / PcmStream.SAMPLE_RATE
+            )
+            if (audio.isEmpty()) {
+                scope.launch { updateSession { it.withSegment(draft.copy(draft = false)) } }
+            } else {
+                utterances.trySend(draft to audio)
+            }
+        }
+
+        private fun liveFailed(message: String) {
+            logger.warn("Live recognition for $source failed: $message")
+            _state.update { it.copy(notice = RecorderNotice.LiveFailed(source, message)) }
+            if (stopping || ++liveFailures > MAX_LIVE_RECONNECTS) return
+            // The same back-off as the Vosk extension: quick at first, never more than 5 s apart.
+            val delayMillis = minOf((200 * Math.pow(1.5, (liveFailures - 1).toDouble())).toLong(), 5_000L)
+            scope.launch {
+                delay(delayMillis)
+                if (!stopping && !paused) connectLive()
+            }
+        }
+
+        private fun clearLiveLine() = _state.update { it.copy(live = it.live - source) }
+
+        private fun toSessionMillis(streamSample: Long): Long =
+            (offsetMillis ?: 0) + streamSample * 1000 / PcmStream.SAMPLE_RATE
 
         fun stopCapture() {
             stopping = true
@@ -407,5 +626,10 @@ class ConversationRecorder(
     private companion object {
         const val TICK_MILLIS = 200L
         const val SHUTDOWN_MILLIS = 5_000L
+        const val MAX_CONCURRENT_TRANSCRIPTIONS = 3
+        const val MAX_LIVE_RECONNECTS = 10
+        const val LIVE_FINISH_MILLIS = 4_000L
+        /** How far before the first partial a live segment's audio starts: words begin before they are recognised. */
+        const val LEAD_SAMPLES = PcmStream.SAMPLE_RATE * 6 / 10
     }
 }

@@ -770,7 +770,7 @@ class PluginsPanel(
             ServiceRole.REWRITER -> Icons.EDIT
             // No service declares this yet; the generic icon is a placeholder until one does.
             ServiceRole.IMAGE_SEARCH -> Icons.SEARCH
-            ServiceRole.SPEECH_RECOGNIZER -> Icons.SPEAK
+            ServiceRole.SPEECH_RECOGNIZER, ServiceRole.LIVE_SPEECH_RECOGNIZER -> Icons.SPEAK
         },
         15
     )
@@ -923,4 +923,5 @@ fun ServiceRole.readableName(localizationManager: LocalizationManager): String =
         ServiceRole.REWRITER      -> localizationManager.getString("settings_services.rewriter").removeSuffix(":")
         ServiceRole.IMAGE_SEARCH  -> localizationManager.getString("settings_services.image_search").removeSuffix(":")
         ServiceRole.SPEECH_RECOGNIZER -> localizationManager.getString("settings_services.speech_recognizer").removeSuffix(":")
+        ServiceRole.LIVE_SPEECH_RECOGNIZER -> localizationManager.getString("settings_services.live_speech_recognizer").removeSuffix(":")
     }

@@ -62,7 +62,10 @@ public enum class ServiceRole(
     IMAGE_SEARCH(ImageSearch::class),
 
     /** Transcribes recorded speech, so a spoken conversation can be read and translated. */
-    SPEECH_RECOGNIZER(SpeechRecognizer::class);
+    SPEECH_RECOGNIZER(SpeechRecognizer::class),
+
+    /** Transcribes speech while it is spoken, so text appears before the speaker pauses. */
+    LIVE_SPEECH_RECOGNIZER(com.github.ahatem.qtranslate.api.speech.LiveSpeechRecognizer::class);
 
     /** Whether [service] fulfils this role's contract. */
     public fun isHeldBy(service: Service): Boolean = contract.isInstance(service)

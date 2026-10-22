@@ -67,6 +67,9 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     fun noticeDeviceLost(source: String, message: String) = localizer.getString("conversation.notice_device_lost", source, message)
     fun noticeSaveFailed(message: String) = localizer.getString("conversation.notice_save_failed", message)
     fun speechService(name: String) = localizer.getString("conversation.speech_service", name)
+    fun speechHybrid(live: String, accurate: String) = localizer.getString("conversation.speech_hybrid", live, accurate)
+    fun speechLiveOnly(live: String) = localizer.getString("conversation.speech_live_only", live)
+    fun noticeLiveFailed(source: String, message: String) = localizer.getString("conversation.notice_live_failed", source, message)
     fun retryFailed(count: Int) = localizer.getString("conversation.retry_failed", count)
     fun exported(path: String) = localizer.getString("conversation.exported", path)
 }

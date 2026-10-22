@@ -89,11 +89,15 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             val (text, style) = when {
                 segment.pending -> strings.transcribing to muted(italic = true)
                 segment.failed -> strings.failedRetry to link()
+                // Live text awaiting the accurate recognizer: shown, but visibly provisional.
+                segment.draft -> segment.text to body().apply { StyleConstants.setItalic(this, true) }
                 else -> segment.text to body()
             }
             doc.insertString(doc.length, text, style)
             val textEnd = doc.length
-            alignParagraph(doc, textStart, text)
+            // Header and text together: a paragraph inserted after an Arabic line would otherwise
+            // inherit its right alignment, header included.
+            alignParagraph(doc, headerStart, textEnd - headerStart, text)
 
             built += SegmentSpan(
                 segment, headerStart, headerEnd, textStart, textEnd,
@@ -166,7 +170,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
     }
 
-    private fun alignParagraph(doc: StyledDocument, start: Int, text: String) {
+    private fun alignParagraph(doc: StyledDocument, start: Int, length: Int, text: String) {
         val rtl = text.firstOrNull { Character.isLetter(it) }?.let {
             Character.getDirectionality(it) in setOf(Character.DIRECTIONALITY_RIGHT_TO_LEFT, Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC)
         } ?: false
@@ -174,7 +178,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             StyleConstants.setAlignment(this, if (rtl) StyleConstants.ALIGN_RIGHT else StyleConstants.ALIGN_LEFT)
             StyleConstants.setSpaceBelow(this, 2f)
         }
-        doc.setParagraphAttributes(start, text.length.coerceAtLeast(1), attributes, false)
+        doc.setParagraphAttributes(start, length.coerceAtLeast(1), attributes, false)
     }
 
     private fun body() = SimpleAttributeSet().apply {

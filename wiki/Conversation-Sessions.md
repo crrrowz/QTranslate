@@ -41,6 +41,35 @@ different ones.
 Word-level replay needs word timings, which Groq, `whisper-1`, Deepgram and most local Whisper servers
 report. Without them everything else still works; only **Play** on a single word is missing.
 
+### Live text (optional): Vosk
+
+With a whisper-style provider alone, a line appears only after its speaker pauses and the provider
+answers, which with a slow model can take 20 seconds. A **live recognizer** shows words while people
+are still talking, from a [Vosk](https://alphacephei.com/vosk/) server on your own computer or
+network. Nothing goes to the internet: QTranslate talks to the server over a local WebSocket API.
+
+1. Run a Vosk server that speaks the Vosk STT extension's protocol (`vosk_server.py`), for example in
+   Docker on another machine:
+
+   ```
+   docker build -t vosk-stt-server .
+   docker run -d --name vosk-stt --restart unless-stopped -p 8765:8765 -v vosk-models:/models vosk-stt-server --preload ar,en
+   ```
+
+   Models go in the volume as `/models/<lang>/<model-folder>/`, e.g.
+   `vosk-model-en-us-0.22-lgraph` and `vosk-model-ar-0.22-linto-1.1.0`.
+2. In **Settings > Plugins > Speech Recognition**, set **Live server URL (Vosk)** to the server, e.g.
+   `ws://192.168.1.20:8765` or `ws://localhost:8765`, and **Live language for Auto-Detect** to the
+   model used when a language is left on Auto-Detect (Vosk cannot detect languages).
+3. Under **Settings > Services & Presets**, **Live Speech Recognition** selects it.
+
+**Hybrid mode.** With both a live recognizer and a provider above set up, the live words appear at
+once (in italics while provisional) and each finished line is then replaced by the provider's more
+accurate text. With only the live recognizer, its text stays as it is.
+
+If the live server drops out, recording carries on: lines are cut at pauses the usual way while
+QTranslate reconnects, and live text returns when the server is back.
+
 ### 2. The call's audio
 
 On Windows, the **Call audio** picker lists your output devices, and QTranslate records what each one
@@ -77,8 +106,9 @@ call is transcribed twice.
 
 ## What to expect
 
-- **Delay.** A line appears once its speaker pauses, usually one to two seconds later. While a
-  clip is being transcribed, its line shows *Transcribing...*.
+- **Delay.** Without a live recognizer, a line appears once its speaker pauses and the provider
+  answers: a second or two with Groq, 20 seconds or more with a multimodal chat model. While a clip is
+  being transcribed, its line shows *Transcribing...*. With Vosk, words appear as they are spoken.
 - **Source, not speaker.** "Call" is everyone on the call mixed together; QTranslate does not tell
   your friends apart.
 - **Failures don't lose audio.** If the speech provider is down, out of credit, or not set up, the

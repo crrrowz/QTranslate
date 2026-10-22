@@ -2,6 +2,7 @@ package com.github.ahatem.qtranslate.core.conversation
 
 import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
+import com.github.ahatem.qtranslate.api.speech.LiveSpeechSession
 import com.github.ahatem.qtranslate.api.speech.SpeechAudio
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionRequest
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse
@@ -15,6 +16,12 @@ import kotlinx.coroutines.withTimeoutOrNull
  * mid-session.
  */
 typealias Recognize = suspend (SpeechRecognitionRequest) -> Result<SpeechRecognitionResponse, ServiceError>?
+
+/**
+ * Opens a session with the active live recognizer, or answers `null` when none is active. Looked
+ * up per session for the same reason as [Recognize].
+ */
+typealias OpenLive = suspend (LanguageCode) -> Result<LiveSpeechSession, ServiceError>?
 
 /** Turns one recorded utterance into a [TranscriptSegment] with its words placed on the session timeline. */
 class SegmentTranscriber(
@@ -60,7 +67,7 @@ class SegmentTranscriber(
         }
     }
 
-    private fun TranscriptSegment.asFailed() = copy(pending = false, failed = true)
+    private fun TranscriptSegment.asFailed() = copy(pending = false, failed = true, draft = false)
 
     private fun TranscriptSegment.withResponse(response: SpeechRecognitionResponse) = copy(
         text = response.text.trim(),
@@ -73,6 +80,7 @@ class SegmentTranscriber(
             )
         },
         pending = false,
-        failed = false
+        failed = false,
+        draft = false
     )
 }

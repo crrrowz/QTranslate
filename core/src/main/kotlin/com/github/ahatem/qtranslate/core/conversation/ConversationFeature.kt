@@ -8,6 +8,7 @@ import com.github.ahatem.qtranslate.api.dictionary.DictionaryRequest
 import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
 import com.github.ahatem.qtranslate.api.plugin.ServiceRole
+import com.github.ahatem.qtranslate.api.speech.LiveSpeechRecognizer
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognizer
 import com.github.ahatem.qtranslate.core.main.domain.usecase.TranslateStringUseCase
 import com.github.ahatem.qtranslate.core.settings.data.ActiveServiceManager
@@ -55,7 +56,10 @@ class ConversationFeature(
         recognize = { request ->
             activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)?.transcribe(request)
         },
-        logger = loggerFactory.getLogger("ConversationRecorder")
+        logger = loggerFactory.getLogger("ConversationRecorder"),
+        openLive = { language ->
+            activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)?.openSession(language)
+        }
     )
 
     val translations = TranslationCache(scope, { text, target -> translateString(text, target) })
@@ -74,6 +78,10 @@ class ConversationFeature(
     /** The active speech service's name, e.g. "Speech Recognition (Groq)", or null when none is. */
     val speechServiceName: String?
         get() = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)?.name
+
+    /** The active live recognizer's name, or null. Whether it is actually set up shows when recording starts. */
+    val liveServiceName: String?
+        get() = activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)?.name
 
     fun microphones(): List<AudioDevice> = microphoneBackend.inputDevices()
 

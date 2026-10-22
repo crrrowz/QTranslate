@@ -54,6 +54,7 @@ data class TranscriptWord(
  * @param startMillis On the session timeline (recorded time; pauses are not counted).
  * @param language    BCP-47 tag of the spoken language, when known.
  * @param pending     Speech was detected and is being transcribed; [text] is still empty.
+ * @param draft       [text] came from the live recognizer and the accurate one is still working on it.
  * @param failed      Transcription failed; the audio is still there and can be retried.
  */
 @Serializable
@@ -66,7 +67,8 @@ data class TranscriptSegment(
     val language: String? = null,
     val words: List<TranscriptWord> = emptyList(),
     val pending: Boolean = false,
-    val failed: Boolean = false
+    val failed: Boolean = false,
+    val draft: Boolean = false
 )
 
 /**
