@@ -36,8 +36,14 @@ class ConversationRecorderTest {
         override fun error(message: String, error: Throwable?) = Unit
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val repository = SessionRepository(createTempDirectory("recorder").toFile())
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var repository = SessionRepository(createTempDirectory("recorder").toFile())
+
+    @kotlin.test.BeforeTest
+    fun setUp() {
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        repository = SessionRepository(createTempDirectory("recorder").toFile())
+    }
 
     @AfterTest
     fun tearDown() {
@@ -345,5 +351,39 @@ class ConversationRecorderTest {
         val session = repository.list().single()
         assertEquals(SessionStatus.COMPLETED, session.status)
         assertTrue(session.segments.single().failed)
+    }
+
+    @Test
+    fun `language detected by accurate provider updates live recognition language in auto mode`() = runBlocking {
+        val mic = ScriptedDevice()
+        val openedLiveLanguages = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var currentLive: ScriptedLive? = null
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { lang ->
+                openedLiveLanguages.add(lang.tag)
+                val live = ScriptedLive()
+                currentLive = live
+                Ok(live)
+            },
+            recognize = { _ ->
+                Ok(SpeechRecognitionResponse(text = "مرحبا", detectedLanguage = com.github.ahatem.qtranslate.api.language.LanguageCode("ar")))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        waitUntil { openedLiveLanguages.isNotEmpty() }
+        assertEquals("auto", openedLiveLanguages.first())
+
+        awaitLive(mic, currentLive!!)
+        mic.push(tone(1_500))
+        currentLive!!.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("marhaban"))
+
+        waitUntil { recorder.state.value.session?.segments?.any { it.text == "مرحبا" } == true }
+        waitUntil { openedLiveLanguages.contains("ar") }
+
+        recorder.stop()
     }
 }

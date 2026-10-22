@@ -377,6 +377,9 @@ class ConversationRecorder(
             val outcome = transcriber.transcribe(
                 placeholder, audio, LanguageCode(session.languageOf(source)), promptBefore(session, placeholder)
             )
+            if (outcome is SegmentTranscriber.Outcome.Done) {
+                updateDetectedLanguage(outcome.segment.language)
+            }
             if (placeholder.draft) {
                 // Refining a live line: the live text stands unless something better comes back.
                 when (outcome) {
@@ -468,11 +471,31 @@ class ConversationRecorder(
             }
         }
 
+        private var detectedLanguage: String? = null
+
+        private fun updateDetectedLanguage(detected: String?) {
+            if (detected.isNullOrBlank() || detected == "auto") return
+            val configured = _state.value.session?.languageOf(source) ?: "auto"
+            if (configured == "auto" && detected != detectedLanguage) {
+                val previous = detectedLanguage
+                detectedLanguage = detected
+                logger.info("Language detected as '$detected' for $source (was: ${previous ?: "auto"})")
+                if (live != null && !stopping && !paused) {
+                    scope.launch {
+                        closeLive()
+                        connectLive()
+                    }
+                }
+            }
+        }
+
         /** Opens a live session in the background; audio goes through the segmenter until it is ready. */
         private fun connectLive() {
             if (liveUnavailable || live != null || liveConnecting?.isActive == true) return
             liveConnecting = scope.launch {
-                val language = LanguageCode(_state.value.session?.languageOf(source) ?: "auto")
+                val configured = _state.value.session?.languageOf(source) ?: "auto"
+                val languageTag = if (configured == "auto") (detectedLanguage ?: "auto") else configured
+                val language = LanguageCode(languageTag)
                 val result = openLive(language)
                 if (result == null) {
                     liveUnavailable = true
