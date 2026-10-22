@@ -35,6 +35,9 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             apiKey = context.secrets.get(KEY_API_KEY).orEmpty(),
             model = context.settings.getString(KEY_MODEL).orEmpty(),
             liveServerUrl = context.settings.getString(KEY_LIVE_URL).orEmpty(),
+            // Saved before the engine choice existed: an address alone meant Vosk was wanted.
+            liveEngine = context.settings.getString(KEY_LIVE_ENGINE)
+                ?: if (context.settings.getString(KEY_LIVE_URL).isNullOrBlank()) LIVE_OFF else LIVE_VOSK,
             liveAutoLanguage = context.settings.getString(KEY_LIVE_AUTO_LANGUAGE) ?: "en"
         )
         return Ok(Unit)
@@ -55,6 +58,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             apiKey = settings.apiKey.trim(),
             model = settings.model.trim(),
             liveServerUrl = settings.liveServerUrl.trim(),
+            liveEngine = if (settings.liveEngine == LIVE_VOSK) LIVE_VOSK else LIVE_OFF,
             liveAutoLanguage = settings.liveAutoLanguage.trim().ifEmpty { "en" }
         )
         // A missing key is fine to save (the user may add it later); an unusable URL is not.
@@ -64,6 +68,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.settings.put(KEY_BASE_URL, cleaned.baseUrl)
         context.settings.put(KEY_MODEL, cleaned.model)
         context.settings.put(KEY_LIVE_URL, cleaned.liveServerUrl)
+        context.settings.put(KEY_LIVE_ENGINE, cleaned.liveEngine)
         context.settings.put(KEY_LIVE_AUTO_LANGUAGE, cleaned.liveAutoLanguage)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
         this.settings = cleaned
@@ -87,6 +92,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         const val KEY_API_KEY = "apiKey"
         const val KEY_MODEL = "model"
         const val KEY_LIVE_URL = "liveServerUrl"
+        const val KEY_LIVE_ENGINE = "liveEngine"
         const val KEY_LIVE_AUTO_LANGUAGE = "liveAutoLanguage"
     }
 }

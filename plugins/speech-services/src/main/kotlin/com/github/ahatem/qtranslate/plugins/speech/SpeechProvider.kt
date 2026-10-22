@@ -30,6 +30,12 @@ enum class SpeechProvider(
     val requiresKey: Boolean,
     val keyHint: String
 ) {
+    /** No accurate recognizer: the live text is the transcript. Nothing is sent anywhere. */
+    NONE(
+        "None (live text only)", SpeechProtocol.OPENAI_COMPATIBLE,
+        "", "", false,
+        "not needed"
+    ),
     GROQ(
         "Groq", SpeechProtocol.OPENAI_COMPATIBLE,
         "https://api.groq.com/openai/v1", "whisper-large-v3-turbo", true,
@@ -64,7 +70,7 @@ enum class SpeechProvider(
     companion object {
         /** The `options` string of the provider dropdown, in display order. */
         const val DROPDOWN_OPTIONS =
-            "Groq,OpenAI,Deepgram,Local Whisper server,Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible)"
+            "None (live text only),Groq,OpenAI,Deepgram,Local Whisper server,Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible)"
 
         fun fromLabel(label: String?): SpeechProvider = entries.firstOrNull { it.label == label } ?: GROQ
     }

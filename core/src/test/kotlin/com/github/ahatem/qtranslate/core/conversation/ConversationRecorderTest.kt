@@ -86,6 +86,17 @@ class ConversationRecorderTest {
         openLive = openLive
     )
 
+    /**
+     * The live session connects in the background, and audio sent before it is ready goes the
+     * clip way. Feeds silence until the session is the one receiving it.
+     */
+    private suspend fun awaitLive(mic: ScriptedDevice, live: ScriptedLive) = withTimeout(10_000) {
+        while (live.received.get() == 0L) {
+            mic.push(silence(100))
+            delay(50)
+        }
+    }
+
     /** A live session the test speaks for: it pushes the events a live server would send. */
     private class ScriptedLive : com.github.ahatem.qtranslate.api.speech.LiveSpeechSession {
         val channel = kotlinx.coroutines.channels.Channel<com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent>(kotlinx.coroutines.channels.Channel.UNLIMITED)
@@ -145,11 +156,11 @@ class ConversationRecorderTest {
             Ok(SpeechRecognitionResponse("See you tomorrow."))
         }
         recorder.start(options().copy(systemOutput = null))
-        mic.push(silence(500))
-        waitUntil { live.received.get() > 0 }
+        awaitLive(mic, live)
 
+        val before = live.received.get()
         mic.push(tone(1_500))
-        waitUntil { live.received.get() >= 32_000L * 2 - 2 }
+        waitUntil { live.received.get() >= before + 48_000 }
         live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial("see you"))
         waitUntil { recorder.state.value.live[AudioSource.MICROPHONE]?.text == "see you" }
 
@@ -168,8 +179,8 @@ class ConversationRecorderTest {
         val live = ScriptedLive()
         val recorder = recorder(mic, ScriptedDevice(), openLive = { Ok(live) }) { null }
         recorder.start(options().copy(systemOutput = null))
+        awaitLive(mic, live)
         mic.push(tone(800))
-        waitUntil { live.received.get() > 0 }
         live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("hello there"))
         waitUntil { recorder.state.value.session?.segments?.singleOrNull()?.draft == false }
         assertEquals("hello there", recorder.state.value.session!!.segments.single().text)

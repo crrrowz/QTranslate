@@ -26,7 +26,7 @@ class VoskLiveIntegrationTest {
         val wav = System.getenv("VOSK_WAV")?.let(::File)
         assumeTrue(url != null && wav != null && wav.isFile, "set VOSK_URL and VOSK_WAV to run against a real server")
 
-        val service = VoskLiveService { SpeechSettings(liveServerUrl = url!!) }
+        val service = VoskLiveService { SpeechSettings(liveEngine = LIVE_VOSK, liveServerUrl = url!!) }
         println("ping: " + (service.validate().getError()?.message ?: "ok"))
 
         val opened = System.currentTimeMillis()

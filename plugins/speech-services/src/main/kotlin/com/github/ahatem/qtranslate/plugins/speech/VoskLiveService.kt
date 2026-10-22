@@ -54,19 +54,19 @@ class VoskLiveService(private val settings: () -> SpeechSettings) : LiveSpeechRe
 
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
         val current = settings()
-        val url = current.liveServerUrl.trim()
-        if (url.isEmpty()) {
-            return Err(ServiceError.ConfigurationError("No live (Vosk) server is set in Settings > Plugins > Speech Recognition."))
+        if (!current.liveEnabled) {
+            return Err(ServiceError.ConfigurationError("Live text is off in Settings > Plugins > Speech Recognition."))
         }
+        val url = current.liveServerUrl.trim()
         val lang = SpeechClient.primaryTag(language) ?: current.liveAutoLanguage.trim().ifEmpty { "en" }
         return VoskSession.open(url, lang)
     }
 
     /** Answers whether the server is there and which models it has, without recognising anything. */
     override suspend fun validate(): Result<Unit, ServiceError> {
-        val url = settings().liveServerUrl.trim()
-        if (url.isEmpty()) return Ok(Unit)
-        return VoskSession.ping(url)
+        val current = settings()
+        if (!current.liveEnabled) return Ok(Unit)
+        return VoskSession.ping(current.liveServerUrl.trim())
     }
 }
 

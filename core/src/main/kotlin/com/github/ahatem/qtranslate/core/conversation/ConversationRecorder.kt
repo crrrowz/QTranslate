@@ -390,7 +390,8 @@ class ConversationRecorder(
                     // Live text alone is a legitimate setup, not an error.
                     is SegmentTranscriber.Outcome.NoService -> updateSession { it.withSegment(placeholder.copy(draft = false)) }
                     is SegmentTranscriber.Outcome.Failed -> {
-                        report(outcome)
+                        // "No accurate provider chosen" is a setup, not a failure, when live text is on.
+                        if (outcome.error !is ServiceError.ConfigurationError) report(outcome)
                         updateSession { it.withSegment(placeholder.copy(draft = false)) }
                     }
                 }

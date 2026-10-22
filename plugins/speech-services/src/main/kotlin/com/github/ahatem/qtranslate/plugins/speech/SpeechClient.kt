@@ -63,6 +63,7 @@ class SpeechClient(
      */
     suspend fun testConnection(): Result<Unit, ServiceError> {
         val current = settings()
+        if (current.speechProvider == SpeechProvider.NONE) return Ok(Unit)
         current.configurationError()?.let { return Err(it) }
         if (current.speechProvider.protocol == SpeechProtocol.DEEPGRAM) {
             return http.get("${current.effectiveBaseUrl}/projects", authorization(current, "Token")).map { }

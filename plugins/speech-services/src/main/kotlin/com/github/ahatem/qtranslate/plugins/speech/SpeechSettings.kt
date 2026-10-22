@@ -3,19 +3,38 @@ package com.github.ahatem.qtranslate.plugins.speech
 import com.github.ahatem.qtranslate.api.plugin.PluginSettings
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
 import com.github.ahatem.qtranslate.api.settings.Setting
+import com.github.ahatem.qtranslate.api.settings.SettingGroup
+import com.github.ahatem.qtranslate.api.settings.SettingGroups
 import com.github.ahatem.qtranslate.api.settings.SettingType
 import java.net.URI
 
+/**
+ * Two jobs, two groups. Live text appears while people talk (a local Vosk server); accurate text
+ * replaces each finished line (a Whisper-style provider). Either can be off; with both on, the live
+ * words show at once and the accurate ones take their place.
+ */
+@SettingGroups(
+    SettingGroup(
+        key = "live", title = "Live text", order = 10,
+        description = "Words appear while people are still talking, from a Vosk server on your computer or network."
+    ),
+    SettingGroup(
+        key = "accurate", title = "Accurate text", order = 20,
+        description = "Each finished line is transcribed again, more accurately, and replaces the live text."
+    )
+)
 data class SpeechSettings(
     @field:Setting(
         label = "Provider",
-        description = "Groq is fast and has a free tier. A local Whisper server keeps audio on your computer. " +
+        description = "None keeps only the live text, with nothing sent outside your network. " +
+            "Groq is fast and has a free tier. A local Whisper server keeps audio on your computer. " +
             "Custom works with any server that offers an OpenAI-style /audio/transcriptions endpoint. " +
             "Audio chat model sends the audio to a multimodal chat model (Gemini, gpt-4o-audio) through " +
             "an OpenAI-compatible gateway's /chat/completions.",
         type = SettingType.DROPDOWN,
         options = SpeechProvider.DROPDOWN_OPTIONS,
         defaultValue = "Groq",
+        group = "accurate",
         order = 10
     )
     var provider: String = SpeechProvider.GROQ.label,
@@ -24,6 +43,7 @@ data class SpeechSettings(
         label = "Server URL",
         description = "Leave blank for the provider's own address. Required for Custom and Audio chat model.",
         type = SettingType.TEXT,
+        group = "accurate",
         order = 20
     )
     var baseUrl: String = "",
@@ -32,6 +52,7 @@ data class SpeechSettings(
         label = "API Key",
         description = "Required by Groq, OpenAI and Deepgram. Usually left blank for a local server.",
         type = SettingType.PASSWORD,
+        group = "accurate",
         order = 30
     )
     var apiKey: String = "",
@@ -41,31 +62,48 @@ data class SpeechSettings(
         description = "Leave blank for the provider's default (Groq: whisper-large-v3-turbo, OpenAI: whisper-1, " +
             "Deepgram: nova-3). Required for Audio chat model.",
         type = SettingType.TEXT,
+        group = "accurate",
         order = 40
     )
     var model: String = "",
 
     @field:Setting(
-        label = "Live server URL (Vosk)",
-        description = "Optional. A Vosk WebSocket server such as ws://localhost:8765 shows text while people are " +
-            "still talking. With a provider above too, its more accurate text replaces each live line.",
+        label = "Live engine",
+        description = "Off records and transcribes line by line. Vosk shows words as they are spoken.",
+        type = SettingType.DROPDOWN,
+        options = LIVE_ENGINE_OPTIONS,
+        defaultValue = LIVE_OFF,
+        group = "live",
+        order = 5
+    )
+    var liveEngine: String = LIVE_OFF,
+
+    @field:Setting(
+        label = "Vosk server URL",
+        description = "The Vosk server's local WebSocket address, e.g. ws://localhost:8765 or ws://192.168.1.20:8765.",
         type = SettingType.TEXT,
+        group = "live",
+        showIf = "liveEngine=$LIVE_VOSK",
         order = 50
     )
     var liveServerUrl: String = "",
 
     @field:Setting(
-        label = "Live language for Auto-Detect",
+        label = "Language for Auto-Detect",
         description = "Vosk cannot detect the language, so this model is used when a language is set to " +
             "Auto-Detect in the conversation window (for example en or ar).",
         type = SettingType.TEXT,
         defaultValue = "en",
+        group = "live",
+        showIf = "liveEngine=$LIVE_VOSK",
         order = 60
     )
     var liveAutoLanguage: String = "en"
 ) : PluginSettings.Configurable() {
 
     val speechProvider: SpeechProvider get() = SpeechProvider.fromLabel(provider)
+
+    val liveEnabled: Boolean get() = liveEngine == LIVE_VOSK && liveServerUrl.isNotBlank()
 
     /** The address requests go to: the user's, or the provider's when left blank. */
     val effectiveBaseUrl: String get() = baseUrl.trim().trimEnd('/').ifEmpty { speechProvider.defaultBaseUrl }
@@ -74,6 +112,7 @@ data class SpeechSettings(
 
     /** What is wrong with the address, or null when it is usable. */
     fun urlError(): ServiceError? {
+        if (speechProvider == SpeechProvider.NONE) return null
         val url = effectiveBaseUrl
         if (url.isEmpty()) {
             return ServiceError.ConfigurationError(
@@ -89,6 +128,11 @@ data class SpeechSettings(
 
     /** Why requests would fail before any is sent, or null when the settings are usable. */
     fun configurationError(): ServiceError? {
+        if (speechProvider == SpeechProvider.NONE) {
+            return ServiceError.ConfigurationError(
+                "No accurate speech provider is selected (live text only). Choose one in Settings > Plugins > Speech Recognition."
+            )
+        }
         urlError()?.let { return it }
         if (effectiveModel.isEmpty()) {
             return ServiceError.ConfigurationError(
@@ -109,3 +153,7 @@ data class SpeechSettings(
         host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" ||
             host.endsWith(".local") || host.startsWith("192.168.") || host.startsWith("10.")
 }
+
+const val LIVE_OFF = "Off"
+const val LIVE_VOSK = "Vosk (local server)"
+const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK"

@@ -189,6 +189,15 @@ class SpeechClientTest {
     }
 
     @Test
+    fun `none keeps live text only and sends nothing`() = runBlocking {
+        val http = FakeUploads()
+        val error = client(http, SpeechSettings(provider = "None (live text only)")).transcribe(SpeechRecognitionRequest(clip)).getError()
+        assertTrue(error is ServiceError.ConfigurationError)
+        assertTrue(client(http, SpeechSettings(provider = "None (live text only)")).testConnection().isOk)
+        assertTrue(http.requests.isEmpty())
+    }
+
+    @Test
     fun `every dropdown option maps to its provider`() {
         val labels = SpeechProvider.DROPDOWN_OPTIONS.split(",")
         assertEquals(SpeechProvider.entries.map { it.label }, labels)
