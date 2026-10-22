@@ -11,8 +11,15 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 - **Conversation Sessions.** Record a voice call — a Discord call, for example — as two separate streams (your microphone and the call's audio, captured through WASAPI loopback on Windows), read a live transcript, and hover any word to see its translation and the sentence's meaning. Select a phrase to translate it, look up dictionary meanings, and replay any line or single word. Sessions are saved locally with search, rename, export and delete; failed transcriptions keep their audio for a retry, and a session cut off by a crash is recovered with its audio. See [Conversation Sessions](wiki/Conversation-Sessions.md)
+- **Built-in offline Vosk live speech recognition.** Transcribe speech locally and in real time without external software, Python, or Docker. An in-process model manager lists, downloads, verifies, and manages Vosk models directly from alphacephei.com into sandboxed plugin storage
+- **Realtime cloud streaming engines.** Live text support expanded to include Deepgram live streaming (`wss://api.deepgram.com/v1/listen`) with word timings and OpenAI Realtime transcription (`wss://api.openai.com/v1/realtime`)
+- **Accurate-to-live language adoption.** In Auto-Detect mode, live recognition automatically adopts the language detected by the accurate speech provider on completed lines, switching models dynamically for subsequent speech while preserving explicit user language choices
+- **Full multi-language localization.** Complete translations for all Conversation Sessions and Speech Recognition strings added across all 18 bundled language files
 - **Speech Recognition plugin.** Speech-to-text through Groq, OpenAI, Deepgram, a local Whisper server, or any OpenAI-compatible endpoint, each with its own URL, key and model, and a Test Connection button. Plugin API 2.2.0 adds the `SpeechRecognizer` and `LiveSpeechRecognizer` service roles and `MultipartHttpClient` for audio uploads
-- **Live transcription with Vosk.** A local Vosk server (over a local WebSocket API) shows words while people are still talking; with an accurate provider also set up, each finished line is replaced by its text (hybrid mode)
+- **Live transcription with Vosk server.** Optional connection to a local or remote Vosk WebSocket server (with Docker or Python) remains available for network setups
+
+### Fixed
+- Fixed an issue where Windows System OCR would fail with an argument null exception in `windows-ocr.ps1` when an image contained no detectable text lines
 
 ## [1.5.0] — 2026-09-29
 
