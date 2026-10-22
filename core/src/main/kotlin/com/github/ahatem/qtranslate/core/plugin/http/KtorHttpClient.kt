@@ -135,6 +135,18 @@ internal class KtorHttpClient(
      * also why per-host timeouts need no second client and no second connection pool: the pooling
      * question is a separate one, and this does not decide it.
      */
+    /**
+     * Uploads wait longer than ordinary requests. The server has to process what was sent — a
+     * speech model listening to a clip, a chat model reading audio — before it answers at all, so
+     * the socket stays silent far longer than for a translation. Never shortens what the user set.
+     */
+    private fun HttpRequestBuilder.applyUploadTimeout() {
+        timeout {
+            requestTimeoutMillis = maxOf(config.requestTimeoutMillis, UPLOAD_TIMEOUT_MILLIS)
+            socketTimeoutMillis = maxOf(config.socketTimeoutMillis, UPLOAD_TIMEOUT_MILLIS)
+        }
+    }
+
     private fun HttpRequestBuilder.applyHostTimeout(url: String) {
         if (config.hostTimeouts.isEmpty()) return
         val host = runCatching { Url(url).host }.getOrNull() ?: return
@@ -320,6 +332,7 @@ internal class KtorHttpClient(
     ): Result<String, ServiceError> = withContext(Dispatchers.IO) {
         try {
             val response: HttpResponse = client.post(url) {
+                applyUploadTimeout()
                 applyHostTimeout(url)
                 // The body carries its own Content-Type with the boundary; a caller's would break it.
                 headers.filterKeys { !it.equals(HttpHeaders.ContentType, ignoreCase = true) }
@@ -362,6 +375,7 @@ internal class KtorHttpClient(
     ): Result<String, ServiceError> = withContext(Dispatchers.IO) {
         try {
             val response: HttpResponse = client.post(url) {
+                applyUploadTimeout()
                 applyHostTimeout(url)
                 headers.filterKeys { !it.equals(HttpHeaders.ContentType, ignoreCase = true) }
                     .forEach { (key, value) -> header(key, value) }
@@ -592,3 +606,5 @@ data class ProxyConfiguration(
         return "Basic " + Base64.getEncoder().encodeToString(raw.toByteArray(Charsets.UTF_8))
     }
 }
+
+private const val UPLOAD_TIMEOUT_MILLIS = 120_000L

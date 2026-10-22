@@ -20,6 +20,13 @@ data class OpenAiWord(val word: String, val start: Double, val end: Double)
 @Serializable
 data class OpenAiError(val message: String)
 
+/** An OpenAI-style `/models` listing. */
+@Serializable
+data class ModelList(val data: List<ModelEntry> = emptyList())
+
+@Serializable
+data class ModelEntry(val id: String)
+
 /** A `/chat/completions` reply; only the fields used are declared. */
 @Serializable
 data class ChatReply(

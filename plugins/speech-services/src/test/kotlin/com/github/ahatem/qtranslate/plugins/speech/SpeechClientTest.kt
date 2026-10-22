@@ -33,20 +33,20 @@ class SpeechClientTest {
         override suspend fun postMultipart(url: String, parts: List<MultipartPart>, headers: Map<String, String>, queryParams: Map<String, Any?>) =
             next(Recorded(url, headers, parts.filterIsInstance<MultipartPart.Text>().associate { it.name to it.value }, queryParams))
 
-        override suspend fun postBytes(url: String, body: ByteArray, contentType: String, headers: Map<String, String>, queryParams: Map<String, Any?>) =
-            next(Recorded(url, headers + ("Content-Type" to contentType), emptyMap(), queryParams))
+        override suspend fun postBytes(url: String, body: ByteArray, contentType: String, headers: Map<String, String>, queryParams: Map<String, Any?>): Result<String, ServiceError> {
+            if (contentType == "application/json") bodies += body.toString(Charsets.UTF_8)
+            return next(Recorded(url, headers + ("Content-Type" to contentType), emptyMap(), queryParams))
+        }
 
         private fun next(request: Recorded): Result<String, ServiceError> {
             requests += request
             return queue.removeFirst()
         }
 
-        override suspend fun get(url: String, headers: Map<String, String>, queryParams: Map<String, Any?>) = error("unused")
+        override suspend fun get(url: String, headers: Map<String, String>, queryParams: Map<String, Any?>) =
+            next(Recorded(url, headers, emptyMap(), queryParams))
         val bodies = mutableListOf<String>()
-        override suspend fun post(url: String, headers: Map<String, String>, body: String?, queryParams: Map<String, Any?>): Result<String, ServiceError> {
-            bodies += body.orEmpty()
-            return next(Recorded(url, headers, emptyMap(), queryParams))
-        }
+        override suspend fun post(url: String, headers: Map<String, String>, body: String?, queryParams: Map<String, Any?>) = error("unused")
         override suspend fun getBytes(url: String, headers: Map<String, String>, queryParams: Map<String, Any?>) = error("unused")
         override suspend fun postForm(url: String, formData: Map<String, String>, headers: Map<String, String>, queryParams: Map<String, Any?>, cookies: Map<String, String>) = error("unused")
         override suspend fun postFormBytes(url: String, formData: Map<String, String>, headers: Map<String, String>, queryParams: Map<String, Any?>, cookies: Map<String, String>) = error("unused")
@@ -147,6 +147,26 @@ class SpeechClientTest {
         val error = client(FakeUploads(), SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://x/v1"))
             .transcribe(SpeechRecognitionRequest(clip)).getError()
         assertTrue(error is ServiceError.ConfigurationError && "Model" in error.message)
+    }
+
+    @Test
+    fun `the connection test checks the model list instead of transcribing`() = runBlocking {
+        val listing = Ok("""{"data":[{"id":"antigravity/gemini-3.8-flash-tiered"},{"id":"groq/whisper-large-v3-turbo"}]}""")
+        val settings = SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://gw:20128/v1", apiKey = "k",
+            model = "antigravity/gemini-3.8-flash-tiered")
+        val http = FakeUploads(listOf(listing))
+        assertTrue(client(http, settings).testConnection().isOk)
+        assertEquals("http://gw:20128/v1/models", http.requests.single().url)
+        assertEquals("Bearer k", http.requests.single().headers["Authorization"])
+
+        val wrong = client(FakeUploads(listOf(listing)), settings.copy(model = "gemini-typo")).testConnection().getError()
+        assertTrue(wrong is ServiceError.ConfigurationError && "groq/whisper-large-v3-turbo" in wrong.message, "lists what is offered")
+    }
+
+    @Test
+    fun `a server without a model list still passes the connection test`() = runBlocking {
+        val http = FakeUploads(listOf(Err(ServiceError.ServiceUnavailableError("HTTP 404 for http://localhost:8000/v1/models"))))
+        assertTrue(client(http, SpeechSettings(provider = "Local Whisper server")).testConnection().isOk)
     }
 
     @Test

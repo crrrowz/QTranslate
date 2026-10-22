@@ -122,7 +122,7 @@ class ConversationWindow(
     private val sessionsModel = DefaultListModel<ConversationSession>()
     private val sessionsList = JList(sessionsModel)
     private val searchField = JTextField()
-    private val newButton = JButton("＋ ${strings.newSession}")
+    private val newButton = JButton("+ ${strings.newSession}")
     private val renameButton = JButton(strings.rename)
     private val exportButton = JButton(strings.export)
     private val deleteButton = JButton(strings.delete)
@@ -157,7 +157,8 @@ class ConversationWindow(
         setLocationRelativeTo(null)
 
         contentPane = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, buildSidebar(), buildMain()).apply {
-            dividerLocation = 280
+            dividerLocation = 230
+            resizeWeight = 0.0
             border = null
         }
         wireEvents()
@@ -189,7 +190,8 @@ class ConversationWindow(
     // Layout
     // ---------------------------------------------------------------------------------------
 
-    private fun buildSidebar(): JPanel = JPanel(MigLayout("fill, wrap 1, insets 10, gap 6", "[grow,fill]", "[][][grow,fill][]")).apply {
+    // Wide enough for its three buttons; the split takes any shortfall from the transcript side.
+    private fun buildSidebar(): JPanel = shrinkable(MigLayout("fill, wrap 1, insets 10, gap 6", "[grow,fill]", "[][][grow,fill][]"), minWidth = 220).apply {
         searchField.putClientProperty("JTextField.placeholderText", strings.searchPlaceholder)
         searchField.putClientProperty("JTextField.showClearButton", true)
         sessionsList.selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -197,43 +199,55 @@ class ConversationWindow(
         add(newButton)
         add(searchField)
         add(JScrollPane(sessionsList))
-        add(JPanel(MigLayout("insets 0, gap 4, fillx", "[grow,fill][grow,fill][grow,fill]")).apply {
-            add(renameButton); add(exportButton); add(deleteButton)
+        add(shrinkable(MigLayout("insets 0, gap 4, fillx", "[grow,fill][grow,fill][grow,fill]")).apply {
+            listOf(renameButton, exportButton, deleteButton).forEach { button ->
+                button.margin = java.awt.Insets(2, 6, 2, 6)
+                add(button, "wmin 40")
+            }
         })
     }
 
     private fun buildMain(): JPanel = JPanel(BorderLayout()).apply {
-        val controls = JPanel(MigLayout("fillx, insets 10 12 6 12, gap 8 6", "[][120:220:,grow,fill][][][120:220:,grow,fill]")).apply {
+        // Device names run to 70 characters, and a combo box will not shrink below its widest item.
+        // A typical-length prototype sizes them instead, and "wmin" lets each give way further, so
+        // the pickers share whatever width the window has rather than overlapping or clipping.
+        listOf(microphoneCombo, systemCombo).forEach { it.prototypeDisplayValue = DeviceItem(null, "Headset Microphone (USB)") }
+        // Only the pickers share a grid. The wider rows below are panels of their own: a row that
+        // spans grid columns makes MigLayout widen the last column to its preferred width and
+        // never give it back, which clipped the right-hand side of the window.
+        val pickers = shrinkable(MigLayout("fillx, insets 10 12 4 12, gap 8 6", "[][60:200:,grow,fill][][60:200:,grow,fill]")).apply {
             add(JLabel(strings.microphone))
-            add(microphoneCombo)
-            add(refreshDevicesButton, "spany 2, aligny center")
+            add(microphoneCombo, "wmin 60")
             add(JLabel(strings.callAudio).apply { toolTipText = strings.callAudioTooltip })
-            add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "wrap")
+            add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "split 2, growx, wmin 60")
+            add(refreshDevicesButton, "wrap")
             add(JLabel(strings.myLanguage))
-            add(myLanguageCombo)
+            add(myLanguageCombo, "wmin 60")
             add(JLabel(strings.callLanguage))
-            add(callLanguageCombo, "wrap")
+            add(callLanguageCombo, "wmin 60, wrap")
             add(JLabel(strings.translateTo))
-            add(targetCombo)
-            add(JPanel(MigLayout("insets 0, gap 8, fillx", "[grow,fill][]")).apply {
-                isOpaque = false
-                add(speechLabel)
-                add(speechSettingsButton)
-            }, "span 3, growx, wrap")
-            add(JPanel(MigLayout("insets 4 0 0 0, gap 10, fillx", "[][][][]push[][]")).apply {
-                recordButton.putClientProperty("JButton.buttonType", "default")
-                add(recordButton)
-                add(stopButton)
-                add(timerLabel.apply { font = font.deriveFont(font.size2D + 4f) })
-                add(pendingLabel)
-                add(retryFailedButton)
-                add(microphoneLight)
-                add(systemLight)
-            }, "span, growx, wrap")
-            add(keepAudioCheck, "span, wrap")
+            add(targetCombo, "wmin 60")
         }
+        val speechRow = shrinkable(MigLayout("fillx, insets 0 12 4 12, gap 8", "[grow,fill][]")).apply {
+            add(speechLabel, "wmin 0")
+            add(speechSettingsButton)
+        }
+        val recordRow = shrinkable(MigLayout("fillx, insets 4 12 2 12, gap 10", "[][][][][]push[][]")).apply {
+            recordButton.putClientProperty("JButton.buttonType", "default")
+            add(recordButton)
+            add(stopButton)
+            add(timerLabel.apply { font = font.deriveFont(font.size2D + 4f) })
+            add(pendingLabel)
+            add(retryFailedButton)
+            add(microphoneLight, "wmin 0")
+            add(systemLight, "wmin 0")
+        }
+        val keepAudioRow = shrinkable(MigLayout("insets 0 12 6 12")).apply { add(keepAudioCheck, "wmin 0") }
         val top = JPanel(MigLayout("fillx, wrap 1, insets 0, gap 0", "[grow,fill]")).apply {
-            add(controls)
+            add(pickers)
+            add(speechRow)
+            add(recordRow)
+            add(keepAudioRow)
             add(privacyBar)
             add(noticeBar)
         }
@@ -247,8 +261,34 @@ class ConversationWindow(
         }, BorderLayout.SOUTH)
     }
 
+    /**
+     * A panel that never asks for more width than it is given. MigLayout reports its preferred
+     * width as the minimum, which made the parent clip the panel instead of shrinking it; the
+     * children's own minimums and wmin constraints still apply inside.
+     */
+    private fun shrinkable(layout: MigLayout, minWidth: Int = 0): JPanel = object : JPanel(layout) {
+        override fun getMinimumSize(): Dimension = Dimension(minWidth, super.getMinimumSize().height)
+    }
+
     /** Read-only text that wraps to the window's width, which a JLabel does not do on its own. */
-    private fun wrappingText(text: String) = javax.swing.JTextArea(text).apply {
+    private fun wrappingText(text: String) = object : javax.swing.JTextArea(text) {
+        // A wrapping text area reports the height for the width it last had; sized to its current
+        // width first, it reports the height it needs now, so the last line is never cut off.
+        override fun getPreferredSize(): Dimension {
+            if (width > 0) setSize(width, Short.MAX_VALUE.toInt())
+            return super.getPreferredSize()
+        }
+    }.apply {
+        // The height it needs is only known once it has its new width, so lay out once more then.
+        addComponentListener(object : java.awt.event.ComponentAdapter() {
+            private var lastWidth = -1
+            override fun componentResized(e: java.awt.event.ComponentEvent) {
+                if (width != lastWidth) {
+                    lastWidth = width
+                    SwingUtilities.invokeLater { revalidate() }
+                }
+            }
+        })
         isEditable = false
         isFocusable = false
         lineWrap = true
@@ -481,13 +521,14 @@ class ConversationWindow(
 
             val micItems = listOf(none) + microphones.filterNot { it.looksLikeSystemAudio }.map { DeviceItem(it, it.name) }
             microphoneCombo.model = DefaultComboBoxModel(micItems.toTypedArray())
-            microphoneCombo.selectedItem = micItems.firstOrNull { it.device?.id == preferences.microphoneId }
+            // Matched only when something was saved: a null id would otherwise match "None" itself.
+            microphoneCombo.selectedItem = preferences.microphoneId?.let { id -> micItems.firstOrNull { it.device?.id == id } }
                 ?: micItems.firstOrNull { it.device?.name?.contains("microphone", ignoreCase = true) == true }
                 ?: micItems.getOrNull(1) ?: none
 
             val systemItems = listOf(none) + outputs.map { DeviceItem(it, it.name) }
             systemCombo.model = DefaultComboBoxModel(systemItems.toTypedArray())
-            systemCombo.selectedItem = systemItems.firstOrNull { it.device?.id == preferences.systemOutputId }
+            systemCombo.selectedItem = preferences.systemOutputId?.let { id -> systemItems.firstOrNull { it.device?.id == id } }
                 // A chat-only output (SteelSeries Sonar "Chat") carries just the call; prefer it.
                 ?: systemItems.firstOrNull { it.device?.name?.contains("chat", ignoreCase = true) == true }
                 ?: systemItems.getOrNull(1) ?: none
@@ -784,7 +825,7 @@ class ConversationWindow(
     private inner class StreamLight(private val name: String, private val source: AudioSource) :
         JPanel(MigLayout("insets 0, gap 4")) {
         private val label = JLabel()
-        private val level = JProgressBar(0, 100).apply { preferredSize = Dimension(56, 6) }
+        private val level = JProgressBar(0, 100).apply { preferredSize = Dimension(44, 6) }
 
         init {
             isOpaque = false

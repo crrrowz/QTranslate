@@ -15,6 +15,7 @@ import com.github.michaelbull.result.Err
 import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.andThen
+import com.github.michaelbull.result.get
 import com.github.michaelbull.result.getError
 import com.github.michaelbull.result.map
 import kotlinx.serialization.json.addJsonObject
@@ -48,15 +49,39 @@ class SpeechClient(
         return when (current.speechProvider.protocol) {
             SpeechProtocol.OPENAI_COMPATIBLE -> openAi(uploads, current, request, language)
             SpeechProtocol.DEEPGRAM -> deepgram(uploads, current, request.audio, language)
-            SpeechProtocol.CHAT_AUDIO -> chatAudio(current, request, language)
+            SpeechProtocol.CHAT_AUDIO -> chatAudio(uploads, current, request, language)
         }.map { response ->
             response.copy(detectedLanguage = request.language.takeUnless { it == LanguageCode.AUTO } ?: response.detectedLanguage)
         }
     }
 
-    /** One second of silence: answered with an empty transcript by any working provider. */
-    suspend fun testConnection(): Result<Unit, ServiceError> =
-        transcribe(SpeechRecognitionRequest(SpeechAudio(silentWav(1_000)))).map { }
+    /**
+     * Checks the address, the key and, where the server lists its models, the model — without
+     * transcribing anything. Sending a clip would be the fuller test, but a multimodal chat model
+     * can take longer to answer than the settings dialog waits, and a slow answer is not a broken
+     * setup. Whether the provider accepts audio shows on the first recorded line.
+     */
+    suspend fun testConnection(): Result<Unit, ServiceError> {
+        val current = settings()
+        current.configurationError()?.let { return Err(it) }
+        if (current.speechProvider.protocol == SpeechProtocol.DEEPGRAM) {
+            return http.get("${current.effectiveBaseUrl}/projects", authorization(current, "Token")).map { }
+        }
+        val listing = http.get("${current.effectiveBaseUrl}/models", authorization(current, "Bearer"))
+        val error = listing.getError()
+        if (error != null) {
+            // Reachable but without a model list (some Whisper servers): nothing more to check.
+            return if (error is ServiceError.InvalidResponseError || error.message.startsWith("HTTP 404")) Ok(Unit) else Err(error)
+        }
+        val ids = listing.get()?.let { body -> runCatching { modelIds(body) }.getOrNull() }.orEmpty()
+        if (ids.isNotEmpty() && current.effectiveModel !in ids) {
+            return Err(ServiceError.ConfigurationError(
+                "Connected, but the server does not offer the model \"${current.effectiveModel}\". " +
+                    "It offers: ${ids.take(8).joinToString()}${if (ids.size > 8) ", ..." else ""}"
+            ))
+        }
+        return Ok(Unit)
+    }
 
     // -------------------------------------------------------------------------------------------
     // OpenAI-compatible
@@ -141,6 +166,7 @@ class SpeechClient(
     // -------------------------------------------------------------------------------------------
 
     private suspend fun chatAudio(
+        uploads: MultipartHttpClient,
         settings: SpeechSettings,
         request: SpeechRecognitionRequest,
         language: String?
@@ -174,10 +200,13 @@ class SpeechClient(
                 }
             }
         }
-        return http.post(
+        // Sent as an upload rather than a plain post: the model has to listen to the clip before it
+        // answers, which takes longer than an ordinary request is allowed.
+        return uploads.postBytes(
             url = "${settings.effectiveBaseUrl}/chat/completions",
-            headers = authorization(settings, "Bearer") + ("Content-Type" to "application/json"),
-            body = body.toString()
+            body = body.toString().toByteArray(Charsets.UTF_8),
+            contentType = "application/json",
+            headers = authorization(settings, "Bearer")
         ).andThen { chatParser.parse(it) }.andThen { reply ->
             reply.error?.let { return@andThen Err(ServiceError.InvalidResponseError(it.message)) }
             val text = reply.choices.firstOrNull()?.message?.content.orEmpty().trim().trim('"', '“', '”').trim()
@@ -211,6 +240,12 @@ class SpeechClient(
                 .firstOrNull { Locale(it).getDisplayLanguage(Locale.ENGLISH).lowercase() == wanted }
                 ?.let(::LanguageCode)
         }
+
+        /** Model ids from an OpenAI-style `/models` listing. */
+        fun modelIds(body: String): List<String> =
+            listJson.decodeFromString(ModelList.serializer(), body).data.map { it.id }
+
+        private val listJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
 
         fun silentWav(millis: Int, sampleRate: Int = 16_000): ByteArray {
             val dataBytes = sampleRate * millis / 1000 * 2
