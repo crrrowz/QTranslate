@@ -78,10 +78,3 @@ name LM Studio shows for the model you loaded. The API key stays blank.
 - **Connection refused with a local endpoint:** The server is not running, or is on a different port. Confirm with `curl http://localhost:11434/v1/models` before changing anything in QTranslate.
 
 For OpenAI, Gemini, Mistral, or another hosted server, replace the Base URL, API key, and model with the values documented by that provider.
-
-## Speech recognition
-
-The plugin also offers **AI Speech Recognition**, which transcribes audio for
-[Conversation Sessions](Conversation-Sessions.md). It has its own endpoint, key and model under
-**Speech Recognition** in the plugin settings, because OpenRouter does not transcribe audio. See
-[Conversation Sessions > Setup](Conversation-Sessions.md#setup) for Groq, OpenAI and local Whisper.

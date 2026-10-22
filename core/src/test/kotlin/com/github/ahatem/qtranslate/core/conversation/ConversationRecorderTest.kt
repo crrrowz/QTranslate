@@ -124,6 +124,49 @@ class ConversationRecorderTest {
     }
 
     @Test
+    fun `each source is transcribed in its own language`() = runBlocking {
+        val mic = ScriptedDevice()
+        val system = ScriptedDevice()
+        val languages = java.util.Collections.synchronizedList(mutableListOf<Pair<Long, String>>())
+        val recorder = recorder(mic, system) { request ->
+            languages += request.audio.durationMillis to request.language.tag
+            Ok(SpeechRecognitionResponse("x"))
+        }
+        recorder.start(options().copy(
+            microphoneLanguage = com.github.ahatem.qtranslate.api.language.LanguageCode("ar"),
+            systemLanguage = com.github.ahatem.qtranslate.api.language.LanguageCode("en")
+        ))
+        waitUntil { recorder.state.value.streams.values.all { it.state == StreamState.LIVE } }
+        mic.push(tone(700) + silence(1_000))
+        system.push(tone(1_800) + silence(1_000))
+        waitUntil { languages.size == 2 }
+        recorder.stop()
+
+        assertEquals("ar", languages.minByOrNull { it.first }!!.second, "the short clip came from the microphone")
+        assertEquals("en", languages.maxByOrNull { it.first }!!.second)
+        assertEquals("en", repository.list().single().callLanguage)
+    }
+
+    @Test
+    fun `retry failed transcribes every failed segment once the service works`() = runBlocking {
+        val mic = ScriptedDevice()
+        var available = false
+        val recorder = recorder(mic, ScriptedDevice()) {
+            if (available) Ok(SpeechRecognitionResponse("recovered")) else null
+        }
+        recorder.start(options())
+        waitUntil { recorder.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+        mic.push(tone(800) + silence(1_000) + tone(800) + silence(1_000))
+        waitUntil { recorder.state.value.session?.segments?.count { it.failed } == 2 }
+        recorder.stop()
+
+        available = true
+        val updated = recorder.retryFailed(repository.list().single())
+        assertEquals(listOf("recovered", "recovered"), updated.segments.map { it.text })
+        assertTrue(repository.list().single().segments.none { it.failed })
+    }
+
+    @Test
     fun `a failed transcription keeps the audio and can be retried`() = runBlocking {
         val mic = ScriptedDevice()
         var fail = true

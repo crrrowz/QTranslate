@@ -45,27 +45,6 @@ data class ChatChoice(
     @SerialName("finish_reason") val finishReason: String? = null
 )
 
-/**
- * Body of an OpenAI-compatible `/audio/transcriptions` reply, in `json` or `verbose_json` format.
- * The plain format carries only [text]; the verbose one adds the language and word timings.
- */
-@Serializable
-data class TranscriptionResponse(
-    @SerialName("text") val text: String? = null,
-    /** The spoken language's English name ("english"), not a code. Verbose format only. */
-    @SerialName("language") val language: String? = null,
-    @SerialName("words") val words: List<TranscriptionWord>? = null,
-    @SerialName("error") val error: ChatError? = null
-)
-
-/** One word of a `verbose_json` transcription; times are seconds from the start of the clip. */
-@Serializable
-data class TranscriptionWord(
-    @SerialName("word") val word: String,
-    @SerialName("start") val start: Double,
-    @SerialName("end") val end: Double
-)
-
 @Serializable
 data class ChatError(
     @SerialName("message") val message: String,

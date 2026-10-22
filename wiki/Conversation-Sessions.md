@@ -16,25 +16,29 @@ Sessions...**
 
 ## Setup
 
-### 1. A speech recognition service
+### 1. A speech recognition provider
 
-Transcription uses the **AI Speech Recognition** service of the bundled AI Services plugin. It needs
-an endpoint that transcribes audio; OpenRouter, the plugin's default for chat, does not.
+Transcription uses the bundled **Speech Recognition** plugin. Open it from the conversation window's
+**Speech settings...** button, or from **Settings > Plugins > Speech Recognition > Configure**, and
+pick a provider:
 
-Open **Settings > Plugins > AI Services > Configure > Speech Recognition** and choose one:
+| Provider | What you enter | Notes |
+|---|---|---|
+| **Groq** | API key from [console.groq.com](https://console.groq.com/) | Fast, inexpensive, has a free tier. Default model `whisper-large-v3-turbo`. |
+| **OpenAI** | API key | Default model `whisper-1`. `gpt-4o-transcribe` also works, without word timings. |
+| **Deepgram** | API key from [console.deepgram.com](https://console.deepgram.com/) | Default model `nova-3`. |
+| **Local Whisper server** | Nothing, or the server's URL and model | Nothing leaves your computer. Default `http://localhost:8000/v1` (Speaches, faster-whisper-server, LocalAI). |
+| **Custom (OpenAI-compatible)** | Server URL, model, and a key if it needs one | Any server with an OpenAI-style `/audio/transcriptions` endpoint, local or cloud. |
 
-| Provider | Speech Base URL | Speech Model | Notes |
-|---|---|---|---|
-| [Groq](https://console.groq.com/) | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` | Fast, inexpensive, has a free tier. |
-| OpenAI | `https://api.openai.com/v1` | `whisper-1` | `gpt-4o-transcribe` also works, but without word timings. |
-| Local Whisper server | e.g. `http://localhost:8000/v1` | the server's model name | Nothing leaves your computer. Any OpenAI-compatible server works (faster-whisper-server, Speaches, LocalAI). |
+Leave **Server URL** and **Model** blank to use the provider's defaults. Press **Test Connection** to
+check the settings. The window shows which provider is in use next to **Speech settings...**.
 
-Paste the provider's key into **Speech API Key** (leave it blank for a local server), then select
-**AI Speech Recognition** under **Settings > Services & Presets**.
+Set **My language** and **Their language** in the window (or leave them on Auto-Detect). Naming the
+language noticeably improves accuracy on short lines, and you and the people on the call often speak
+different ones.
 
-Word-level replay needs a service that reports word timings (Groq, `whisper-1` and most local
-Whisper servers do). Without them, everything else still works; only **Play** on a single word is
-missing.
+Word-level replay needs word timings, which Groq, `whisper-1`, Deepgram and most local Whisper servers
+report. Without them everything else still works; only **Play** on a single word is missing.
 
 ### 2. The call's audio
 
@@ -61,7 +65,7 @@ call is transcribed twice.
 - Recordings and transcripts are stored only on this computer, in the `conversations` folder of
   QTranslate's data directory: one folder per session, holding `session.json` (the transcript)
   and `microphone.wav` / `system.wav` (the recordings).
-- To transcribe, each spoken clip is sent to the speech service you configured. With a local
+- To transcribe, each spoken clip is sent to the speech provider you configured. With a local
   Whisper server, nothing leaves your computer.
 - Hover translations go to your active translator, and meanings to your active dictionary, as
   everywhere else in QTranslate.
@@ -76,9 +80,9 @@ call is transcribed twice.
   clip is being transcribed, its line shows *Transcribing...*.
 - **Source, not speaker.** "Call" is everyone on the call mixed together; QTranslate does not tell
   your friends apart.
-- **Failures don't lose audio.** If the speech service is down, out of credit, or not set up, the
+- **Failures don't lose audio.** If the speech provider is down, out of credit, or not set up, the
   recording carries on and the affected lines say *Could not transcribe this part*. Click one to
-  retry once the service works again.
+  retry it, or press **Retry failed** to retry them all once the provider works.
 - **Devices.** If a device is unplugged mid-session, only its stream stops; its light turns red,
   and the other stream keeps recording.
 - **Crashes.** If QTranslate closes unexpectedly while recording, the session is marked

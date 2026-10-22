@@ -3,7 +3,7 @@ package com.github.ahatem.qtranslate.api.plugin
 import com.github.michaelbull.result.Result
 
 /**
- * An [HttpClient] that can also upload files as `multipart/form-data`.
+ * An [HttpClient] that can also upload files: as `multipart/form-data`, or as a raw request body.
  *
  * Optional behaviour rather than a change to [HttpClient] itself, for the same reason as
  * [SingleAttemptHttpClient]: a plugin that brings its own client, or a test double, keeps
@@ -14,7 +14,8 @@ import com.github.michaelbull.result.Result
  *     ?: return Err(ServiceError.ConfigurationError("This host cannot upload files."))
  * ```
  *
- * Speech and document APIs take their input this way and accept nothing else.
+ * Speech and document APIs take their input this way and accept nothing else: OpenAI-style
+ * endpoints want a multipart form, others (Deepgram, for one) the audio itself as the body.
  */
 public interface MultipartHttpClient : HttpClient {
 
@@ -27,6 +28,18 @@ public interface MultipartHttpClient : HttpClient {
     public suspend fun postMultipart(
         url: String,
         parts: List<MultipartPart>,
+        headers: Map<String, String> = emptyMap(),
+        queryParams: Map<String, Any?> = emptyMap()
+    ): Result<String, ServiceError>
+
+    /**
+     * Sends [body] as-is in one POST with the given [contentType], and returns the response body
+     * as text. [headers] should not include `Content-Type`.
+     */
+    public suspend fun postBytes(
+        url: String,
+        body: ByteArray,
+        contentType: String,
         headers: Map<String, String> = emptyMap(),
         queryParams: Map<String, Any?> = emptyMap()
     ): Result<String, ServiceError>

@@ -82,7 +82,9 @@ class ConversationWindow(
     private val languages: () -> List<LanguageCode>,
     /** The main window's target language, used until the user picks one here. */
     private val defaultTarget: () -> LanguageCode,
-    private val isRtl: () -> Boolean
+    private val isRtl: () -> Boolean,
+    /** Opens Settings on the Plugins page, where Speech Recognition is configured. */
+    private val onOpenSpeechSettings: () -> Unit = {}
 ) : JFrame(strings.title) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Swing)
@@ -96,7 +98,8 @@ class ConversationWindow(
     private val microphoneCombo = JComboBox<DeviceItem>()
     private val systemCombo = JComboBox<DeviceItem>()
     private val refreshDevicesButton = JButton("⟳").apply { toolTipText = strings.refreshDevices }
-    private val spokenCombo = JComboBox<LanguageCode>()
+    private val myLanguageCombo = JComboBox<LanguageCode>()
+    private val callLanguageCombo = JComboBox<LanguageCode>()
     private val targetCombo = JComboBox<LanguageCode>()
     private val keepAudioCheck = JCheckBox(strings.keepAudio).apply { toolTipText = strings.keepAudioTooltip }
 
@@ -106,10 +109,13 @@ class ConversationWindow(
     private val microphoneLight = StreamLight(strings.speakerMe, AudioSource.MICROPHONE)
     private val systemLight = StreamLight(strings.speakerCall, AudioSource.SYSTEM)
     private val pendingLabel = JLabel()
+    private val retryFailedButton = JButton()
+    private val speechLabel = JLabel()
+    private val speechSettingsButton = JButton(strings.speechSettings)
 
-    private val noticeLabel = JLabel()
-    private val noticeBar = banner(noticeLabel, UIManager.getColor("Actions.Red")) { recorder.clearNotice() }
-    private val privacyBar = banner(JLabel(html(strings.privacyNotice)), UIManager.getColor("Actions.Yellow")) {
+    private val noticeText = wrappingText("")
+    private val noticeBar = banner(noticeText, UIManager.getColor("Actions.Red")) { recorder.clearNotice() }
+    private val privacyBar = banner(wrappingText(strings.privacyNotice), UIManager.getColor("Actions.Yellow")) {
         feature.preferences = feature.preferences.copy(privacyNoticeDismissed = true)
     }
 
@@ -144,8 +150,10 @@ class ConversationWindow(
     init {
         com.github.ahatem.qtranslate.ui.swing.shared.util.AppIcons.applyTo(this)
         defaultCloseOperation = DO_NOTHING_ON_CLOSE
-        size = Dimension(1120, 740)
         minimumSize = Dimension(780, 480)
+        // Never larger than the screen it opens on: a 1080p laptop at 150% has ~1280x700 to give.
+        val screen = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
+        size = Dimension(minOf(1120, screen.width - 40), minOf(740, screen.height - 40))
         setLocationRelativeTo(null)
 
         contentPane = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, buildSidebar(), buildMain()).apply {
@@ -195,22 +203,30 @@ class ConversationWindow(
     }
 
     private fun buildMain(): JPanel = JPanel(BorderLayout()).apply {
-        val controls = JPanel(MigLayout("fillx, insets 10 12 6 12, gap 8 6", "[][grow,fill][][][grow,fill]")).apply {
+        val controls = JPanel(MigLayout("fillx, insets 10 12 6 12, gap 8 6", "[][120:220:,grow,fill][][][120:220:,grow,fill]")).apply {
             add(JLabel(strings.microphone))
             add(microphoneCombo)
             add(refreshDevicesButton, "spany 2, aligny center")
             add(JLabel(strings.callAudio).apply { toolTipText = strings.callAudioTooltip })
             add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "wrap")
-            add(JLabel(strings.spokenLanguage))
-            add(spokenCombo)
+            add(JLabel(strings.myLanguage))
+            add(myLanguageCombo)
+            add(JLabel(strings.callLanguage))
+            add(callLanguageCombo, "wrap")
             add(JLabel(strings.translateTo))
-            add(targetCombo, "wrap")
+            add(targetCombo)
+            add(JPanel(MigLayout("insets 0, gap 8, fillx", "[grow,fill][]")).apply {
+                isOpaque = false
+                add(speechLabel)
+                add(speechSettingsButton)
+            }, "span 3, growx, wrap")
             add(JPanel(MigLayout("insets 4 0 0 0, gap 10, fillx", "[][][][]push[][]")).apply {
                 recordButton.putClientProperty("JButton.buttonType", "default")
                 add(recordButton)
                 add(stopButton)
                 add(timerLabel.apply { font = font.deriveFont(font.size2D + 4f) })
                 add(pendingLabel)
+                add(retryFailedButton)
                 add(microphoneLight)
                 add(systemLight)
             }, "span, growx, wrap")
@@ -231,10 +247,21 @@ class ConversationWindow(
         }, BorderLayout.SOUTH)
     }
 
-    private fun banner(label: JLabel, accent: Color?, onDismiss: () -> Unit): JPanel =
+    /** Read-only text that wraps to the window's width, which a JLabel does not do on its own. */
+    private fun wrappingText(text: String) = javax.swing.JTextArea(text).apply {
+        isEditable = false
+        isFocusable = false
+        lineWrap = true
+        wrapStyleWord = true
+        isOpaque = false
+        border = null
+        font = UIManager.getFont("Label.font")
+    }
+
+    private fun banner(text: javax.swing.JTextArea, accent: Color?, onDismiss: () -> Unit): JPanel =
         JPanel(MigLayout("fillx, insets 6 12 6 12", "[grow,fill][]")).apply {
             border = BorderFactory.createMatteBorder(0, 4, 0, 0, accent ?: Color.ORANGE)
-            add(label)
+            add(text, "wmin 100")
             add(JButton("✕").apply {
                 putClientProperty("JButton.buttonType", "toolBarButton")
                 toolTipText = strings.dismiss
@@ -250,6 +277,8 @@ class ConversationWindow(
         addWindowListener(object : WindowAdapter() {
             override fun windowClosing(e: WindowEvent) = onClose()
             override fun windowDeactivated(e: WindowEvent) = hideCard()
+            // Coming back from Settings: the speech service may have just been set up.
+            override fun windowActivated(e: WindowEvent) = renderSpeechStatus()
         })
         recordButton.addActionListener {
             when (recorder.state.value.phase) {
@@ -261,6 +290,8 @@ class ConversationWindow(
         }
         stopButton.addActionListener { scope.launch { recorder.stop() } }
         refreshDevicesButton.addActionListener { loadDevices() }
+        speechSettingsButton.addActionListener { onOpenSpeechSettings() }
+        retryFailedButton.addActionListener { retryAllFailed() }
         newButton.addActionListener {
             if (!recorder.state.value.isActive) {
                 sessionsList.clearSelection()
@@ -280,6 +311,7 @@ class ConversationWindow(
             transcript.render(viewed)
             highlightSearch()
             updateSessionButtons()
+            renderRetryButton()
         }
         sessionsList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) { if (e.clickCount == 2) renameSelected() }
@@ -339,11 +371,13 @@ class ConversationWindow(
                 JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE)
             if (answer != JOptionPane.YES_OPTION) return
         }
-        val spoken = spokenCombo.selectedItem as? LanguageCode ?: LanguageCode.AUTO
+        val myLanguage = myLanguageCombo.selectedItem as? LanguageCode ?: LanguageCode.AUTO
+        val callLanguage = callLanguageCombo.selectedItem as? LanguageCode ?: LanguageCode.AUTO
         feature.preferences = feature.preferences.copy(
             microphoneId = microphone?.id,
             systemOutputId = system?.id,
-            spokenLanguage = spoken.tag,
+            spokenLanguage = myLanguage.tag,
+            callLanguage = callLanguage.tag,
             keepAudio = keepAudioCheck.isSelected
         )
         sessionsList.clearSelection()
@@ -353,7 +387,8 @@ class ConversationWindow(
                 title = strings.defaultTitle(SimpleDateFormat("yyyy-MM-dd HH:mm").format(Date())),
                 microphone = microphone,
                 systemOutput = system,
-                spokenLanguage = spoken,
+                microphoneLanguage = myLanguage,
+                systemLanguage = callLanguage,
                 keepAudio = keepAudioCheck.isSelected
             )
         )
@@ -368,7 +403,7 @@ class ConversationWindow(
         }
         recordButton.isEnabled = state.phase != RecorderPhase.STOPPING && !loadingDevices
         stopButton.isEnabled = active
-        listOf(microphoneCombo, systemCombo, refreshDevicesButton, spokenCombo, keepAudioCheck, newButton)
+        listOf(microphoneCombo, systemCombo, refreshDevicesButton, myLanguageCombo, callLanguageCombo, keepAudioCheck, newButton)
             .forEach { it.isEnabled = state.phase == RecorderPhase.IDLE && !loadingDevices }
         sessionsList.isEnabled = !active
         timerLabel.text = formatTimestamp(if (active || state.phase == RecorderPhase.STOPPING) state.elapsedMillis else viewed?.durationMillis ?: 0)
@@ -377,9 +412,10 @@ class ConversationWindow(
 
         val pending = state.session?.segments?.count { it.pending } ?: 0
         pendingLabel.text = if (active && pending > 0) strings.pending(pending) else ""
+        renderRetryButton()
 
         noticeBar.isVisible = state.notice != null
-        noticeLabel.text = state.notice?.let { html(noticeText(it)) }
+        noticeText.text = state.notice?.let(::noticeMessage).orEmpty()
 
         if (active || state.phase == RecorderPhase.STOPPING) transcript.render(state.session)
 
@@ -391,11 +427,12 @@ class ConversationWindow(
         updateSessionButtons()
     }
 
-    private fun noticeText(notice: RecorderNotice): String = when (notice) {
+    // Service messages usually end with their own full stop, and the templates add one.
+    private fun noticeMessage(notice: RecorderNotice): String = when (notice) {
         RecorderNotice.NoSpeechService -> strings.noticeNoSpeechService
-        is RecorderNotice.TranscriptionFailed -> strings.noticeTranscriptionFailed(notice.error.message)
-        is RecorderNotice.DeviceLost -> strings.noticeDeviceLost(sourceName(notice.source), notice.message)
-        is RecorderNotice.SaveFailed -> strings.noticeSaveFailed(notice.message)
+        is RecorderNotice.TranscriptionFailed -> strings.noticeTranscriptionFailed(notice.error.message.trimEnd('.'))
+        is RecorderNotice.DeviceLost -> strings.noticeDeviceLost(sourceName(notice.source), notice.message.trimEnd('.'))
+        is RecorderNotice.SaveFailed -> strings.noticeSaveFailed(notice.message.trimEnd('.'))
     }
 
     private fun sourceName(source: AudioSource) = if (source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
@@ -415,10 +452,15 @@ class ConversationWindow(
 
         val available = languages().filter { it != LanguageCode.AUTO }
         val renderer = LanguageRenderer()
-        spokenCombo.model = DefaultComboBoxModel((listOf(LanguageCode.AUTO) + available).toTypedArray())
-        spokenCombo.renderer = renderer
-        spokenCombo.selectedItem = LanguageCode(preferences.spokenLanguage).takeIf { it == LanguageCode.AUTO || it in available }
-            ?: LanguageCode.AUTO
+        val spokenChoices = (listOf(LanguageCode.AUTO) + available).toTypedArray()
+        fun JComboBox<LanguageCode>.fill(tag: String) {
+            model = DefaultComboBoxModel(spokenChoices)
+            this.renderer = renderer
+            selectedItem = LanguageCode(tag).takeIf { it == LanguageCode.AUTO || it in available } ?: LanguageCode.AUTO
+        }
+        myLanguageCombo.fill(preferences.spokenLanguage)
+        callLanguageCombo.fill(preferences.callLanguage)
+        renderSpeechStatus()
         targetCombo.model = DefaultComboBoxModel(available.toTypedArray())
         targetCombo.renderer = renderer
         targetCombo.selectedItem = preferences.targetLanguage?.let(::LanguageCode)?.takeIf { it in available }
@@ -440,6 +482,7 @@ class ConversationWindow(
             val micItems = listOf(none) + microphones.filterNot { it.looksLikeSystemAudio }.map { DeviceItem(it, it.name) }
             microphoneCombo.model = DefaultComboBoxModel(micItems.toTypedArray())
             microphoneCombo.selectedItem = micItems.firstOrNull { it.device?.id == preferences.microphoneId }
+                ?: micItems.firstOrNull { it.device?.name?.contains("microphone", ignoreCase = true) == true }
                 ?: micItems.getOrNull(1) ?: none
 
             val systemItems = listOf(none) + outputs.map { DeviceItem(it, it.name) }
@@ -647,7 +690,8 @@ class ConversationWindow(
 
     private fun loadMeanings(text: String, segment: TranscriptSegment?, session: ConversationSession, target: LanguageCode) {
         updateCard(text) { it.copy(meaningsLoading = true) }
-        val source = segment?.language?.let(::LanguageCode) ?: LanguageCode(session.spokenLanguage)
+        val source = segment?.language?.let(::LanguageCode)
+            ?: LanguageCode(segment?.let { session.languageOf(it.source) } ?: session.spokenLanguage)
         scope.launch {
             val result = feature.meanings(text, source, target)
             updateCard(text) { current ->
@@ -691,6 +735,33 @@ class ConversationWindow(
             // makes a word harder to recognise.
             val played = feature.play(session, segment.source, (startMillis - 120).coerceAtLeast(0), endMillis + 120, segment.id)
             if (!played) JOptionPane.showMessageDialog(this@ConversationWindow, strings.noAudio)
+        }
+    }
+
+    private fun renderSpeechStatus() {
+        val name = feature.speechServiceName
+        speechLabel.text = if (name != null) strings.speechService(name) else strings.speechNone
+        speechLabel.foreground = if (name != null) UIManager.getColor("Label.disabledForeground")
+        else UIManager.getColor("Actions.Red") ?: Color.RED
+    }
+
+    private fun renderRetryButton() {
+        val failed = displayedSession()?.segments?.count { it.failed } ?: 0
+        retryFailedButton.isVisible = failed > 0
+        retryFailedButton.text = strings.retryFailed(failed)
+    }
+
+    private fun retryAllFailed() {
+        val session = displayedSession() ?: return
+        retryFailedButton.isEnabled = false
+        scope.launch {
+            val updated = recorder.retryFailed(session)
+            if (!recorder.state.value.isActive) {
+                viewed = updated
+                transcript.render(updated)
+            }
+            retryFailedButton.isEnabled = true
+            renderRetryButton()
         }
     }
 

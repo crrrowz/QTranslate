@@ -58,7 +58,10 @@ data class RecordingOptions(
     val title: String,
     val microphone: AudioDevice?,
     val systemOutput: AudioDevice?,
-    val spokenLanguage: LanguageCode = LanguageCode.AUTO,
+    /** What the user speaks. */
+    val microphoneLanguage: LanguageCode = LanguageCode.AUTO,
+    /** What the people on the call speak. */
+    val systemLanguage: LanguageCode = LanguageCode.AUTO,
     val keepAudio: Boolean = true
 )
 
@@ -114,7 +117,8 @@ class ConversationRecorder(
             id = newSessionId(),
             title = options.title,
             createdAt = clock(),
-            spokenLanguage = options.spokenLanguage.tag,
+            spokenLanguage = options.microphoneLanguage.tag,
+            callLanguage = options.systemLanguage.tag,
             keepAudio = options.keepAudio
         )
         runCatching { repository.save(session) }
@@ -228,7 +232,7 @@ class ConversationRecorder(
         if (pcm.isEmpty()) return null
         val outcome = transcriber.transcribe(
             segment.copy(pending = true, failed = false), pcm,
-            LanguageCode(session.spokenLanguage), promptBefore(session, segment)
+            LanguageCode(session.languageOf(segment.source)), promptBefore(session, segment)
         )
         report(outcome)
         val updated = session.withSegment(outcome.segment)
@@ -238,6 +242,21 @@ class ConversationRecorder(
             withContext(Dispatchers.IO) { runCatching { repository.save(updated) } }
         }
         return updated
+    }
+
+    /**
+     * Retries every failed segment of [session], one after another so a provider's rate limit is
+     * not hit all at once. Stops early if the speech service is still missing.
+     */
+    suspend fun retryFailed(session: ConversationSession): ConversationSession {
+        var current = session
+        // The notice left over from recording would otherwise end the loop after one segment.
+        clearNotice()
+        for (segment in session.segments.filter { it.failed }) {
+            current = retry(current, segment) ?: continue
+            if (_state.value.notice == RecorderNotice.NoSpeechService) break
+        }
+        return current
     }
 
     private suspend fun updateSession(transform: (ConversationSession) -> ConversationSession) {
@@ -302,7 +321,7 @@ class ConversationRecorder(
                 for ((placeholder, audio) in utterances) {
                     val session = _state.value.session ?: continue
                     val outcome = transcriber.transcribe(
-                        placeholder, audio, LanguageCode(session.spokenLanguage), promptBefore(session, placeholder)
+                        placeholder, audio, LanguageCode(session.languageOf(source)), promptBefore(session, placeholder)
                     )
                     report(outcome)
                     // A clip that held no speech (a cough, a door) comes back blank: drop it.

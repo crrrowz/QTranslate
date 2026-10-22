@@ -69,8 +69,11 @@ class ConversationFeature(
         set(value) = ConversationPreferences.save(preferencesFile, value)
 
     /** Whether a speech service is active, so the window can say so before recording starts. */
-    val hasSpeechService: Boolean
-        get() = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER) != null
+    val hasSpeechService: Boolean get() = speechServiceName != null
+
+    /** The active speech service's name, e.g. "Speech Recognition (Groq)", or null when none is. */
+    val speechServiceName: String?
+        get() = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)?.name
 
     fun microphones(): List<AudioDevice> = microphoneBackend.inputDevices()
 

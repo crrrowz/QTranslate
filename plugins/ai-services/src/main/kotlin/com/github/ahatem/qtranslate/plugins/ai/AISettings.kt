@@ -30,8 +30,6 @@ import com.github.ahatem.qtranslate.api.settings.SettingType
 @SettingGroups(
     SettingGroup(key = "endpoint", title = "Endpoint",         order = 10),
     SettingGroup(key = "model",    title = "Model",            order = 20),
-    SettingGroup(key = "speech",   title = "Speech Recognition", order = 25,
-                 collapsible = true, defaultCollapsed = true),
     SettingGroup(key = "advanced", title = "Advanced",         order = 30,
                  collapsible = true, defaultCollapsed = true)
 )
@@ -121,45 +119,7 @@ data class AISettings(
         group        = "advanced",
         order        = 30
     )
-    var customHeaders: String = """{"HTTP-Referer": "https://github.com/ahatem/QTranslate", "X-Title": "QTranslate", "X-OpenRouter-Title": "QTranslate"}""",
-
-    @field:Setting(
-        label       = "Speech Base URL",
-        description = "OpenAI-compatible endpoint that serves /audio/transcriptions, used by Live Conversation. " +
-                "OpenRouter does not transcribe audio, so set one of: " +
-                "Groq (https://api.groq.com/openai/v1, fast with a free tier), " +
-                "OpenAI (https://api.openai.com/v1), " +
-                "or a local Whisper server such as speaches or whisper.cpp (http://localhost:8000/v1). " +
-                "Leave blank to use the Base URL above.",
-        type        = SettingType.TEXT,
-        isRequired  = false,
-        group       = "speech",
-        order       = 10
-    )
-    var speechBaseUrl: String = "",
-
-    @field:Setting(
-        label       = "Speech API Key",
-        description = "Key for the speech endpoint. Leave blank to reuse the API Key above, " +
-                "or for a local server that needs none.",
-        type        = SettingType.PASSWORD,
-        isRequired  = false,
-        group       = "speech",
-        order       = 20
-    )
-    var speechApiKey: String = "",
-
-    @field:Setting(
-        label       = "Speech Model",
-        description = "Transcription model. Groq: whisper-large-v3-turbo · OpenAI: gpt-4o-mini-transcribe or whisper-1 · " +
-                "local servers: whatever model they load.",
-        type         = SettingType.TEXT,
-        defaultValue = "whisper-large-v3-turbo",
-        isRequired   = false,
-        group        = "speech",
-        order        = 30
-    )
-    var speechModel: String = "whisper-large-v3-turbo"
+    var customHeaders: String = """{"HTTP-Referer": "https://github.com/ahatem/QTranslate", "X-Title": "QTranslate", "X-OpenRouter-Title": "QTranslate"}"""
 
 ) : PluginSettings.Configurable() {
 
@@ -174,11 +134,8 @@ data class AISettings(
      * another machine on the same LAN is the same privacy story as one served from this one.
      */
     val isLocalEndpoint: Boolean
-        get() = isLocalHost(baseUrl)
-
-    private fun isLocalHost(url: String): Boolean =
-        runCatching {
-            val host = java.net.URI(url.trim()).host?.lowercase() ?: return@runCatching false
+        get() = runCatching {
+            val host = java.net.URI(baseUrl.trim()).host?.lowercase() ?: return@runCatching false
             host == "localhost" ||
                 host == "::1" ||
                 host.endsWith(".local") ||
@@ -195,25 +152,6 @@ data class AISettings(
      * from a key the provider rejected, and the two deserve different messages. A local endpoint
      * without a key is not a problem at all.
      */
-    /** Where speech is sent: [speechBaseUrl], or [baseUrl] when that is left blank. */
-    val effectiveSpeechBaseUrl: String
-        get() = speechBaseUrl.trim().ifBlank { baseUrl.trim() }
-
-    /** The key sent with speech: [speechApiKey], or [apiKey] when that is left blank. */
-    val effectiveSpeechApiKey: String
-        get() = speechApiKey.ifBlank { apiKey }
-
-    /** As [missingKeyError], for the speech endpoint. */
-    fun missingSpeechKeyError(): ServiceError? =
-        if (effectiveSpeechApiKey.isBlank() && !isLocalHost(effectiveSpeechBaseUrl)) {
-            ServiceError.ConfigurationError(
-                "No API key set for $effectiveSpeechBaseUrl. Add a Speech API Key in " +
-                    "Settings → Plugins → AI Plugin → Speech Recognition, or use a local Whisper server."
-            )
-        } else {
-            null
-        }
-
     fun missingKeyError(): ServiceError? =
         if (apiKey.isBlank() && !isLocalEndpoint) {
             ServiceError.ConfigurationError(

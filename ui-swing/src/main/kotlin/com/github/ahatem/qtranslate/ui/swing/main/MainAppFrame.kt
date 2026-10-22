@@ -128,7 +128,8 @@ class MainAppFrame(
                 strings = ConversationStrings(localizer),
                 languages = { mainStore.state.value.availableLanguages },
                 defaultTarget = { mainStore.state.value.targetLanguage },
-                isRtl = { localizer.isRtl }
+                isRtl = { localizer.isRtl },
+                onOpenSpeechSettings = { runOnUi { openSettingsDialog(page = SettingsPage.PLUGINS) } }
             )
         }
     }
@@ -1570,13 +1571,22 @@ class MainAppFrame(
     }
 
     /** Opens Settings with the correct orientation. Shared by the menu and the Ctrl+Comma binding. */
-    private fun openSettingsDialog(openToServices: Boolean = false) {
+    private enum class SettingsPage { DEFAULT, SERVICES, PLUGINS }
+
+    private fun openSettingsDialog(
+        openToServices: Boolean = false,
+        page: SettingsPage = if (openToServices) SettingsPage.SERVICES else SettingsPage.DEFAULT
+    ) {
         val dialog = createSettingsDialog()
         dialog.applyComponentOrientation(
             if (localizer.isRtl) ComponentOrientation.RIGHT_TO_LEFT
             else ComponentOrientation.LEFT_TO_RIGHT
         )
-        if (openToServices) dialog.showServicesPage()
+        when (page) {
+            SettingsPage.SERVICES -> dialog.showServicesPage()
+            SettingsPage.PLUGINS -> dialog.showPluginsPage()
+            SettingsPage.DEFAULT -> Unit
+        }
         dialog.isVisible = true
     }
 

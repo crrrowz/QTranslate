@@ -24,6 +24,7 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.http.content.ByteArrayContent
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.util.reflect.*
 import kotlinx.coroutines.Dispatchers
@@ -348,6 +349,33 @@ internal class KtorHttpClient(
             Err(ServiceError.TimeoutError("Request timed out: $url", e))
         } catch (e: Exception) {
             logger.error("POST multipart request failed for $url", e)
+            Err(ServiceError.NetworkError("Network error: ${e.message}", e))
+        }
+    }
+
+    override suspend fun postBytes(
+        url: String,
+        body: ByteArray,
+        contentType: String,
+        headers: Map<String, String>,
+        queryParams: Map<String, Any?>
+    ): Result<String, ServiceError> = withContext(Dispatchers.IO) {
+        try {
+            val response: HttpResponse = client.post(url) {
+                applyHostTimeout(url)
+                headers.filterKeys { !it.equals(HttpHeaders.ContentType, ignoreCase = true) }
+                    .forEach { (key, value) -> header(key, value) }
+                queryParams.forEach { (key, value) ->
+                    value?.let { parameter(key, it.toString()) }
+                }
+                setBody(ByteArrayContent(body, ContentType.parse(contentType)))
+            }
+            handleResponse(response, url)
+        } catch (e: HttpRequestTimeoutException) {
+            logger.error("POST bytes request timeout for $url", e)
+            Err(ServiceError.TimeoutError("Request timed out: $url", e))
+        } catch (e: Exception) {
+            logger.error("POST bytes request failed for $url", e)
             Err(ServiceError.NetworkError("Network error: ${e.message}", e))
         }
     }

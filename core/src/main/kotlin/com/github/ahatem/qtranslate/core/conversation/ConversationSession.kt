@@ -72,7 +72,9 @@ data class TranscriptSegment(
 /**
  * A recorded conversation and its transcript.
  *
- * @param spokenLanguage BCP-47 tag handed to the speech service, or "auto".
+ * @param spokenLanguage BCP-47 tag of what the user speaks into the microphone, or "auto".
+ * @param callLanguage   BCP-47 tag of what the people on the call speak, or "auto". Kept apart
+ *                       because the two often differ, and naming the language helps recognition.
  * @param keepAudio      Whether the recordings are kept once the session ends. Without them a
  *                       segment cannot be replayed or re-transcribed, but nothing of anyone's
  *                       voice stays on disk.
@@ -85,10 +87,15 @@ data class ConversationSession(
     val durationMillis: Long = 0,
     val status: SessionStatus = SessionStatus.RECORDING,
     val spokenLanguage: String = "auto",
+    val callLanguage: String = "auto",
     val keepAudio: Boolean = true,
     val streams: List<SessionStream> = emptyList(),
     val segments: List<TranscriptSegment> = emptyList()
 ) {
+    /** The language the speech service is told for [source]. */
+    fun languageOf(source: AudioSource): String =
+        if (source == AudioSource.MICROPHONE) spokenLanguage else callLanguage
+
     /** Segments in timeline order, which is the order they were spoken. */
     fun withSegment(segment: TranscriptSegment): ConversationSession {
         val others = segments.filterNot { it.id == segment.id }

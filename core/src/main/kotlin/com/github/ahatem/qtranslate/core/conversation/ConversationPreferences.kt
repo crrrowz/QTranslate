@@ -13,6 +13,7 @@ data class ConversationPreferences(
     val microphoneId: String? = null,
     val systemOutputId: String? = null,
     val spokenLanguage: String = "auto",
+    val callLanguage: String = "auto",
     val targetLanguage: String? = null,
     val keepAudio: Boolean = true,
     /** The privacy notice has been read and dismissed. */

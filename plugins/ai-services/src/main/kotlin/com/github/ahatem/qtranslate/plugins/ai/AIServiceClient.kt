@@ -2,18 +2,13 @@ package com.github.ahatem.qtranslate.plugins.ai
 
 import com.github.ahatem.qtranslate.api.ocr.ImageData
 import com.github.ahatem.qtranslate.api.plugin.HttpClient
-import com.github.ahatem.qtranslate.api.plugin.MultipartHttpClient
-import com.github.ahatem.qtranslate.api.plugin.MultipartPart
-import com.github.ahatem.qtranslate.api.speech.SpeechAudio
 import com.github.ahatem.qtranslate.api.plugin.PluginContext
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
 import com.github.ahatem.qtranslate.plugins.common.createJsonParser
 import com.github.ahatem.qtranslate.plugins.common.sendJson
 import com.github.michaelbull.result.Err
-import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.andThen
-import com.github.michaelbull.result.getError
 import com.github.michaelbull.result.map
 import com.github.michaelbull.result.toResultOr
 import kotlinx.serialization.json.Json
@@ -47,7 +42,6 @@ class AIServiceClient(
     private val settings: () -> AISettings
 ) {
     private val responseParser = createJsonParser<ChatCompletionResponse>(pluginContext)
-    private val transcriptionParser = createJsonParser<TranscriptionResponse>(pluginContext)
     private val headersJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /**
@@ -223,84 +217,6 @@ class AIServiceClient(
         }
     }
 
-    /**
-     * Sends [audio] to the speech endpoint's `/audio/transcriptions` and returns the text.
-     *
-     * Speech has its own endpoint, key and model (see [AISettings.speechBaseUrl]) because the
-     * default chat gateway does not transcribe, and the services that do are rarely the ones
-     * someone chats through.
-     *
-     * @param language ISO-639-1 code of the spoken language, or null to let the model detect it.
-     * @param prompt   Preceding conversation text, which keeps names and terms consistent.
-     */
-    suspend fun transcribe(
-        audio: SpeechAudio,
-        language: String?,
-        prompt: String?
-    ): Result<TranscriptionResponse, ServiceError> {
-        // Word timings let the host replay a single word, but not every compatible server offers
-        // the verbose format (gpt-4o-transcribe and some local servers reject it). One retry in
-        // the plain format keeps those working, just without timings.
-        val verbose = transcribe(audio, language, prompt, verbose = true)
-        val error = verbose.getError() ?: return verbose
-        if (error is ServiceError.AuthenticationError || error is ServiceError.NetworkError ||
-            error is ServiceError.RateLimitError || error is ServiceError.ConfigurationError
-        ) return verbose
-        return transcribe(audio, language, prompt, verbose = false)
-    }
-
-    private suspend fun transcribe(
-        audio: SpeechAudio,
-        language: String?,
-        prompt: String?,
-        verbose: Boolean
-    ): Result<TranscriptionResponse, ServiceError> {
-        val current = settings()
-        current.missingSpeechKeyError()?.let { return Err(it) }
-
-        val uploads = httpClient as? MultipartHttpClient
-            ?: return Err(ServiceError.ConfigurationError("This version of QTranslate cannot upload audio. Update the app."))
-
-        val endpoint = "${current.effectiveSpeechBaseUrl.trimEnd('/')}/audio/transcriptions"
-        pluginContext.logger.debug(
-            "AIServiceClient (speech) → $endpoint [model=${current.speechModel}, ${audio.durationMillis} ms]"
-        )
-
-        val parts = buildList {
-            add(MultipartPart.File(
-                name        = "file",
-                fileName    = "speech.${audio.encoding.extension}",
-                contentType = audio.encoding.mimeType,
-                bytes       = audio.bytes
-            ))
-            add(MultipartPart.Text("model", current.speechModel.ifBlank { AISettings().speechModel }))
-            if (verbose) {
-                add(MultipartPart.Text("response_format", "verbose_json"))
-                add(MultipartPart.Text("timestamp_granularities[]", "word"))
-            } else {
-                add(MultipartPart.Text("response_format", "json"))
-            }
-            add(MultipartPart.Text("temperature", "0"))
-            language?.let { add(MultipartPart.Text("language", it)) }
-            // Whisper reads only the last 224 tokens of a prompt; a tail of the conversation is
-            // what matters, and sending more only costs upload time.
-            prompt?.takeIf { it.isNotBlank() }?.let { add(MultipartPart.Text("prompt", it.takeLast(MAX_PROMPT_CHARS))) }
-        }
-
-        val headers = buildMap {
-            if (current.effectiveSpeechApiKey.isNotBlank()) {
-                put("Authorization", "Bearer ${current.effectiveSpeechApiKey}")
-            }
-        }
-
-        return uploads.postMultipart(url = endpoint, parts = parts, headers = headers)
-            .andThen { body -> transcriptionParser.parse(body) }
-            .andThen { response ->
-                response.error?.let { return@andThen Err(mapError(it)) }
-                Ok(response.copy(text = response.text.orEmpty().trim()))
-            }
-    }
-
     private fun mapError(error: ChatError): ServiceError {
         val msg = error.message
         return when {
@@ -327,6 +243,5 @@ class AIServiceClient(
         val AUTH_CODES       = setOf("invalid_api_key", "invalid_request_error", "401", "403")
         val RATE_LIMIT_CODES = setOf("rate_limit_exceeded", "429")
         val UNAVAILABLE_CODES = setOf("service_unavailable", "server_error", "503", "529")
-        const val MAX_PROMPT_CHARS = 600
     }
 }
