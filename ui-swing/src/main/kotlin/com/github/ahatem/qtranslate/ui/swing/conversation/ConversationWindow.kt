@@ -5,6 +5,7 @@ import com.github.ahatem.qtranslate.core.conversation.AudioDevice
 import com.github.ahatem.qtranslate.core.conversation.AudioSource
 import com.github.ahatem.qtranslate.core.conversation.ConversationFeature
 import com.github.ahatem.qtranslate.core.conversation.ConversationSession
+import com.github.ahatem.qtranslate.core.conversation.LiveRecognitionStatus
 import com.github.ahatem.qtranslate.core.conversation.RecorderNotice
 import com.github.ahatem.qtranslate.core.conversation.RecorderPhase
 import com.github.ahatem.qtranslate.core.conversation.RecorderState
@@ -479,6 +480,7 @@ class ConversationWindow(
 
         if (active || state.phase == RecorderPhase.STOPPING) transcript.render(state.session)
         renderLive(state)
+        renderSpeechStatus()
 
         if (lastPhase != RecorderPhase.IDLE && state.phase == RecorderPhase.IDLE) {
             viewed = state.session
@@ -804,14 +806,27 @@ class ConversationWindow(
     private fun renderSpeechStatus() {
         val name = feature.speechServiceName
         val live = feature.liveServiceName
-        speechLabel.text = when {
+        val baseText = when {
             name != null && live != null -> strings.speechHybrid(live, name)
             name != null -> strings.speechService(name)
             live != null -> strings.speechLiveOnly(live)
             else -> strings.speechNone
         }
-        speechLabel.foreground = if (name != null || live != null) UIManager.getColor("Label.disabledForeground")
-        else UIManager.getColor("Actions.Red") ?: Color.RED
+        val statusText = if (recorder.state.value.isActive && live != null) {
+            val status = when (recorder.state.value.liveStatus) {
+                LiveRecognitionStatus.CONNECTED -> strings.liveStatusConnected
+                LiveRecognitionStatus.RECONNECTING -> strings.liveStatusReconnecting
+                LiveRecognitionStatus.OFF -> strings.liveStatusOff
+            }
+            " · Live: $status"
+        } else ""
+        speechLabel.text = baseText + statusText
+        speechLabel.foreground = when {
+            name == null && live == null -> UIManager.getColor("Actions.Red") ?: Color.RED
+            recorder.state.value.isActive && recorder.state.value.liveStatus == LiveRecognitionStatus.RECONNECTING ->
+                UIManager.getColor("Actions.Yellow") ?: Color(200, 150, 0)
+            else -> UIManager.getColor("Label.disabledForeground")
+        }
     }
 
     private fun renderLive(state: RecorderState) {

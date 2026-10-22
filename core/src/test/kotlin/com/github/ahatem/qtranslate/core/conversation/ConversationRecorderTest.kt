@@ -386,4 +386,55 @@ class ConversationRecorderTest {
 
         recorder.stop()
     }
+
+    @Test
+    fun `reconnect mid-stream replays gap audio to the new live session without losing speech`() = runBlocking {
+        val mic = ScriptedDevice()
+        val sessions = java.util.Collections.synchronizedList(mutableListOf<ScriptedLive>())
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { _ ->
+                val live = ScriptedLive()
+                sessions.add(live)
+                Ok(live)
+            },
+            recognize = { _ ->
+                Ok(SpeechRecognitionResponse(text = "ok"))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        waitUntil { sessions.isNotEmpty() }
+        val session1 = sessions.first()
+        awaitLive(mic, session1)
+        assertEquals(LiveRecognitionStatus.CONNECTED, recorder.state.value.liveStatus)
+
+        // Push some audio to session1
+        val firstAudio = tone(500)
+        mic.push(firstAudio)
+        waitUntil { session1.received.get() >= firstAudio.size }
+
+        // Session 1 fails mid-stream
+        session1.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Failed(
+            com.github.ahatem.qtranslate.api.plugin.ServiceError.NetworkError("connection lost")
+        ))
+        waitUntil { recorder.state.value.liveStatus == LiveRecognitionStatus.RECONNECTING }
+
+        // Audio spoken while disconnected (the gap)
+        val gapAudio = tone(1_000)
+        mic.push(gapAudio)
+
+        // Wait for reconnect to succeed (creates session2)
+        waitUntil { sessions.size >= 2 }
+        val session2 = sessions[1]
+        waitUntil { recorder.state.value.liveStatus == LiveRecognitionStatus.CONNECTED }
+
+        // Verify that the gap audio was replayed to session2
+        waitUntil { session2.received.get() >= gapAudio.size }
+
+        recorder.stop()
+        assertEquals(LiveRecognitionStatus.OFF, recorder.state.value.liveStatus)
+    }
 }

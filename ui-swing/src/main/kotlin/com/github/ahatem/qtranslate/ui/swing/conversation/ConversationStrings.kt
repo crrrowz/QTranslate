@@ -72,4 +72,7 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     fun noticeLiveFailed(source: String, message: String) = localizer.getString("conversation.notice_live_failed", source, message)
     fun retryFailed(count: Int) = localizer.getString("conversation.retry_failed", count)
     fun exported(path: String) = localizer.getString("conversation.exported", path)
+    val liveStatusConnected get() = localizer.getString("conversation.live_status_connected")
+    val liveStatusReconnecting get() = localizer.getString("conversation.live_status_reconnecting")
+    val liveStatusOff get() = localizer.getString("conversation.live_status_off")
 }

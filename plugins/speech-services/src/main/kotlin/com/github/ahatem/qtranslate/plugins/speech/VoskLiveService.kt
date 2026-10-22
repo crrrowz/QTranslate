@@ -189,6 +189,12 @@ internal class VoskSession private constructor() : LiveSpeechSession {
             webSocket.request(1)
         }
 
+        override fun onPing(webSocket: WebSocket, message: ByteBuffer): CompletionStage<*>? {
+            webSocket.request(1)
+            enqueue { it.sendPong(message) }
+            return null
+        }
+
         override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*>? {
             buffer.append(data)
             if (last) {

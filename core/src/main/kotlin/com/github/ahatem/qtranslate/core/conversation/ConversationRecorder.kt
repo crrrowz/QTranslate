@@ -54,6 +54,12 @@ sealed interface RecorderNotice {
 /** What the live recognizer currently thinks is being said, not yet settled into a segment. */
 data class LiveLine(val startMillis: Long, val text: String)
 
+enum class LiveRecognitionStatus {
+    OFF,
+    CONNECTED,
+    RECONNECTING
+}
+
 data class RecorderState(
     val phase: RecorderPhase = RecorderPhase.IDLE,
     /** The session being recorded, or the last one recorded once stopped. */
@@ -62,7 +68,8 @@ data class RecorderState(
     val streams: Map<AudioSource, StreamStatus> = AudioSource.entries.associateWith { StreamStatus() },
     val notice: RecorderNotice? = null,
     /** Words being spoken right now, per source, while a live recognizer is in use. */
-    val live: Map<AudioSource, LiveLine> = emptyMap()
+    val live: Map<AudioSource, LiveLine> = emptyMap(),
+    val liveStatus: LiveRecognitionStatus = LiveRecognitionStatus.OFF
 ) {
     val isActive: Boolean get() = phase == RecorderPhase.RECORDING || phase == RecorderPhase.PAUSED
 }
@@ -216,7 +223,7 @@ class ConversationRecorder(
             withContext(Dispatchers.IO) { repository.deleteAudio(session.id) }
         }
         streams = emptyList()
-        _state.update { it.copy(phase = RecorderPhase.IDLE, streams = AudioSource.entries.associateWith { StreamStatus() }, live = emptyMap()) }
+        _state.update { it.copy(phase = RecorderPhase.IDLE, streams = AudioSource.entries.associateWith { StreamStatus() }, live = emptyMap(), liveStatus = LiveRecognitionStatus.OFF) }
         logger.info("Conversation recording stopped after ${formatTimestamp(duration)}")
     }
 
@@ -311,6 +318,15 @@ class ConversationRecorder(
     private fun setStream(source: AudioSource, transform: (StreamStatus) -> StreamStatus) =
         _state.update { state -> state.copy(streams = state.streams + (source to transform(state.streams.getValue(source)))) }
 
+    private fun updateLiveStatus() {
+        val overall = when {
+            streams.any { it.liveStatus == LiveRecognitionStatus.RECONNECTING } -> LiveRecognitionStatus.RECONNECTING
+            streams.any { it.liveStatus == LiveRecognitionStatus.CONNECTED } -> LiveRecognitionStatus.CONNECTED
+            else -> LiveRecognitionStatus.OFF
+        }
+        _state.update { it.copy(liveStatus = overall) }
+    }
+
     private inner class StreamRecorder(
         val source: AudioSource,
         val device: AudioDevice,
@@ -335,6 +351,13 @@ class ConversationRecorder(
         @Volatile
         private var liveUnavailable = false
         private var liveFailures = 0
+        var liveStatus = LiveRecognitionStatus.OFF
+            private set
+        private val liveLock = Any()
+        private val rollingBuffer = java.util.ArrayDeque<ByteArray>()
+        private var rollingBufferBytes = 0
+        @Volatile
+        private var samplesSentToLive = 0L
         /** Stream sample at which the current live session started; its event times count from here. */
         private var liveStartSample = 0L
         /** Stream sample where the last settled segment ended. */
@@ -439,17 +462,27 @@ class ConversationRecorder(
                         updateSession { it.copy(streams = it.streams + SessionStream(source, device.name, offset)) }
                     }
                     writer?.write(chunk)
-                    val session = live
-                    if (session != null) {
-                        session.sendAudio(chunk)
-                        // The live recognizer decides where lines end; the voice detector still
-                        // knows where speech began, which a late partial cannot tell.
-                        val completed = segmenter.accept(chunk)
-                        if (voicedStartSample == null) {
-                            voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
+                    val chunkCopy = chunk.copyOf()
+                    synchronized(liveLock) {
+                        rollingBuffer.addLast(chunkCopy)
+                        rollingBufferBytes += chunkCopy.size
+                        while (rollingBufferBytes > ROLLING_BUFFER_MAX_BYTES && rollingBuffer.isNotEmpty()) {
+                            rollingBufferBytes -= rollingBuffer.removeFirst().size
                         }
-                    } else {
-                        segmenter.accept(chunk).forEach(::announce)
+
+                        val session = live
+                        if (session != null) {
+                            session.sendAudio(chunk)
+                            samplesSentToLive = samplesWritten
+                            // The live recognizer decides where lines end; the voice detector still
+                            // knows where speech began, which a late partial cannot tell.
+                            val completed = segmenter.accept(chunk)
+                            if (voicedStartSample == null) {
+                                voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
+                            }
+                        } else if (liveUnavailable) {
+                            segmenter.accept(chunk).forEach(::announce)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -489,9 +522,36 @@ class ConversationRecorder(
             }
         }
 
+        private fun extractLastBytes(bytesNeeded: Int): List<ByteArray> {
+            if (bytesNeeded <= 0 || rollingBuffer.isEmpty()) return emptyList()
+            val list = rollingBuffer.toList()
+            var accumulated = 0
+            var startIndex = list.size
+            for (i in list.indices.reversed()) {
+                accumulated += list[i].size
+                startIndex = i
+                if (accumulated >= bytesNeeded) break
+            }
+            val result = mutableListOf<ByteArray>()
+            for (i in startIndex until list.size) {
+                val chunk = list[i]
+                if (i == startIndex && accumulated > bytesNeeded) {
+                    val skip = accumulated - bytesNeeded
+                    if (skip < chunk.size) {
+                        result.add(chunk.copyOfRange(skip, chunk.size))
+                    }
+                } else {
+                    result.add(chunk)
+                }
+            }
+            return result
+        }
+
         /** Opens a live session in the background; audio goes through the segmenter until it is ready. */
         private fun connectLive() {
             if (liveUnavailable || live != null || liveConnecting?.isActive == true) return
+            liveStatus = LiveRecognitionStatus.RECONNECTING
+            updateLiveStatus()
             liveConnecting = scope.launch {
                 val configured = _state.value.session?.languageOf(source) ?: "auto"
                 val languageTag = if (configured == "auto") (detectedLanguage ?: "auto") else configured
@@ -499,6 +559,8 @@ class ConversationRecorder(
                 val result = openLive(language)
                 if (result == null) {
                     liveUnavailable = true
+                    liveStatus = LiveRecognitionStatus.OFF
+                    updateLiveStatus()
                     return@launch
                 }
                 result.fold(
@@ -510,16 +572,38 @@ class ConversationRecorder(
                         // What the segmenter was in the middle of is finished the old way.
                         segmenter.flush()?.let(::announce)
                         liveFailures = 0
+                        liveStatus = LiveRecognitionStatus.CONNECTED
+                        updateLiveStatus()
                         liveStartSample = samplesWritten
                         lastFinalSample = samplesWritten
                         utteranceStartSample = null
-                        live = session
+
+                        synchronized(liveLock) {
+                            val gapSamples = (samplesWritten - samplesSentToLive).coerceAtLeast(0)
+                            if (gapSamples > 0) {
+                                val gapBytes = (gapSamples * 2).coerceAtMost(rollingBufferBytes.toLong()).toInt()
+                                val gapChunks = extractLastBytes(gapBytes)
+                                for (gapChunk in gapChunks) {
+                                    session.sendAudio(gapChunk)
+                                }
+                                samplesSentToLive = samplesWritten
+                            }
+                            live = session
+                        }
                         liveEvents = scope.launch { session.events.collect { onLiveEvent(session, it) } }
                         logger.info("Live recognition active for $source")
                     },
                     failure = { error ->
                         if (error is ServiceError.ConfigurationError) {
                             liveUnavailable = true
+                            liveStatus = LiveRecognitionStatus.OFF
+                            updateLiveStatus()
+                            synchronized(liveLock) {
+                                while (rollingBuffer.isNotEmpty()) {
+                                    segmenter.accept(rollingBuffer.removeFirst()).forEach(::announce)
+                                }
+                                rollingBufferBytes = 0
+                            }
                         } else {
                             liveFailed(error.message)
                         }
@@ -530,8 +614,11 @@ class ConversationRecorder(
 
         /** Settles and closes the live session, waiting for its last words. */
         private suspend fun closeLive() {
-            val session = live ?: return
-            live = null
+            val session = synchronized(liveLock) {
+                val s = live
+                live = null
+                s
+            } ?: return
             withTimeoutOrNull(LIVE_FINISH_MILLIS) {
                 session.finish()
                 liveEvents?.join()
@@ -550,8 +637,13 @@ class ConversationRecorder(
                 }
                 is LiveSpeechEvent.Final -> settle(event)
                 is LiveSpeechEvent.Failed -> {
-                    if (live === session) {
-                        live = null
+                    val s = synchronized(liveLock) {
+                        if (live === session) {
+                            live = null
+                            session
+                        } else null
+                    }
+                    if (s != null) {
                         clearLiveLine()
                         liveFailed(event.error.message)
                     }
@@ -606,7 +698,22 @@ class ConversationRecorder(
         private fun liveFailed(message: String) {
             logger.warn("Live recognition for $source failed: $message")
             _state.update { it.copy(notice = RecorderNotice.LiveFailed(source, message)) }
-            if (stopping || ++liveFailures > MAX_LIVE_RECONNECTS) return
+            if (stopping) return
+            liveFailures++
+            if (liveFailures > MAX_LIVE_RECONNECTS) {
+                liveUnavailable = true
+                liveStatus = LiveRecognitionStatus.OFF
+                updateLiveStatus()
+                synchronized(liveLock) {
+                    while (rollingBuffer.isNotEmpty()) {
+                        segmenter.accept(rollingBuffer.removeFirst()).forEach(::announce)
+                    }
+                    rollingBufferBytes = 0
+                }
+                return
+            }
+            liveStatus = LiveRecognitionStatus.RECONNECTING
+            updateLiveStatus()
             // The same back-off as the Vosk extension: quick at first, never more than 5 s apart.
             val delayMillis = minOf((200 * Math.pow(1.5, (liveFailures - 1).toDouble())).toLong(), 5_000L)
             scope.launch {
@@ -655,5 +762,7 @@ class ConversationRecorder(
         const val LIVE_FINISH_MILLIS = 4_000L
         /** How far before the first partial a live segment's audio starts: words begin before they are recognised. */
         const val LEAD_SAMPLES = PcmStream.SAMPLE_RATE * 6 / 10
+        const val ROLLING_BUFFER_SECONDS = 10
+        const val ROLLING_BUFFER_MAX_BYTES = PcmStream.SAMPLE_RATE * 2 * ROLLING_BUFFER_SECONDS
     }
 }
