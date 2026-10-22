@@ -61,10 +61,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         val openAiRealtime = OpenAiRealtimeService { settings }
         services = listOf(
             SpeechRecognitionService(SpeechClient(context, http) { settings }) { settings },
-            VoskLiveService({ settings }, builtin, deepgramLive, openAiRealtime),
-            builtin,
-            deepgramLive,
-            openAiRealtime
+            VoskLiveService({ settings }, builtin, deepgramLive, openAiRealtime)
         )
         return Ok(Unit)
     }
