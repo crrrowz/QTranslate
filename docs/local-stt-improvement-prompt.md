@@ -11,11 +11,31 @@ You are improving **live (local) speech-to-text** in QTranslate's Conversation S
 repository rules in `AGENTS.md` (small steps; each ends buildable, tested and committed; graft/rg before
 reading; no unrelated files).
 
+## Before you start (mandatory)
+
+The branch moves: other agents have already built parts of this. **Do not redo or overwrite their work.**
+
+1. Run `git log --oneline -15` and `git status`. Read the recent `feat(speech)` commits, in particular:
+   - `0cef446` — built-in offline Vosk engine (`VoskBuiltinService.kt`) and model manager
+     (`VoskModelManager.kt`), settings migration, Windows build guide (`docs/windows-build-and-run-guide.md`).
+   - `dd3cfce` — provider capabilities, settings visibility (`SpeechProvider.kt`, `SpeechSettings.kt`,
+     `DynamicPluginSettingsDialog.kt`), cloud live engines (`DeepgramLiveService.kt`,
+     `OpenAiRealtimeService.kt`).
+2. **Uncommitted changes** in `ConversationRecorder.kt` / `ConversationRecorderTest.kt` may belong to
+   another agent working right now (at the time of writing: switching the live model to the language the
+   accurate provider detects, `updateDetectedLanguage`). If such changes exist and you did not make them,
+   stop and ask the user whether to build on them, wait, or leave them — never discard or reformat them.
+3. For each step below, **first check whether it is already done or partly done** (code, tests, docs),
+   and only implement what is missing. Say so in your report ("step 3: already done in dd3cfce; added X").
+4. Read `docs/handy-analysis.md` and section 5.1 of the plan: the Handy project (MIT) has ready patterns
+   for several steps (noted per step below). You may port code from it with its licence notice.
+
 ## Context you need
 
-- Live recognition: role `LIVE_SPEECH_RECOGNIZER` (`api/.../speech/LiveSpeechRecognizer.kt`); Vosk
-  client `plugins/speech-services/.../speech/VoskLiveService.kt` (JDK `java.net.http.WebSocket`, sends
-  chained in `enqueue`). Accurate recognition: `SpeechClient.kt`, providers in `SpeechProvider.kt`,
+- Live recognition: role `LIVE_SPEECH_RECOGNIZER` (`api/.../speech/LiveSpeechRecognizer.kt`). Engines
+  (check the current set): Vosk server client `VoskLiveService.kt` (JDK `java.net.http.WebSocket`, sends
+  chained in `enqueue`), built-in Vosk `VoskBuiltinService.kt`, cloud `DeepgramLiveService.kt` and
+  `OpenAiRealtimeService.kt`. Steps that concern "the live engine" apply to all of them unless stated. Accurate recognition: `SpeechClient.kt`, providers in `SpeechProvider.kt`,
   settings in `SpeechSettings.kt` (groups "live" / "accurate", `LIVE_ENGINE_OPTIONS`,
   `liveAutoLanguage`), persistence in `SpeechPlugin.kt`.
 - Recorder: `core/.../conversation/ConversationRecorder.kt` — `StreamRecorder` per source: capture loop,
@@ -53,7 +73,9 @@ reading; no unrelated files).
    mapped to `KaldiRecognizer.SetEndpointerDelays` when the installed vosk version has it (log and skip
    otherwise). Rebuild the image and restart `vosk-stt` with `--preload ar,en`.
    *Accept:* two parallel streams for 20 minutes (use the integration test in a loop or a script) with no
-   `keepalive ping timeout` in the server log.
+   `keepalive ping timeout` in the server log. Also confirm the **built-in** engine never runs recognition
+   on a coroutine dispatcher thread shared with I/O or the UI (dedicated thread per session); if it does,
+   fix it the same way. *Handy reference:* engine work isolated from the app (`engine_supervisor/`).
 2. **Reconnect without losing speech.** In `VoskSession`/`StreamRecorder`: answer pings explicitly if the
    JDK client does not; keep a rolling buffer of the last ~10 s of PCM per stream; on reconnect, replay
    the gap's audio to the new session before live audio; show a live status (connected / reconnecting /
@@ -64,6 +86,8 @@ reading; no unrelated files).
    Auto-Detect" (languages come from the window only), migrate saved settings (Vosk + provider → Hybrid,
    Vosk + None → Local, Off → Cloud). Update `VoskLiveService`/`SpeechClient` accordingly and the wiki.
    *Accept:* settings tests for migration and per-mode behaviour; the provider fields are hidden in Local.
+   *Note:* `dd3cfce` added capabilities and settings visibility, and `0cef446` added a migration test —
+   extend those rather than adding a parallel mechanism.
 4. **Device check.** In the window: a "Test devices" action with 3-second level meters per stream;
    warnings when the mic device name matches Stream/Mix/Monitor/Chat/Loopback, and when "them" is a
    general output while an output named "*Chat*" exists; prefer real microphones and Chat outputs by
@@ -72,14 +96,16 @@ reading; no unrelated files).
    over a few seconds, and/or near-simultaneous finals with high text similarity); show a notice with the
    fix; drop the duplicate line from "them". *Accept:* recorder test with the same audio in both streams
    yields one line plus the notice.
-6. **Per-stream level normalisation.** Slow AGC + limiter per stream before the segmenter and the live
+6. **Per-stream level normalisation.** *Handy reference:* `audio_toolkit/vad/smoothed.rs`
+   (prefill / onset / hangover) for the VAD side. Slow AGC + limiter per stream before the segmenter and the live
    recogniser; per-stream noise-floor calibration in `SpeechSegmenter`. *Accept:* tests with a quiet
    stream (−30 dBFS speech) produce segments; level meter reflects normalised level.
 7. **Turns.** Separate engine segments from displayed turns: merge finals of the same source when the
    gap ≤ merge gap and the other source did not speak; close on speaker change, gap > merge gap, length >
    45 s, or language change. Store turns (or turn ids on segments) and render one paragraph per turn.
    *Accept:* pure tests for every rule, including "resumes after 5–6 s → new turn" and "2 s thinking pause
-   → same turn"; existing transcript features (hover, selection, replay) still work.
+   → same turn"; existing transcript features (hover, selection, replay) still work. Use a VAD hangover
+   (Handy's `SmoothedVad`) so short pauses do not end segments in the first place.
 8. **Refine per turn.** When a turn closes, send its whole audio to the accurate provider (fall back to
    per-segment for turns > 45 s); replace the drafts of that turn. *Accept:* recorder test shows one
    refinement request per closed turn and the turn text replaced.
@@ -90,6 +116,12 @@ reading; no unrelated files).
    two languages for the same speech. *Accept:* tests with scripted sessions for switching, ties and
    hysteresis; manual check with the real server (Arabic sentence then English sentence → each in its
    own language, no stacked duplicates). Mind the doubled server load (step 1 first).
+   *Build on, don't replace:* any existing "switch the live model to the accurate provider's detected
+   language" logic (see "Before you start"); use it as one signal next to confidence voting.
+   *Handy references:* the audio language-ID model **VoxLingua107 ECAPA** (apache-2.0, in Handy's
+   catalogue) as a tie-breaker, and confidence-gated text language ID (`audio_toolkit/lang_id.rs`:
+   accept only reliable detections ≥ 0.9 restricted to the candidate languages; otherwise keep the current
+   language).
 10. **Fixtures and metrics.** Add short fixtures (English, Iraqi Arabic, alternating, mixed, quiet call,
     pauses) under test resources with reference text, and an opt-in test that reports speech capture
     rate, wrong-language lines and live latency against the real server.
