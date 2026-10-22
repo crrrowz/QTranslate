@@ -8,6 +8,8 @@ import com.github.michaelbull.result.fold
 import com.github.michaelbull.result.getError
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.awt.GraphicsEnvironment
+import java.awt.Window
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -15,6 +17,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import javax.swing.SwingUtilities
 
 /**
  * Metadata for a downloadable Vosk speech recognition model.
@@ -158,18 +161,209 @@ class VoskModelManager(
         return "Installed Vosk models (${installed.size}):\n" + lines.joinToString("\n")
     }
 
-    /** Message for the settings "Download Model" action. */
-    suspend fun downloadAction(modelName: String): String {
+    /**
+     * Resumable downloader supporting HTTP Range headers, pausing, resuming, cancellation,
+     * transfer speed computation, and estimated time remaining.
+     */
+    fun downloadModelResumable(
+        model: VoskModel,
+        controller: VoskDownloadController,
+        onProgress: (downloaded: Long, total: Long, speed: Long, etaSeconds: Long) -> Unit,
+        onExtracting: () -> Unit
+    ): Result<File, ServiceError> {
+        val targetDir = File(modelsDirectory, model.name)
+        if (isInstalled(model.name)) return Ok(targetDir)
+
+        val partFile = File(modelsDirectory, "${model.name}.zip.part")
+        val finalZip = File(modelsDirectory, "${model.name}.zip")
+
+        return try {
+            var downloaded = if (partFile.exists()) partFile.length() else 0L
+            var totalLength = model.sizeBytes
+
+            while (!controller.isCancelled.get() && (totalLength <= 0 || downloaded < totalLength)) {
+                if (controller.isPaused.get()) {
+                    Thread.sleep(200)
+                    continue
+                }
+
+                var url = URI(model.url).toURL()
+                var conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 15_000
+                conn.readTimeout = 30_000
+                conn.instanceFollowRedirects = true
+                conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
+
+                downloaded = if (partFile.exists()) partFile.length() else 0L
+                if (downloaded > 0) {
+                    conn.setRequestProperty("Range", "bytes=$downloaded-")
+                }
+
+                var code = conn.responseCode
+                var redirects = 0
+                while (code in listOf(301, 302, 303, 307, 308) && redirects < 5) {
+                    val location = conn.getHeaderField("Location") ?: break
+                    conn.disconnect()
+                    url = URI(location).toURL()
+                    conn = url.openConnection() as HttpURLConnection
+                    conn.connectTimeout = 15_000
+                    conn.readTimeout = 30_000
+                    conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
+                    if (downloaded > 0) {
+                        conn.setRequestProperty("Range", "bytes=$downloaded-")
+                    }
+                    code = conn.responseCode
+                    redirects++
+                }
+
+                val append = (code == HttpURLConnection.HTTP_PARTIAL)
+                if (code !in 200..299 && code != HttpURLConnection.HTTP_PARTIAL) {
+                    return Err(ServiceError.NetworkError("HTTP $code from server while downloading ${model.name}"))
+                }
+
+                val serverContentLength = conn.contentLengthLong
+                if (append) {
+                    if (serverContentLength > 0) totalLength = downloaded + serverContentLength
+                } else {
+                    if (serverContentLength > 0) totalLength = serverContentLength
+                    downloaded = 0L
+                }
+
+                partFile.parentFile?.mkdirs()
+                val fos = FileOutputStream(partFile, append)
+
+                conn.inputStream.use { input ->
+                    fos.use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var bytesRead: Int
+                        var speedAccumulator = 0L
+                        var lastSpeedTime = System.currentTimeMillis()
+                        var currentSpeed = 0L
+
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            if (controller.isCancelled.get()) {
+                                partFile.delete()
+                                return Err(ServiceError.UnknownError("Download cancelled by user."))
+                            }
+                            if (controller.isPaused.get()) {
+                                break
+                            }
+
+                            output.write(buffer, 0, bytesRead)
+                            downloaded += bytesRead
+                            speedAccumulator += bytesRead
+
+                            val now = System.currentTimeMillis()
+                            val elapsed = now - lastSpeedTime
+                            if (elapsed >= 400) {
+                                currentSpeed = (speedAccumulator * 1000) / elapsed
+                                speedAccumulator = 0L
+                                lastSpeedTime = now
+                                val remaining = if (totalLength > downloaded) totalLength - downloaded else 0L
+                                val eta = if (currentSpeed > 0) remaining / currentSpeed else -1L
+                                onProgress(downloaded, totalLength, currentSpeed, eta)
+                            }
+                        }
+                    }
+                }
+
+                if (controller.isCancelled.get()) {
+                    partFile.delete()
+                    return Err(ServiceError.UnknownError("Download cancelled by user."))
+                }
+            }
+
+            if (controller.isCancelled.get()) {
+                partFile.delete()
+                return Err(ServiceError.UnknownError("Download cancelled by user."))
+            }
+
+            onExtracting()
+            if (finalZip.exists()) finalZip.delete()
+            if (!partFile.renameTo(finalZip)) {
+                partFile.copyTo(finalZip, overwrite = true)
+                partFile.delete()
+            }
+
+            extractZip(finalZip, modelsDirectory)
+            finalZip.delete()
+
+            if (!targetDir.isDirectory) {
+                val found = modelsDirectory.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith(model.name) }
+                if (found != null && found != targetDir) {
+                    found.renameTo(targetDir)
+                }
+            }
+
+            if (!isInstalled(model.name)) {
+                return Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
+            }
+
+            Ok(targetDir)
+        } catch (e: Exception) {
+            if (controller.isCancelled.get()) {
+                partFile.delete()
+                return Err(ServiceError.UnknownError("Download cancelled by user."))
+            }
+            Err(ServiceError.NetworkError("Download failed: ${e.message}", e))
+        }
+    }
+
+    /**
+     * Downloads [modelName] with a real-time progress dialog on Swing, supporting pause, resume,
+     * and ETA, or silently if in a headless environment.
+     */
+    fun downloadWithProgressDialog(modelName: String): String {
         val model = MODELS_BY_NAME[modelName]
             ?: return "Unknown model '$modelName'. Please choose a model from the list."
+
         if (isInstalled(model.name)) {
-            return "Model '${model.label}' is already downloaded and ready to use."
+            return "Model '${model.label}' is already installed and ready to use."
         }
-        return downloadModel(model).fold(
-            success = { "Model '${model.label}' (~${model.sizeMb} MB) downloaded and installed successfully." },
-            failure = { error -> "Download failed: ${error.message}" }
+
+        val controller = VoskDownloadController()
+        var dialog: VoskDownloadDialog? = null
+
+        if (!GraphicsEnvironment.isHeadless()) {
+            try {
+                val parentWindow = Window.getWindows().firstOrNull { it.isFocused }
+                    ?: Window.getWindows().firstOrNull { it.isVisible }
+
+                SwingUtilities.invokeAndWait {
+                    dialog = VoskDownloadDialog(parentWindow, model, controller).apply {
+                        isVisible = true
+                    }
+                }
+            } catch (_: Exception) {
+                // Ignore if GUI initialization fails
+            }
+        }
+
+        val result = downloadModelResumable(
+            model = model,
+            controller = controller,
+            onProgress = { downloaded, total, speed, eta ->
+                dialog?.updateProgress(downloaded, total, speed, eta)
+            },
+            onExtracting = {
+                dialog?.notifyExtracting()
+            }
+        )
+
+        return result.fold(
+            success = {
+                dialog?.notifyCompleted()
+                "Model '${model.label}' (~${model.sizeMb} MB) downloaded and installed successfully."
+            },
+            failure = { error ->
+                dialog?.notifyError(error.message)
+                "Download error: ${error.message}"
+            }
         )
     }
+
+    /** Message for the settings "Download Model" action (called synchronously via reflection). */
+    fun downloadAction(modelName: String): String = downloadWithProgressDialog(modelName)
 
     companion object {
         val AVAILABLE_MODELS = listOf(

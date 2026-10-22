@@ -34,9 +34,9 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         modelManager = VoskModelManager({ context.getPluginDataDirectory() })
         builtinService = VoskBuiltinService(modelManager, { settings })
         val rawProvider = context.settings.getString(KEY_PROVIDER) ?: SpeechProvider.GROQ.label
-        val rawLiveUrl = context.settings.getString(KEY_LIVE_URL).orEmpty()
         val rawLiveEngine = context.settings.getString(KEY_LIVE_ENGINE)
-            ?: if (rawLiveUrl.isNullOrBlank()) LIVE_OFF else LIVE_VOSK_SERVER
+            ?.let { if (it == "Vosk (local server)") LIVE_VOSK_BUILTIN else it }
+            ?: LIVE_OFF
         val rawMode = context.settings.getString(KEY_MODE)
         val resolvedMode = migrateSpeechMode(rawMode, rawLiveEngine, rawProvider)
 
@@ -46,7 +46,6 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             baseUrl = context.settings.getString(KEY_BASE_URL).orEmpty(),
             apiKey = context.secrets.get(KEY_API_KEY).orEmpty(),
             model = context.settings.getString(KEY_MODEL).orEmpty(),
-            liveServerUrl = rawLiveUrl,
             liveEngine = if (resolvedMode == MODE_LOCAL && rawLiveEngine == LIVE_OFF) LIVE_VOSK_BUILTIN else rawLiveEngine,
             voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.DEFAULT_MODEL_NAME,
             liveApiKey = context.secrets.get(KEY_LIVE_API_KEY).orEmpty()
@@ -77,8 +76,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             baseUrl = settings.baseUrl.trim().trimEnd('/'),
             apiKey = settings.apiKey.trim(),
             model = settings.model.trim(),
-            liveServerUrl = settings.liveServerUrl.trim(),
-            liveEngine = if (settings.liveEngine in listOf(LIVE_VOSK_BUILTIN, LIVE_VOSK_SERVER, LIVE_DEEPGRAM, LIVE_OPENAI)) settings.liveEngine else LIVE_OFF,
+            liveEngine = if (settings.liveEngine in listOf(LIVE_VOSK_BUILTIN, LIVE_DEEPGRAM, LIVE_OPENAI)) settings.liveEngine else LIVE_OFF,
             voskBuiltinModel = settings.voskBuiltinModel.trim().ifEmpty { VoskModelManager.DEFAULT_MODEL_NAME },
             liveApiKey = settings.liveApiKey.trim()
         ).apply {
@@ -91,7 +89,6 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.settings.put(KEY_PROVIDER, cleaned.provider)
         context.settings.put(KEY_BASE_URL, cleaned.baseUrl)
         context.settings.put(KEY_MODEL, cleaned.model)
-        context.settings.put(KEY_LIVE_URL, cleaned.liveServerUrl)
         context.settings.put(KEY_LIVE_ENGINE, cleaned.liveEngine)
         context.settings.put(KEY_VOSK_BUILTIN_MODEL, cleaned.voskBuiltinModel)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
@@ -119,7 +116,6 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         const val KEY_BASE_URL = "baseUrl"
         const val KEY_API_KEY = "apiKey"
         const val KEY_MODEL = "model"
-        const val KEY_LIVE_URL = "liveServerUrl"
         const val KEY_LIVE_ENGINE = "liveEngine"
         const val KEY_VOSK_BUILTIN_MODEL = "voskBuiltinModel"
         const val KEY_LIVE_API_KEY = "liveApiKey"
@@ -128,7 +124,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             if (!savedMode.isNullOrBlank() && savedMode in listOf(MODE_LOCAL, MODE_CLOUD, MODE_HYBRID)) {
                 return savedMode
             }
-            val isVosk = liveEngine == LIVE_VOSK_BUILTIN || liveEngine == LIVE_VOSK_SERVER
+            val isVosk = liveEngine == LIVE_VOSK_BUILTIN || liveEngine == "Vosk (local server)"
             val hasAccurate = provider.isNotBlank() && provider != SpeechProvider.NONE.label
             return when {
                 isVosk && hasAccurate -> MODE_HYBRID

@@ -11,11 +11,10 @@ import java.net.URI
 
 const val LIVE_OFF = "Off"
 const val LIVE_VOSK_BUILTIN = "Vosk (built-in)"
-const val LIVE_VOSK_SERVER = "Vosk (local server)"
 const val LIVE_DEEPGRAM = "Deepgram (live)"
 const val LIVE_OPENAI = "OpenAI Realtime"
-const val LIVE_VOSK = LIVE_VOSK_SERVER
-const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_VOSK_SERVER,$LIVE_DEEPGRAM,$LIVE_OPENAI"
+const val LIVE_VOSK = LIVE_VOSK_BUILTIN
+const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_DEEPGRAM,$LIVE_OPENAI"
 
 const val MODE_LOCAL = "Local only"
 const val MODE_CLOUD = "Cloud only"
@@ -122,16 +121,6 @@ data class SpeechSettings(
     var voskBuiltinModel: String = VoskModelManager.DEFAULT_MODEL_NAME,
 
     @field:Setting(
-        label = "Vosk server URL",
-        description = "The Vosk server's local WebSocket address, e.g. ws://localhost:8765 or ws://192.168.1.20:8765.",
-        type = SettingType.TEXT,
-        group = "live",
-        showIf = "liveEngine=$LIVE_VOSK_SERVER",
-        order = 50
-    )
-    var liveServerUrl: String = "",
-
-    @field:Setting(
         label = "Live API Key",
         description = "API key for Deepgram live or OpenAI Realtime. If left blank, uses the API Key from above.",
         type = SettingType.PASSWORD,
@@ -151,7 +140,7 @@ data class SpeechSettings(
         order = 1,
         tooltip = "Downloads and installs the selected Vosk model from alphacephei.com"
     )
-    suspend fun downloadSelectedModel(): String? {
+    fun downloadSelectedModel(): String? {
         val manager = modelManager ?: return "Model manager not initialized."
         return manager.downloadAction(voskBuiltinModel)
     }
@@ -162,7 +151,7 @@ data class SpeechSettings(
         order = 2,
         tooltip = "Lists locally downloaded Vosk models"
     )
-    suspend fun checkModels(): String? {
+    fun checkModels(): String? {
         val manager = modelManager ?: return "Model manager not initialized."
         return manager.statusAction()
     }
@@ -177,7 +166,6 @@ data class SpeechSettings(
             MODE_CLOUD -> false
             MODE_LOCAL, MODE_HYBRID -> when (liveEngine) {
                 LIVE_VOSK_BUILTIN -> true
-                LIVE_VOSK_SERVER -> liveServerUrl.isNotBlank()
                 LIVE_DEEPGRAM -> effectiveLiveApiKey.isNotBlank()
                 LIVE_OPENAI -> effectiveLiveApiKey.isNotBlank()
                 else -> false

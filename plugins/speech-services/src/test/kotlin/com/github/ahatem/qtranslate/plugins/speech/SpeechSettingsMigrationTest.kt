@@ -13,43 +13,40 @@ class SpeechSettingsMigrationTest {
         val offSettings = SpeechSettings(mode = MODE_HYBRID, liveEngine = LIVE_OFF)
         assertFalse(offSettings.liveEnabled)
 
-        val serverNoUrl = SpeechSettings(mode = MODE_HYBRID, liveEngine = LIVE_VOSK_SERVER, liveServerUrl = "")
-        assertFalse(serverNoUrl.liveEnabled)
-
-        val serverWithUrl = SpeechSettings(mode = MODE_HYBRID, liveEngine = LIVE_VOSK_SERVER, liveServerUrl = "ws://localhost:8765")
-        assertTrue(serverWithUrl.liveEnabled)
-
-        val builtinSettings = SpeechSettings(mode = MODE_HYBRID, liveEngine = LIVE_VOSK_BUILTIN, liveServerUrl = "")
-        assertTrue(builtinSettings.liveEnabled, "Built-in engine is enabled without needing a server URL")
+        val builtinSettings = SpeechSettings(mode = MODE_HYBRID, liveEngine = LIVE_VOSK_BUILTIN)
+        assertTrue(builtinSettings.liveEnabled, "Built-in engine is enabled")
 
         val cloudOnlySettings = SpeechSettings(mode = MODE_CLOUD, liveEngine = LIVE_VOSK_BUILTIN)
         assertFalse(cloudOnlySettings.liveEnabled, "Live text is disabled in Cloud only mode")
 
         val localSettings = SpeechSettings(mode = MODE_LOCAL, liveEngine = LIVE_VOSK_BUILTIN)
         assertTrue(localSettings.liveEnabled, "Live text is enabled in Local only mode")
+
+        val deepgramSettings = SpeechSettings(mode = MODE_HYBRID, liveEngine = LIVE_DEEPGRAM, liveApiKey = "key123")
+        assertTrue(deepgramSettings.liveEnabled, "Deepgram live is enabled with key")
     }
 
     @Test
-    fun `legacy LIVE_VOSK constant matches LIVE_VOSK_SERVER`() {
-        assertEquals(LIVE_VOSK_SERVER, LIVE_VOSK)
+    fun `legacy LIVE_VOSK constant matches LIVE_VOSK_BUILTIN`() {
+        assertEquals(LIVE_VOSK_BUILTIN, LIVE_VOSK)
     }
 
     @Test
     fun `migration rules map legacy combinations to mode`() {
         // Vosk + provider -> Hybrid
-        assertEquals(MODE_HYBRID, SpeechPlugin.migrateSpeechMode(null, LIVE_VOSK_SERVER, "Groq"))
+        assertEquals(MODE_HYBRID, SpeechPlugin.migrateSpeechMode(null, "Vosk (local server)", "Groq"))
         assertEquals(MODE_HYBRID, SpeechPlugin.migrateSpeechMode(null, LIVE_VOSK_BUILTIN, "OpenAI"))
 
         // Vosk + None -> Local
-        assertEquals(MODE_LOCAL, SpeechPlugin.migrateSpeechMode(null, LIVE_VOSK_SERVER, SpeechProvider.NONE.label))
+        assertEquals(MODE_LOCAL, SpeechPlugin.migrateSpeechMode(null, "Vosk (local server)", SpeechProvider.NONE.label))
         assertEquals(MODE_LOCAL, SpeechPlugin.migrateSpeechMode(null, LIVE_VOSK_BUILTIN, SpeechProvider.NONE.label))
 
         // Off -> Cloud
         assertEquals(MODE_CLOUD, SpeechPlugin.migrateSpeechMode(null, LIVE_OFF, "Groq"))
 
         // Saved mode is preserved
-        assertEquals(MODE_LOCAL, SpeechPlugin.migrateSpeechMode(MODE_LOCAL, LIVE_VOSK_SERVER, "Groq"))
-        assertEquals(MODE_CLOUD, SpeechPlugin.migrateSpeechMode(MODE_CLOUD, LIVE_VOSK_SERVER, "Groq"))
+        assertEquals(MODE_LOCAL, SpeechPlugin.migrateSpeechMode(MODE_LOCAL, LIVE_VOSK_BUILTIN, "Groq"))
+        assertEquals(MODE_CLOUD, SpeechPlugin.migrateSpeechMode(MODE_CLOUD, LIVE_VOSK_BUILTIN, "Groq"))
         assertEquals(MODE_HYBRID, SpeechPlugin.migrateSpeechMode(MODE_HYBRID, LIVE_OFF, "None"))
     }
 
@@ -85,9 +82,10 @@ class SpeechSettingsMigrationTest {
     }
 
     @Test
-    fun `settings schema has mode and proper showIf rules and removes liveAutoLanguage`() {
+    fun `settings schema has mode and proper showIf rules and removes liveServerUrl and liveAutoLanguage`() {
         val fields = SpeechSettings::class.java.declaredFields.associateBy { it.name }
         assertFalse(fields.containsKey("liveAutoLanguage"), "liveAutoLanguage field must be removed")
+        assertFalse(fields.containsKey("liveServerUrl"), "liveServerUrl field must be removed")
         assertTrue(fields.containsKey("mode"), "mode field must exist")
 
         val providerAnn = fields["provider"]?.getAnnotation(com.github.ahatem.qtranslate.api.settings.Setting::class.java)

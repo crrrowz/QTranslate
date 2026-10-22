@@ -98,7 +98,6 @@ enum class LiveEngine(
 ) {
     OFF(LIVE_OFF, requiresKey = false, supportsWordTimings = false, supportsLanguageDetection = false),
     VOSK_BUILTIN(LIVE_VOSK_BUILTIN, requiresKey = false, supportsWordTimings = true, supportsLanguageDetection = false),
-    VOSK_SERVER(LIVE_VOSK_SERVER, requiresKey = false, supportsWordTimings = true, supportsLanguageDetection = false),
     DEEPGRAM(LIVE_DEEPGRAM, requiresKey = true, supportsWordTimings = true, supportsLanguageDetection = true),
     OPENAI_REALTIME(LIVE_OPENAI, requiresKey = true, supportsWordTimings = false, supportsLanguageDetection = true);
 

@@ -87,4 +87,20 @@ class VoskModelManagerTest {
         assertTrue(manager.deleteModel(fakeModel.name))
         assertFalse(manager.isInstalled(fakeModel.name))
     }
+
+    @Test
+    fun `resumable download controller supports pause resume and cancel`() {
+        val controller = VoskDownloadController()
+        assertFalse(controller.isPaused.get())
+        assertFalse(controller.isCancelled.get())
+
+        controller.pause()
+        assertTrue(controller.isPaused.get())
+
+        controller.resume()
+        assertFalse(controller.isPaused.get())
+
+        controller.cancel()
+        assertTrue(controller.isCancelled.get())
+    }
 }

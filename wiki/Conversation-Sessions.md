@@ -42,64 +42,26 @@ different ones.
 Word-level replay needs word timings, which Groq, `whisper-1`, Deepgram and most local Whisper servers
 report. Without them everything else still works; only **Play** on a single word is missing.
 
-### Live text (optional): Vosk
+### Live text: Built-in Vosk (offline, no Docker or Python)
 
 With an accurate provider alone, a line appears only after its speaker pauses and the provider
 answers, which with a slow model can take 20 seconds. **Live text** shows words while people are still
 talking, using [Vosk](https://alphacephei.com/vosk/). Words appear about one second after they are spoken,
 completely offline with zero data leaving your machine.
 
-#### Option A: Built-in engine (no server, no Docker — recommended)
-
 QTranslate includes Vosk's native offline recognition engine directly inside the Speech Recognition plugin:
 
 1. In **Settings > Plugins > Speech Recognition**, under **Live text**, set **Live engine** to **Vosk (built-in)**.
 2. Select a model from **Built-in model** (for example, `vosk-model-small-en-us-0.15` for English ~40MB, or `vosk-model-small-ar-mgb2-0.4` for Arabic ~31MB).
-3. Click **Download Model** to download and install the model into local storage directly from alphacephei.com.
+3. Click **Download Model** to download and install the model into local storage directly from alphacephei.com. A progress window shows real-time transfer speed, remaining time, and supports pausing, resuming, or cancelling.
 4. Click **Check Models** anytime to inspect installed models on disk.
 
 No Docker, Python, or extra background processes are required.
 
-#### Option B: External Vosk server (local network or Docker)
-
-If you prefer to run Vosk on a separate server or machine on your local network:
-
-**1. Run a Vosk server.** QTranslate speaks the protocol of the Vosk STT extension's
-`vosk_server.py` (`configure`, raw PCM, `partial`/`result`, `stop`). Models go in a folder laid out
-as `models/<lang>/<model-folder>/`, for example `models/en/vosk-model-en-us-0.22-lgraph` and
-`models/ar/vosk-model-ar-0.22-linto-1.1.0` (download from the
-[Vosk model list](https://alphacephei.com/vosk/models)).
-
-- *Without Docker* (Windows, macOS or Linux, Python 3.11 or newer):
-
-  ```
-  pip install vosk websockets
-  python vosk_server.py --models ./models --preload en --session-timeout 0
-  ```
-
-  The server listens on `ws://localhost:8765`.
-- *With Docker* (for example on another machine on your network):
-
-  ```
-  docker build -t vosk-stt-server .
-  docker run -d --name vosk-stt --restart unless-stopped -p 8765:8765 -v vosk-models:/models vosk-stt-server --preload ar,en
-  ```
-
-`--session-timeout 0` matters for calls: the default ends a session after 10 minutes.
-`--preload` loads models at startup, so the first sentence is not delayed.
-
-**2. Point QTranslate at it.** In **Settings > Plugins > Speech Recognition**, under **Live text**,
-set **Live engine** to **Vosk (local server)** and **Vosk server URL** to the server (e.g.
-`ws://localhost:8765` or `ws://192.168.1.20:8765`). Languages are selected directly in the conversation window.
-**Test connection** checks that the server answers.
-
 **Modes:**
-- **Local only**: Speech is transcribed offline with Vosk. Nothing leaves your machine, and provider fields are hidden.
-- **Cloud only**: Transcribes line by line through your chosen provider.
+- **Local only**: Speech is transcribed completely offline with Vosk. Nothing leaves your machine, and cloud provider fields are hidden.
+- **Cloud only**: Transcribes line by line through your chosen cloud provider.
 - **Hybrid**: Shows instant live text from Vosk, and refines each finished line with the accurate provider.
-
-If the server drops out, recording carries on: lines are cut at pauses the usual way while
-QTranslate reconnects, and live text returns when the server is back.
 
 ### 2. The call's audio
 
