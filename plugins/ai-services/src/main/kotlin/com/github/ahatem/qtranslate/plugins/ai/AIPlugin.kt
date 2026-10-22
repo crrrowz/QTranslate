@@ -20,6 +20,8 @@ import com.github.michaelbull.result.Result
  * - **AI Spell Checker** — detects and highlights spelling, grammar, and punctuation errors
  * - **AI Dictionary** — full definitions, part-of-speech, phonetics, synonyms for any word
  * - **AI Vision OCR** — extracts text from images using vision-capable models
+ * - **AI Speech Recognition** — transcribes speech through an OpenAI-compatible
+ *   `/audio/transcriptions` endpoint, which may differ from the chat endpoint
  *
  * All four services share one [AIServiceClient] instance that reads [AISettings]
  * via a lambda, so changes in Settings → Plugins take effect on the next API
@@ -54,8 +56,12 @@ class AIPlugin : Plugin<AISettings> {
             model         = context.settings.getString(KEY_MODEL) ?: AISettings().model,
             temperature   = context.settings.getDouble(KEY_TEMPERATURE, 0.3),
             maxTokens     = context.settings.getInt(KEY_MAX_TOKENS, 4096),
-            customHeaders = context.settings.getString(KEY_CUSTOM_HEADERS) ?: AISettings().customHeaders
-        )
+            customHeaders = context.settings.getString(KEY_CUSTOM_HEADERS) ?: AISettings().customHeaders,
+            speechBaseUrl = context.settings.getString(KEY_SPEECH_BASE_URL) ?: "",
+            speechApiKey  = context.secrets.get(KEY_SPEECH_API_KEY) ?: "",
+            speechModel   = context.settings.getString(KEY_SPEECH_MODEL) ?: AISettings().speechModel
+        )
+
 
         serviceClient = AIServiceClient(
             pluginContext = context,
@@ -94,6 +100,9 @@ class AIPlugin : Plugin<AISettings> {
         pluginContext.settings.put(KEY_TEMPERATURE, settings.temperature)
         pluginContext.settings.put(KEY_MAX_TOKENS, settings.maxTokens)
         pluginContext.settings.put(KEY_CUSTOM_HEADERS, settings.customHeaders)
+        pluginContext.settings.put(KEY_SPEECH_BASE_URL, settings.speechBaseUrl)
+        pluginContext.secrets.put(KEY_SPEECH_API_KEY, settings.speechApiKey)
+        pluginContext.settings.put(KEY_SPEECH_MODEL, settings.speechModel)
 
         this.settings = settings
 
@@ -109,7 +118,8 @@ class AIPlugin : Plugin<AISettings> {
     }
 
     override suspend fun shutdown() {
-        pluginContext.logger.info("AI Plugin shutting down")
+        pluginContext.logger.info("AI Plugin shutting down")
+
     }
 
     override fun getServices(): List<Service> = activeServices
@@ -123,7 +133,8 @@ class AIPlugin : Plugin<AISettings> {
             AIRewriterService(client = serviceClient),
             AISpellCheckerService(client = serviceClient),
             AIDictionaryService(client = serviceClient),
-            AIVisionOcrService(client = serviceClient)
+            AIVisionOcrService(client = serviceClient),
+            AISpeechRecognizerService(client = serviceClient)
         )
     }
 
@@ -146,5 +157,8 @@ class AIPlugin : Plugin<AISettings> {
         const val KEY_TEMPERATURE    = "temperature"
         const val KEY_MAX_TOKENS     = "maxTokens"
         const val KEY_CUSTOM_HEADERS = "customHeaders"
+        const val KEY_SPEECH_BASE_URL = "speechBaseUrl"
+        const val KEY_SPEECH_API_KEY  = "speechApiKey"
+        const val KEY_SPEECH_MODEL    = "speechModel"
     }
 }

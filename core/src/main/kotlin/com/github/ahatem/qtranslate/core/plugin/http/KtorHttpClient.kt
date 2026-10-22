@@ -1,6 +1,8 @@
 package com.github.ahatem.qtranslate.core.plugin.http
 
 import com.github.ahatem.qtranslate.api.core.Logger
+import com.github.ahatem.qtranslate.api.plugin.MultipartHttpClient
+import com.github.ahatem.qtranslate.api.plugin.MultipartPart
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
 import com.github.ahatem.qtranslate.api.plugin.SingleAttemptHttpClient
 import com.github.michaelbull.result.Err
@@ -74,7 +76,7 @@ internal class KtorHttpClient(
      * that shares an engine across clients should decide for itself when it dies.
      */
     private val ownsEngine: Boolean = true
-) : SingleAttemptHttpClient, Closeable {
+) : SingleAttemptHttpClient, MultipartHttpClient, Closeable {
 
     private val client = KtorClient(engine) {
         install(ContentNegotiation) {
@@ -301,6 +303,51 @@ internal class KtorHttpClient(
             Err(ServiceError.TimeoutError("Request timed out: $url", e))
         } catch (e: Exception) {
             logger.error("POST form bytes request failed for $url", e)
+            Err(ServiceError.NetworkError("Network error: ${e.message}", e))
+        }
+    }
+
+    /**
+     * Uploads [parts] as `multipart/form-data`. Speech transcription is the caller this exists for:
+     * those APIs take the audio file as an upload and accept nothing else.
+     */
+    override suspend fun postMultipart(
+        url: String,
+        parts: List<MultipartPart>,
+        headers: Map<String, String>,
+        queryParams: Map<String, Any?>
+    ): Result<String, ServiceError> = withContext(Dispatchers.IO) {
+        try {
+            val response: HttpResponse = client.post(url) {
+                applyHostTimeout(url)
+                // The body carries its own Content-Type with the boundary; a caller's would break it.
+                headers.filterKeys { !it.equals(HttpHeaders.ContentType, ignoreCase = true) }
+                    .forEach { (key, value) -> header(key, value) }
+                queryParams.forEach { (key, value) ->
+                    value?.let { parameter(key, it.toString()) }
+                }
+                setBody(MultiPartFormDataContent(formData {
+                    parts.forEach { part ->
+                        when (part) {
+                            is MultipartPart.Text -> append(part.name, part.value)
+                            is MultipartPart.File -> append(
+                                key = part.name,
+                                value = part.bytes,
+                                headers = Headers.build {
+                                    append(HttpHeaders.ContentType, part.contentType)
+                                    append(HttpHeaders.ContentDisposition, "filename=\"${part.fileName}\"")
+                                }
+                            )
+                        }
+                    }
+                }))
+            }
+            handleResponse(response, url)
+        } catch (e: HttpRequestTimeoutException) {
+            logger.error("POST multipart request timeout for $url", e)
+            Err(ServiceError.TimeoutError("Request timed out: $url", e))
+        } catch (e: Exception) {
+            logger.error("POST multipart request failed for $url", e)
             Err(ServiceError.NetworkError("Network error: ${e.message}", e))
         }
     }

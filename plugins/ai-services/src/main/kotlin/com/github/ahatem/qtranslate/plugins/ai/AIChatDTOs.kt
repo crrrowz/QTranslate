@@ -45,6 +45,13 @@ data class ChatChoice(
     @SerialName("finish_reason") val finishReason: String? = null
 )
 
+/** Body of an OpenAI-compatible `/audio/transcriptions` reply in `json` format. */
+@Serializable
+data class TranscriptionResponse(
+    @SerialName("text") val text: String? = null,
+    @SerialName("error") val error: ChatError? = null
+)
+
 @Serializable
 data class ChatError(
     @SerialName("message") val message: String,
