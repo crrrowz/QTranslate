@@ -25,7 +25,7 @@ class VoskBuiltinServiceTest {
     @TempDir
     lateinit var tempDir: File
 
-    class FakeRecognizerHandle(
+    open class FakeRecognizerHandle(
         private val onClosed: () -> Unit = {}
     ) : VoskRecognizerHandle {
         val closed = AtomicBoolean(false)
@@ -111,6 +111,24 @@ class VoskBuiltinServiceTest {
 
         assertTrue(recognizer.closed.get())
         assertTrue(eventsList.any { it is LiveSpeechEvent.Final && it.text == "done" })
+    }
+
+    @Test
+    fun `builtin session runs recognition on a dedicated worker thread`() = runBlocking {
+        val threadNames = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val recognizer = object : FakeRecognizerHandle() {
+            override fun acceptWaveForm(data: ByteArray, len: Int): Boolean {
+                threadNames.add(Thread.currentThread().name)
+                return super.acceptWaveForm(data, len)
+            }
+        }
+        val session = VoskBuiltinSession(recognizer)
+        session.sendAudio(ByteArray(320))
+        kotlinx.coroutines.delay(100)
+        session.finish()
+
+        assertTrue(threadNames.isNotEmpty())
+        assertTrue(threadNames.all { it.startsWith("vosk-builtin-worker") })
     }
 
     @Test

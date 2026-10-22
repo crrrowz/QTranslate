@@ -17,6 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -28,6 +29,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Interface abstraction for Vosk model handle to allow unit testing without loading native libraries.
@@ -155,12 +158,21 @@ class VoskBuiltinService(
  * One in-process live recognition session.
  *
  * Audio frames are queued through [audioQueue] and processed sequentially in background
- * on [Dispatchers.IO] to avoid blocking audio recording callbacks.
+ * on a dedicated single-threaded dispatcher to avoid blocking audio recording callbacks
+ * or contending with shared dispatchers.
  */
 class VoskBuiltinSession(
     private val recognizer: VoskRecognizerHandle,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO)
+    scope: CoroutineScope? = null
 ) : LiveSpeechSession {
+    private val ownedExecutor: ExecutorService? = if (scope == null) {
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "vosk-builtin-worker").apply { isDaemon = true }
+        }
+    } else null
+
+    private val sessionScope: CoroutineScope = scope ?: CoroutineScope(ownedExecutor!!.asCoroutineDispatcher())
+
     private val eventChannel = Channel<LiveSpeechEvent>(Channel.UNLIMITED)
     override val events: Flow<LiveSpeechEvent> = eventChannel.receiveAsFlow()
 
@@ -169,7 +181,7 @@ class VoskBuiltinSession(
     @Volatile
     private var ended = false
 
-    private val processingJob: Job = scope.launch(Dispatchers.IO) {
+    private val processingJob: Job = sessionScope.launch {
         try {
             for (pcm in audioQueue) {
                 if (ended) break
@@ -220,6 +232,7 @@ class VoskBuiltinSession(
     private fun cleanup() {
         eventChannel.close()
         runCatching { recognizer.close() }
+        ownedExecutor?.shutdown()
     }
 
     private fun emitPartial(jsonString: String) {
