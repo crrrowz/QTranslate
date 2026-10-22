@@ -20,10 +20,11 @@ Sessions...**
 
 Transcription uses the bundled **Speech Recognition** plugin. Open it from the conversation window's
 **Speech settings...** button, or from **Settings > Plugins > Speech Recognition > Configure**, and
-pick a provider:
+pick a provider under **Accurate text**:
 
 | Provider | What you enter | Notes |
 |---|---|---|
+| **None (live text only)** | Nothing | Only with live text (below): the live words are the transcript, and nothing leaves your network. |
 | **Groq** | API key from [console.groq.com](https://console.groq.com/) | Fast, inexpensive, has a free tier. Default model `whisper-large-v3-turbo`. |
 | **OpenAI** | API key | Default model `whisper-1`. `gpt-4o-transcribe` also works, without word timings. |
 | **Deepgram** | API key from [console.deepgram.com](https://console.deepgram.com/) | Default model `nova-3`. |
@@ -43,31 +44,47 @@ report. Without them everything else still works; only **Play** on a single word
 
 ### Live text (optional): Vosk
 
-With a whisper-style provider alone, a line appears only after its speaker pauses and the provider
-answers, which with a slow model can take 20 seconds. A **live recognizer** shows words while people
-are still talking, from a [Vosk](https://alphacephei.com/vosk/) server on your own computer or
-network. Nothing goes to the internet: QTranslate talks to the server over a local WebSocket API.
+With an accurate provider alone, a line appears only after its speaker pauses and the provider
+answers, which with a slow model can take 20 seconds. **Live text** shows words while people are still
+talking, from a [Vosk](https://alphacephei.com/vosk/) server on your own computer or network.
+Nothing goes to the internet: QTranslate talks to the server over a local WebSocket API. Measured on a
+home network, words appear about one second after they are spoken.
 
-1. Run a Vosk server that speaks the Vosk STT extension's protocol (`vosk_server.py`), for example in
-   Docker on another machine:
+**1. Run a Vosk server.** QTranslate speaks the protocol of the Vosk STT extension's
+`vosk_server.py` (`configure`, raw PCM, `partial`/`result`, `stop`). Models go in a folder laid out
+as `models/<lang>/<model-folder>/`, for example `models/en/vosk-model-en-us-0.22-lgraph` and
+`models/ar/vosk-model-ar-0.22-linto-1.1.0` (download from the
+[Vosk model list](https://alphacephei.com/vosk/models)).
 
-   ```
-   docker build -t vosk-stt-server .
-   docker run -d --name vosk-stt --restart unless-stopped -p 8765:8765 -v vosk-models:/models vosk-stt-server --preload ar,en
-   ```
+- *Without Docker* (Windows, macOS or Linux, Python 3.11 or newer):
 
-   Models go in the volume as `/models/<lang>/<model-folder>/`, e.g.
-   `vosk-model-en-us-0.22-lgraph` and `vosk-model-ar-0.22-linto-1.1.0`.
-2. In **Settings > Plugins > Speech Recognition**, set **Live server URL (Vosk)** to the server, e.g.
-   `ws://192.168.1.20:8765` or `ws://localhost:8765`, and **Live language for Auto-Detect** to the
-   model used when a language is left on Auto-Detect (Vosk cannot detect languages).
-3. Under **Settings > Services & Presets**, **Live Speech Recognition** selects it.
+  ```
+  pip install vosk websockets
+  python vosk_server.py --models ./models --preload en --session-timeout 0
+  ```
 
-**Hybrid mode.** With both a live recognizer and a provider above set up, the live words appear at
-once (in italics while provisional) and each finished line is then replaced by the provider's more
-accurate text. With only the live recognizer, its text stays as it is.
+  The server listens on `ws://localhost:8765`.
+- *With Docker* (for example on another machine on your network):
 
-If the live server drops out, recording carries on: lines are cut at pauses the usual way while
+  ```
+  docker build -t vosk-stt-server .
+  docker run -d --name vosk-stt --restart unless-stopped -p 8765:8765 -v vosk-models:/models vosk-stt-server --preload ar,en
+  ```
+
+`--session-timeout 0` matters for calls: the default ends a session after 10 minutes.
+`--preload` loads models at startup, so the first sentence is not delayed.
+
+**2. Point QTranslate at it.** In **Settings > Plugins > Speech Recognition**, under **Live text**,
+set **Live engine** to **Vosk (local server)**, **Vosk server URL** to the server (e.g.
+`ws://localhost:8765` or `ws://192.168.1.20:8765`), and **Language for Auto-Detect** to the model to
+use when a language is left on Auto-Detect (Vosk cannot detect languages). **Test connection** checks
+that the server answers.
+
+**Hybrid mode.** Under **Accurate text**, keep a provider to have each finished line replaced by its
+more accurate text; live words show at once, in italics while provisional. Choose **None (live text
+only)** to keep just the live text, with nothing sent outside your network.
+
+If the server drops out, recording carries on: lines are cut at pauses the usual way while
 QTranslate reconnects, and live text returns when the server is back.
 
 ### 2. The call's audio
