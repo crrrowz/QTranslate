@@ -2,9 +2,11 @@ package com.github.ahatem.qtranslate.ui.swing.conversation
 
 import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.core.conversation.AudioDevice
+import com.github.ahatem.qtranslate.core.conversation.AudioLevels
 import com.github.ahatem.qtranslate.core.conversation.AudioSource
 import com.github.ahatem.qtranslate.core.conversation.ConversationFeature
 import com.github.ahatem.qtranslate.core.conversation.ConversationSession
+import com.github.ahatem.qtranslate.core.conversation.DeviceCheckHeuristics
 import com.github.ahatem.qtranslate.core.conversation.LiveRecognitionStatus
 import com.github.ahatem.qtranslate.core.conversation.RecorderNotice
 import com.github.ahatem.qtranslate.core.conversation.RecorderPhase
@@ -113,6 +115,14 @@ class ConversationWindow(
     private val retryFailedButton = JButton()
     private val speechLabel = JLabel()
     private val speechSettingsButton = JButton(strings.speechSettings)
+
+    private val testDevicesButton = JButton(strings.testDevices)
+    private val deviceWarningText = wrappingText("")
+    private val deviceWarningBar = banner(deviceWarningText, UIManager.getColor("Actions.Yellow")) {
+        deviceWarningDismissed = true
+    }.apply { isVisible = false }
+    private var deviceWarningDismissed = false
+    private var testingDevices = false
 
     private val noticeText = wrappingText("")
     private val noticeBar = banner(noticeText, UIManager.getColor("Actions.Red")) { recorder.clearNotice() }
@@ -237,7 +247,8 @@ class ConversationWindow(
             add(JLabel(strings.microphone))
             add(microphoneCombo, "wmin 60")
             add(JLabel(strings.callAudio).apply { toolTipText = strings.callAudioTooltip })
-            add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "split 2, growx, wmin 60")
+            add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "split 3, growx, wmin 60")
+            add(testDevicesButton)
             add(refreshDevicesButton, "wrap")
             add(JLabel(strings.myLanguage))
             add(myLanguageCombo, "wmin 60")
@@ -267,6 +278,7 @@ class ConversationWindow(
             add(recordRow)
             add(keepAudioRow)
             add(privacyBar)
+            add(deviceWarningBar)
             add(noticeBar)
         }
         add(top, BorderLayout.NORTH)
@@ -351,6 +363,15 @@ class ConversationWindow(
         }
         stopButton.addActionListener { scope.launch { recorder.stop() } }
         refreshDevicesButton.addActionListener { loadDevices() }
+        testDevicesButton.addActionListener { testDevices() }
+        microphoneCombo.addActionListener {
+            deviceWarningDismissed = false
+            checkDeviceWarnings()
+        }
+        systemCombo.addActionListener {
+            deviceWarningDismissed = false
+            checkDeviceWarnings()
+        }
         speechSettingsButton.addActionListener { onOpenSpeechSettings() }
         retryFailedButton.addActionListener { retryAllFailed() }
         newButton.addActionListener {
@@ -462,10 +483,10 @@ class ConversationWindow(
             RecorderPhase.PAUSED -> "▶ ${strings.resume}"
             else -> "● ${strings.record}"
         }
-        recordButton.isEnabled = state.phase != RecorderPhase.STOPPING && !loadingDevices
+        recordButton.isEnabled = state.phase != RecorderPhase.STOPPING && !loadingDevices && !testingDevices
         stopButton.isEnabled = active
-        listOf(microphoneCombo, systemCombo, refreshDevicesButton, myLanguageCombo, callLanguageCombo, keepAudioCheck, newButton)
-            .forEach { it.isEnabled = state.phase == RecorderPhase.IDLE && !loadingDevices }
+        listOf(microphoneCombo, systemCombo, refreshDevicesButton, testDevicesButton, myLanguageCombo, callLanguageCombo, keepAudioCheck, newButton)
+            .forEach { it.isEnabled = state.phase == RecorderPhase.IDLE && !loadingDevices && !testingDevices }
         sessionsList.isEnabled = !active
         timerLabel.text = formatTimestamp(if (active || state.phase == RecorderPhase.STOPPING) state.elapsedMillis else viewed?.durationMillis ?: 0)
         microphoneLight.render(state.streams.getValue(AudioSource.MICROPHONE))
@@ -481,6 +502,7 @@ class ConversationWindow(
         if (active || state.phase == RecorderPhase.STOPPING) transcript.render(state.session)
         renderLive(state)
         renderSpeechStatus()
+        checkDeviceWarnings()
 
         if (lastPhase != RecorderPhase.IDLE && state.phase == RecorderPhase.IDLE) {
             viewed = state.session
@@ -546,19 +568,124 @@ class ConversationWindow(
             val micItems = listOf(none) + microphones.filterNot { it.looksLikeSystemAudio }.map { DeviceItem(it, it.name) }
             microphoneCombo.model = DefaultComboBoxModel(micItems.toTypedArray())
             // Matched only when something was saved: a null id would otherwise match "None" itself.
+            val micDevices = micItems.mapNotNull { it.device }
+            val preferredMic = DeviceCheckHeuristics.pickDefaultMicrophone(micDevices)
             microphoneCombo.selectedItem = preferences.microphoneId?.let { id -> micItems.firstOrNull { it.device?.id == id } }
+                ?: preferredMic?.let { dev -> micItems.firstOrNull { it.device?.id == dev.id } }
                 ?: micItems.firstOrNull { it.device?.name?.contains("microphone", ignoreCase = true) == true }
                 ?: micItems.getOrNull(1) ?: none
 
             val systemItems = listOf(none) + outputs.map { DeviceItem(it, it.name) }
             systemCombo.model = DefaultComboBoxModel(systemItems.toTypedArray())
+            val systemDevices = systemItems.mapNotNull { it.device }
+            val preferredSys = DeviceCheckHeuristics.pickDefaultCallOutput(systemDevices)
             systemCombo.selectedItem = preferences.systemOutputId?.let { id -> systemItems.firstOrNull { it.device?.id == id } }
-                // A chat-only output (SteelSeries Sonar "Chat") carries just the call; prefer it.
+                ?: preferredSys?.let { dev -> systemItems.firstOrNull { it.device?.id == dev.id } }
                 ?: systemItems.firstOrNull { it.device?.name?.contains("chat", ignoreCase = true) == true }
                 ?: systemItems.getOrNull(1) ?: none
 
             loadingDevices = false
             render(recorder.state.value)
+        }
+    }
+
+    private fun checkDeviceWarnings() {
+        if (deviceWarningDismissed || recorder.state.value.isActive) {
+            deviceWarningBar.isVisible = false
+            return
+        }
+        val micItem = microphoneCombo.selectedItem as? DeviceItem
+        val micName = micItem?.device?.name
+        val sysItem = systemCombo.selectedItem as? DeviceItem
+        val sysName = sysItem?.device?.name
+        val allOutputs = (0 until systemCombo.itemCount).mapNotNull { (systemCombo.getItemAt(it) as? DeviceItem)?.device?.name }
+
+        val warnings = mutableListOf<String>()
+        if (DeviceCheckHeuristics.isSuspiciousMicrophone(micName)) {
+            warnings.add(strings.warningSuspiciousMic(micName ?: ""))
+        }
+        val suggestedChat = DeviceCheckHeuristics.findSuggestedChatOutput(sysName, allOutputs)
+        if (suggestedChat != null) {
+            warnings.add(strings.warningSuggestedChat(suggestedChat))
+        }
+
+        if (warnings.isNotEmpty()) {
+            deviceWarningText.text = warnings.joinToString("\n")
+            deviceWarningBar.isVisible = true
+        } else {
+            deviceWarningBar.isVisible = false
+        }
+    }
+
+    private fun testDevices() {
+        if (testingDevices || recorder.state.value.isActive) return
+        val micDevice = (microphoneCombo.selectedItem as? DeviceItem)?.device
+        val sysDevice = (systemCombo.selectedItem as? DeviceItem)?.device
+        if (micDevice == null && sysDevice == null) return
+
+        testingDevices = true
+        testDevicesButton.isEnabled = false
+        val originalText = strings.testDevices
+
+        scope.launch {
+            val startTime = System.currentTimeMillis()
+            val durationMillis = 3_000L
+
+            val micJob = micDevice?.let { dev ->
+                launch(Dispatchers.IO) {
+                    runCatching {
+                        val stream = feature.microphoneBackend.open(dev)
+                        try {
+                            while (System.currentTimeMillis() - startTime < durationMillis && testingDevices) {
+                                val chunk = stream.read() ?: break
+                                val level = AudioLevels.rmsLevel(chunk)
+                                withContext(Dispatchers.Swing) {
+                                    microphoneLight.render(StreamStatus(state = StreamState.LIVE, level = level, deviceName = dev.name))
+                                }
+                            }
+                        } finally {
+                            runCatching { stream.close() }
+                        }
+                    }
+                }
+            }
+
+            val sysJob = sysDevice?.let { dev ->
+                launch(Dispatchers.IO) {
+                    runCatching {
+                        val stream = feature.systemBackend.open(dev)
+                        try {
+                            while (System.currentTimeMillis() - startTime < durationMillis && testingDevices) {
+                                val chunk = stream.read() ?: break
+                                val level = AudioLevels.rmsLevel(chunk)
+                                withContext(Dispatchers.Swing) {
+                                    systemLight.render(StreamStatus(state = StreamState.LIVE, level = level, deviceName = dev.name))
+                                }
+                            }
+                        } finally {
+                            runCatching { stream.close() }
+                        }
+                    }
+                }
+            }
+
+            while (System.currentTimeMillis() - startTime < durationMillis && testingDevices) {
+                val remainingSec = ((durationMillis - (System.currentTimeMillis() - startTime) + 999) / 1000).toInt()
+                withContext(Dispatchers.Swing) {
+                    testDevicesButton.text = strings.testingDevices(remainingSec)
+                }
+                kotlinx.coroutines.delay(200)
+            }
+
+            micJob?.join()
+            sysJob?.join()
+
+            withContext(Dispatchers.Swing) {
+                testingDevices = false
+                testDevicesButton.text = originalText
+                testDevicesButton.isEnabled = !loadingDevices && recorder.state.value.phase == RecorderPhase.IDLE
+                render(recorder.state.value)
+            }
         }
     }
 
