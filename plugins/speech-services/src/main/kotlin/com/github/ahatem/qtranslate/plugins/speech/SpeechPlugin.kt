@@ -149,7 +149,14 @@ class SpeechRecognitionService(
     override val key: String = "speech"
     override val version: String = "1.0.0"
     override val iconPath: String = "assets/speech.svg"
-    override val supportedLanguages: SupportedLanguages = SupportedLanguages.All
+    override val supportedLanguages: SupportedLanguages
+        get() {
+            val current = settings()
+            if (current.mode == MODE_LOCAL || current.speechProvider == SpeechProvider.NONE) {
+                return builtinLive?.supportedLanguages ?: SupportedLanguages.All
+            }
+            return SupportedLanguages.All
+        }
 
     /** Names the provider, so the Services list and the conversation window say what is in use. */
     override val name: String

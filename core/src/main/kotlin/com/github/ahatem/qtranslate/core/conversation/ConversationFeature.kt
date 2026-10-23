@@ -102,6 +102,21 @@ class ConversationFeature(
     val liveServiceName: String?
         get() = activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)?.name
 
+    /** Languages supported by the active speech recognizer (e.g. only installed Vosk models in local mode). */
+    fun speechLanguages(): List<LanguageCode>? {
+        val liveService = activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)
+        val speechService = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)
+        val liveLangs = when (val sup = liveService?.supportedLanguages) {
+            is com.github.ahatem.qtranslate.api.plugin.SupportedLanguages.Specific -> sup.languages.toList()
+            else -> null
+        }
+        val batchLangs = when (val sup = speechService?.supportedLanguages) {
+            is com.github.ahatem.qtranslate.api.plugin.SupportedLanguages.Specific -> sup.languages.toList()
+            else -> null
+        }
+        return liveLangs ?: batchLangs
+    }
+
     fun microphones(): List<AudioDevice> = microphoneBackend.inputDevices()
 
     /** Outputs to record from; on Windows these are playback devices, captured by loopback. */

@@ -94,7 +94,15 @@ class VoskBuiltinService(
     override val name: String = "Vosk (built-in)"
     override val version: String = "1.0.0"
     override val iconPath: String = "assets/speech.svg"
-    override val supportedLanguages: SupportedLanguages = SupportedLanguages.Dynamic
+    override val supportedLanguages: SupportedLanguages
+        get() {
+            val installed = modelManager.listInstalledModels()
+            val langs = installed.mapNotNull { dir ->
+                VoskModelManager.MODELS_BY_NAME[dir.name]?.language
+            }.distinct().map(::LanguageCode).toSet()
+            return if (langs.isNotEmpty()) SupportedLanguages.Specific(langs)
+            else SupportedLanguages.Specific(setOf(LanguageCode.ENGLISH))
+        }
 
     private val modelCache = ConcurrentHashMap<String, VoskModelHandle>()
 
@@ -326,6 +334,19 @@ internal sealed interface VoskParsedResult {
 
 private val jsonParser = Json { ignoreUnknownKeys = true; isLenient = true }
 
+internal fun fixMojibake(raw: String): String {
+    if (raw.isBlank()) return raw
+    val looksLikeMojibake = raw.contains("Ø") || raw.contains("Ù") || raw.contains("Ã") || raw.contains("Â")
+    if (!looksLikeMojibake) return raw
+    return try {
+        val bytes = raw.toByteArray(java.nio.charset.Charset.forName("Windows-1252"))
+        val recovered = String(bytes, java.nio.charset.StandardCharsets.UTF_8)
+        if (recovered.any { it in '\u0600'..'\u06FF' }) recovered else raw
+    } catch (_: Exception) {
+        raw
+    }
+}
+
 /**
  * Parses either server-style (`{"type": "partial", "text": "..."}`) or native Vosk C library-style
  * (`{"partial": "..."}` and `{"text": "...", "result": [...]}`) messages.
@@ -336,19 +357,19 @@ internal fun parseVoskJson(text: String): VoskParsedResult {
 
     // Partial: {"partial": "..."} or {"type": "partial", "text": "..."}
     if (json.containsKey("partial") || json.string("type") == "partial") {
-        val partial = json.string("partial").ifEmpty { json.string("text") }.trim()
+        val partial = fixMojibake(json.string("partial").ifEmpty { json.string("text") }.trim())
         return if (partial.isNotEmpty()) VoskParsedResult.Partial(partial) else VoskParsedResult.Empty
     }
 
     // Final result: {"text": "...", "result": [...]} or {"type": "result", "text": "..."}
     if (json.containsKey("text") || json.string("type") == "result") {
-        val finalText = json.string("text").trim()
+        val finalText = fixMojibake(json.string("text").trim())
         val words = runCatching {
             json["result"]!!.jsonArray.mapNotNull { item ->
                 val wordObj = item.jsonObject
                 val start = wordObj["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
                 val end = wordObj["end"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
-                RecognizedWord(wordObj.string("word"), (start * 1000).toLong(), (end * 1000).toLong())
+                RecognizedWord(fixMojibake(wordObj.string("word")), (start * 1000).toLong(), (end * 1000).toLong())
             }
         }.getOrDefault(emptyList())
         return if (finalText.isNotEmpty()) VoskParsedResult.Final(finalText, words) else VoskParsedResult.Empty

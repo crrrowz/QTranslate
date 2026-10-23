@@ -28,6 +28,7 @@ object AppUiSetup {
         }
         System.setProperty("awt.useSystemAAFontSettings", "lcd")
         System.setProperty("swing.aatext", "true")
+        System.setProperty("jna.encoding", "UTF-8")
     }
 
     fun setRenderingHints() {

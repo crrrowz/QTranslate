@@ -17,6 +17,8 @@ import com.github.ahatem.qtranslate.core.conversation.RecordingOptions
 import com.github.ahatem.qtranslate.core.conversation.SessionStatus
 import com.github.ahatem.qtranslate.core.conversation.StreamState
 import com.github.ahatem.qtranslate.core.conversation.StreamStatus
+import com.formdev.flatlaf.extras.FlatSVGIcon
+import com.github.ahatem.qtranslate.ui.swing.shared.icon.Icons
 import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
 import com.github.ahatem.qtranslate.core.conversation.formatTimestamp
 import com.github.ahatem.qtranslate.core.localization.getDisplayName
@@ -117,7 +119,11 @@ class ConversationWindow(
     private var cachedOutputs = emptyList<AudioDevice>()
     private var cachedApps = emptyList<AudioApplication>()
 
-    private val refreshDevicesButton = JButton("⟳").apply { toolTipText = strings.refreshDevices }
+    private val refreshDevicesButton = JButton(FlatSVGIcon(Icons.RETRY, 14, 14)).apply {
+        toolTipText = strings.refreshDevices
+        putClientProperty("JButton.buttonType", "toolBarButton")
+        margin = Insets(2, 6, 2, 6)
+    }
     private val myLanguageCombo = JComboBox<LanguageCode>()
     private val callLanguageCombo = JComboBox<LanguageCode>()
     private val targetCombo = JComboBox<LanguageCode>()
@@ -173,24 +179,28 @@ class ConversationWindow(
         liveLines.values.forEach { add(it, "wmin 0") }
         isVisible = false
     }
-    private val micMuteButton = JButton("🎙").apply {
+    private val micMuteButton = JButton(FlatSVGIcon(Icons.MIC, 15, 15)).apply {
         toolTipText = "Mute / Unmute Microphone"
         putClientProperty("JButton.buttonType", "toolBarButton")
         margin = Insets(2, 6, 2, 6)
         addActionListener {
             recorder.isMicrophoneMuted = !recorder.isMicrophoneMuted
-            text = if (recorder.isMicrophoneMuted) "🎙 Muted" else "🎙"
-            foreground = if (recorder.isMicrophoneMuted) (UIManager.getColor("Actions.Red") ?: Color.RED) else null
+            val muted = recorder.isMicrophoneMuted
+            toolTipText = if (muted) "Microphone is MUTED (click to unmute)" else "Mute microphone"
+            (icon as? FlatSVGIcon)?.colorFilter = if (muted) FlatSVGIcon.ColorFilter { Color(0xE05555) } else null
+            repaint()
         }
     }
-    private val callMuteButton = JButton("🔊").apply {
+    private val callMuteButton = JButton(FlatSVGIcon(Icons.SPEAK, 15, 15)).apply {
         toolTipText = "Mute / Unmute Call Audio"
         putClientProperty("JButton.buttonType", "toolBarButton")
         margin = Insets(2, 6, 2, 6)
         addActionListener {
             recorder.isSystemMuted = !recorder.isSystemMuted
-            text = if (recorder.isSystemMuted) "🔊 Muted" else "🔊"
-            foreground = if (recorder.isSystemMuted) (UIManager.getColor("Actions.Red") ?: Color.RED) else null
+            val muted = recorder.isSystemMuted
+            toolTipText = if (muted) "Call audio is MUTED (click to unmute)" else "Mute call audio"
+            (icon as? FlatSVGIcon)?.colorFilter = if (muted) FlatSVGIcon.ColorFilter { Color(0xE05555) } else null
+            repaint()
         }
     }
     private val transcriptScroll = JScrollPane(transcript)
@@ -281,11 +291,15 @@ class ConversationWindow(
         // A typical-length prototype sizes them instead, and "wmin" lets each give way further, so
         // the pickers share whatever width the window has rather than overlapping or clipping.
         listOf(microphoneCombo, systemCombo).forEach { it.prototypeDisplayValue = DeviceItem(null, "SteelSeries Sonar - Chat (Virtual)") }
-        val pickers = shrinkable(MigLayout("fillx, insets 10 12 4 12, gap 8 6", "[trailing][grow,fill][][trailing][grow,fill][][][]")).apply {
+        val pickers = shrinkable(MigLayout("fillx, insets 8 12 6 12, gap 10 6", "[trailing][grow,fill][trailing][grow,fill][trailing][grow,fill]")).apply {
             // Row 1: Audio Devices with Mute, Test and Refresh buttons
             add(JLabel(strings.microphone))
-            add(microphoneCombo, "wmin 100, growx")
-            add(micMuteButton)
+            val micPanel = JPanel(BorderLayout(4, 0)).apply {
+                isOpaque = false
+                add(microphoneCombo, BorderLayout.CENTER)
+                add(micMuteButton, BorderLayout.EAST)
+            }
+            add(micPanel, "wmin 100, growx")
 
             val callHeader = JPanel(FlowLayout(FlowLayout.TRAILING, 4, 0)).apply {
                 isOpaque = false
@@ -304,10 +318,20 @@ class ConversationWindow(
                 })
             }
             add(callHeader)
-            add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "wmin 100, growx")
-            add(callMuteButton)
-            add(testDevicesButton)
-            add(refreshDevicesButton, "wrap")
+            val callPanel = JPanel(BorderLayout(4, 0)).apply {
+                isOpaque = false
+                add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, BorderLayout.CENTER)
+                add(callMuteButton, BorderLayout.EAST)
+            }
+            add(callPanel, "wmin 100, growx")
+
+            add(JLabel())
+            val testPanel = JPanel(FlowLayout(FlowLayout.TRAILING, 4, 0)).apply {
+                isOpaque = false
+                add(testDevicesButton)
+                add(refreshDevicesButton)
+            }
+            add(testPanel, "wrap")
 
             // Row 2: Languages
             add(JLabel(strings.myLanguage))
@@ -315,7 +339,7 @@ class ConversationWindow(
             add(JLabel(strings.callLanguage))
             add(callLanguageCombo, "wmin 90, growx")
             add(JLabel(strings.translateTo))
-            add(targetCombo, "wmin 90, wrap")
+            add(targetCombo, "wmin 90, growx, wrap")
         }
         val speechRow = shrinkable(MigLayout("fillx, insets 0 12 4 12, gap 8", "[grow,fill][]")).apply {
             add(speechLabel, "wmin 0")
@@ -492,7 +516,13 @@ class ConversationWindow(
                 }
             }
         }
-        speechSettingsButton.addActionListener { onOpenSpeechSettings() }
+        speechSettingsButton.addActionListener {
+            onOpenSpeechSettings()
+            loadPreferences()
+        }
+        addWindowListener(object : java.awt.event.WindowAdapter() {
+            override fun windowActivated(e: java.awt.event.WindowEvent) = loadPreferences()
+        })
         retryFailedButton.addActionListener { retryAllFailed() }
         orderButton.addActionListener {
             transcript.newestFirst = !transcript.newestFirst
@@ -725,21 +755,23 @@ class ConversationWindow(
         deviceModeButton.isSelected = !isAppMode
         appModeButton.isSelected = isAppMode
 
-        val available = languages().filter { it != LanguageCode.AUTO }
+        val translationAvailable = languages().filter { it != LanguageCode.AUTO }
+        val speechAvailable = feature.speechLanguages()?.filter { it != LanguageCode.AUTO }
+        val spokenAvailable = speechAvailable ?: translationAvailable
         val renderer = LanguageRenderer()
-        val spokenChoices = (listOf(LanguageCode.AUTO) + available).toTypedArray()
+        val spokenChoices = (listOf(LanguageCode.AUTO) + spokenAvailable).toTypedArray()
         fun JComboBox<LanguageCode>.fill(tag: String) {
             model = DefaultComboBoxModel(spokenChoices)
             this.renderer = renderer
-            selectedItem = LanguageCode(tag).takeIf { it == LanguageCode.AUTO || it in available } ?: LanguageCode.AUTO
+            selectedItem = LanguageCode(tag).takeIf { it == LanguageCode.AUTO || it in spokenAvailable } ?: LanguageCode.AUTO
         }
         myLanguageCombo.fill(preferences.spokenLanguage)
         callLanguageCombo.fill(preferences.callLanguage)
         renderSpeechStatus()
-        targetCombo.model = DefaultComboBoxModel(available.toTypedArray())
+        targetCombo.model = DefaultComboBoxModel(translationAvailable.toTypedArray())
         targetCombo.renderer = renderer
-        targetCombo.selectedItem = preferences.targetLanguage?.let(::LanguageCode)?.takeIf { it in available }
-            ?: defaultTarget().takeIf { it in available } ?: available.firstOrNull()
+        targetCombo.selectedItem = preferences.targetLanguage?.let(::LanguageCode)?.takeIf { it in translationAvailable }
+            ?: defaultTarget().takeIf { it in translationAvailable } ?: translationAvailable.firstOrNull()
     }
 
     private fun loadDevices() {

@@ -35,7 +35,11 @@ class VoskLiveService(
         }
     override val version: String = "1.0.0"
     override val iconPath: String = "assets/speech.svg"
-    override val supportedLanguages: SupportedLanguages = SupportedLanguages.Dynamic
+    override val supportedLanguages: SupportedLanguages
+        get() = when (settings().liveEngine) {
+            LIVE_VOSK_BUILTIN -> builtinService?.supportedLanguages ?: SupportedLanguages.Dynamic
+            else -> SupportedLanguages.All
+        }
 
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
         val current = settings()

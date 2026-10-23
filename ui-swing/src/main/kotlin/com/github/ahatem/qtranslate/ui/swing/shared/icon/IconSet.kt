@@ -165,6 +165,7 @@ object Icons {
     val TRANSLATE get() = IconSet.path("translate")
     val DICTIONARY get() = IconSet.path("dictionary")
     val SPEAK get() = IconSet.path("speak")
+    val MIC get() = IconSet.path("mic")
     val OCR get() = IconSet.path("ocr")
     val SUMMARIZE get() = IconSet.path("summarize")
     val SERVICE get() = IconSet.path("service")

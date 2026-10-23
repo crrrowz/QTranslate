@@ -214,4 +214,13 @@ class VoskBuiltinServiceTest {
         assertEquals("test", response.words[0].text)
         assertTrue(fakeRecognizer.closed.get(), "Recognizer is closed after transcribeClip completes")
     }
+
+    @Test
+    fun `fixMojibake restores Windows-1252 corrupted UTF-8 Arabic text`() {
+        val corrupted1 = "Ø¬Ø§ÙŠÙ‡ Ø³Ø§Ù„Ø¨ Ø¹Ø±Ø¨ÙŠ"
+        assertEquals("جايه سالب عربي", fixMojibake(corrupted1))
+
+        val plainEnglish = "hello world"
+        assertEquals(plainEnglish, fixMojibake(plainEnglish))
+    }
 }
