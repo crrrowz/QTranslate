@@ -171,9 +171,47 @@ class VoskBuiltinServiceTest {
         session1.cancel()
         session2.cancel()
 
-        assertFalse(lastCreatedModel!!.closed.get(), "Model remains open after individual sessions end")
+        assertFalse(lastCreatedModel?.closed?.get() == true, "Model remains open after individual sessions end")
 
         service.close()
-        assertTrue(lastCreatedModel!!.closed.get(), "Model closes when service is closed")
+        assertTrue(lastCreatedModel?.closed?.get() == true, "Model closes when service is closed")
+    }
+
+    @Test
+    fun `transcribeClip transcribes finished audio clip offline`() = runBlocking {
+        val manager = VoskModelManager({ tempDir })
+        File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply {
+            mkdirs()
+            File(this, "README").writeText("fake model")
+        }
+
+        val fakeRecognizer = FakeRecognizerHandle().apply {
+            finalJson = """{"text":"test offline speech","result":[{"conf":1.0,"start":0.1,"end":0.6,"word":"test"},{"conf":1.0,"start":0.7,"end":1.2,"word":"offline"}]}"""
+        }
+
+        val service = VoskBuiltinService(
+            modelManager = manager,
+            settings = {
+                SpeechSettings(
+                    mode = MODE_LOCAL,
+                    liveEngine = LIVE_VOSK_BUILTIN,
+                    voskBuiltinModel = "vosk-model-small-en-us-0.15"
+                )
+            },
+            modelFactory = {
+                object : VoskModelHandle {
+                    override fun createRecognizer(sampleRate: Float): VoskRecognizerHandle = fakeRecognizer
+                    override fun close() {}
+                }
+            }
+        )
+
+        val response = service.transcribeClip(ByteArray(1600), LanguageCode.ENGLISH).get()
+        assertNotNull(response)
+        assertEquals("test offline speech", response.text)
+        assertEquals(LanguageCode.ENGLISH, response.detectedLanguage)
+        assertEquals(2, response.words.size)
+        assertEquals("test", response.words[0].text)
+        assertTrue(fakeRecognizer.closed.get(), "Recognizer is closed after transcribeClip completes")
     }
 }
