@@ -205,34 +205,8 @@ class VoskModelManager(
                     continue
                 }
 
-                var url = URI(model.url).toURL()
-                var conn = url.openConnection() as HttpURLConnection
-                conn.connectTimeout = 15_000
-                conn.readTimeout = 30_000
-                conn.instanceFollowRedirects = true
-                conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
-
                 downloaded = if (partFile.exists()) partFile.length() else 0L
-                if (downloaded > 0) {
-                    conn.setRequestProperty("Range", "bytes=$downloaded-")
-                }
-
-                var code = conn.responseCode
-                var redirects = 0
-                while (code in listOf(301, 302, 303, 307, 308) && redirects < 5) {
-                    val location = conn.getHeaderField("Location") ?: break
-                    conn.disconnect()
-                    url = URI(location).toURL()
-                    conn = url.openConnection() as HttpURLConnection
-                    conn.connectTimeout = 15_000
-                    conn.readTimeout = 30_000
-                    conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
-                    if (downloaded > 0) {
-                        conn.setRequestProperty("Range", "bytes=$downloaded-")
-                    }
-                    code = conn.responseCode
-                    redirects++
-                }
+                val (conn, code) = openConnectionWithRedirects(model.url, rangeStart = downloaded)
 
                 val append = (code == HttpURLConnection.HTTP_PARTIAL)
                 if (code !in 200..299 && code != HttpURLConnection.HTTP_PARTIAL) {
@@ -505,31 +479,47 @@ class VoskModelManager(
         const val DROPDOWN_OPTIONS: String =
             "vosk-model-small-en-us-0.15,vosk-model-en-us-0.22-lgraph,vosk-model-ar-mgb2-0.4,vosk-model-ar-0.22-linto-1.1.0,vosk-model-small-de-0.15,vosk-model-small-fr-0.22,vosk-model-small-es-0.42,vosk-model-small-it-0.22,vosk-model-small-ru-0.22,vosk-model-small-tr-0.3,vosk-model-small-pt-0.3,vosk-model-small-ja-0.22,vosk-model-small-cn-0.22,vosk-model-small-uk-v3-nano"
 
+        internal fun openConnectionWithRedirects(
+            urlStr: String,
+            rangeStart: Long = 0L,
+            readTimeoutMillis: Int = 30_000
+        ): Pair<HttpURLConnection, Int> {
+            var url = URI(urlStr).toURL()
+            var conn = url.openConnection() as HttpURLConnection
+            conn.connectTimeout = 15_000
+            conn.readTimeout = readTimeoutMillis
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
+            if (rangeStart > 0) {
+                conn.setRequestProperty("Range", "bytes=$rangeStart-")
+            }
+
+            var code = conn.responseCode
+            var redirects = 0
+            while (code in listOf(301, 302, 303, 307, 308) && redirects < 5) {
+                val location = conn.getHeaderField("Location") ?: break
+                conn.disconnect()
+                url = URI(location).toURL()
+                conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 15_000
+                conn.readTimeout = readTimeoutMillis
+                conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
+                if (rangeStart > 0) {
+                    conn.setRequestProperty("Range", "bytes=$rangeStart-")
+                }
+                code = conn.responseCode
+                redirects++
+            }
+            return conn to code
+        }
+
         private suspend fun defaultDownload(
             urlStr: String,
             targetZip: File,
             onProgress: ((Long, Long) -> Unit)?
         ): Result<Unit, ServiceError> = withContext(Dispatchers.IO) {
             try {
-                val url = URI(urlStr).toURL()
-                val connection = url.openConnection() as HttpURLConnection
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 60_000
-                connection.instanceFollowRedirects = true
-
-                var code = connection.responseCode
-                var redirectedConn = connection
-                var redirects = 0
-                while ((code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP || code == 307 || code == 308) && redirects < 5) {
-                    val newLocation = redirectedConn.getHeaderField("Location") ?: break
-                    redirectedConn.disconnect()
-                    val nextUrl = URI(newLocation).toURL()
-                    redirectedConn = nextUrl.openConnection() as HttpURLConnection
-                    redirectedConn.connectTimeout = 15_000
-                    redirectedConn.readTimeout = 60_000
-                    code = redirectedConn.responseCode
-                    redirects++
-                }
+                val (redirectedConn, code) = openConnectionWithRedirects(urlStr, readTimeoutMillis = 60_000)
 
                 if (code !in 200..299) {
                     return@withContext Err(ServiceError.NetworkError("HTTP $code while downloading $urlStr"))
