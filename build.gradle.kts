@@ -18,6 +18,8 @@ data class BundledPlugin(
 ) {
     val releaseFileName = "$id-$version.jar"
     val bundledFileName = "${projectPath.substringAfterLast(':')}-plugin.jar"
+    val releaseArchiveFile: Provider<RegularFile>
+        get() = if (projectPath == ":plugins:speech-services") standaloneArchiveFile else thinArchiveFile
 }
 
 val releaseVersion = providers.gradleProperty("releaseVersion")
@@ -64,10 +66,13 @@ val cleanPluginSmoke by tasks.registering(Delete::class) {
 }
 val preparePluginSmoke by tasks.registering(Sync::class) {
     dependsOn(cleanPluginSmoke)
-    dependsOn(bundledPlugins.map { "${it.projectPath}:jar" })
+    dependsOn(bundledPlugins.map { plugin ->
+        if (plugin.projectPath == ":plugins:speech-services") "${plugin.projectPath}:shadowJar"
+        else "${plugin.projectPath}:jar"
+    })
     into(smokeDirectory.map { it.dir("app-data/plugins") })
     bundledPlugins.forEach { plugin ->
-        from(plugin.thinArchiveFile) {
+        from(plugin.releaseArchiveFile) {
             rename { plugin.bundledFileName }
         }
     }
@@ -94,11 +99,14 @@ val portablePluginInventoryFile = layout.buildDirectory.file("portable-plugin-id
 // The same layout the portable bundle ships. Without `languages/` the localizer falls back to the
 // embedded English strings, so a right-to-left interface never actually loads.
 val prepareScreenshotAppData by tasks.registering(Sync::class) {
-    dependsOn(bundledPlugins.map { "${it.projectPath}:jar" })
+    dependsOn(bundledPlugins.map { plugin ->
+        if (plugin.projectPath == ":plugins:speech-services") "${plugin.projectPath}:shadowJar"
+        else "${plugin.projectPath}:jar"
+    })
     into(screenshotDirectory.map { it.dir("app-data") })
     into("plugins") {
         bundledPlugins.forEach { plugin ->
-            from(plugin.thinArchiveFile) { rename { plugin.bundledFileName } }
+            from(plugin.releaseArchiveFile) { rename { plugin.bundledFileName } }
         }
     }
     into("languages") { from(rootProject.file("languages")) }
@@ -155,7 +163,7 @@ fun Zip.configurePortableBundle(plugins: List<BundledPlugin>) {
             into("THIRD_PARTY_LICENSES")
         }
         plugins.forEach { plugin ->
-            from(plugin.thinArchiveFile) {
+            from(plugin.releaseArchiveFile) {
                 into("plugins")
                 rename { plugin.bundledFileName }
             }
@@ -182,6 +190,7 @@ val assemblePortable by tasks.registering(Zip::class) {
     configurePortableBundle(bundledPlugins)
     dependsOn(cleanRelease)
     dependsOn(validateReleaseVersion)
+    dependsOn(":plugins:speech-services:shadowJar")
 }
 
 val assembleIndividualPlugins by tasks.registering(Copy::class) {
@@ -282,8 +291,8 @@ val validateReleaseSizes by tasks.registering(ValidateReleaseSizesTask::class) {
     // functionality rather than accidental bloat. Budgets stay tight enough to catch a real
     // regression on top of it.
     maxAppBytes.set(58L * 1024 * 1024)
-    maxPortableBytes.set(55L * 1024 * 1024)
-    maxBundledPluginsBytes.set(3L * 1024 * 1024)
+    maxPortableBytes.set(98L * 1024 * 1024)
+    maxBundledPluginsBytes.set(45L * 1024 * 1024)
     reportFile.set(releaseOutputDirectory.map { it.file("SIZE_REPORT.md") })
 }
 
