@@ -21,6 +21,20 @@ const val MODE_CLOUD = "Cloud only"
 const val MODE_HYBRID = "Hybrid"
 const val MODE_OPTIONS = "$MODE_LOCAL,$MODE_CLOUD,$MODE_HYBRID"
 
+enum class SpeechMode(val label: String) {
+    LOCAL(MODE_LOCAL),
+    CLOUD(MODE_CLOUD),
+    HYBRID(MODE_HYBRID);
+
+    companion object {
+        fun fromLabel(label: String?): SpeechMode = when (label?.trim()?.lowercase()) {
+            "local", "local only" -> LOCAL
+            "cloud", "cloud only" -> CLOUD
+            else -> HYBRID
+        }
+    }
+}
+
 /**
  * Two jobs, two groups. Live text appears while people talk (Vosk, Deepgram live, OpenAI Realtime);
  * accurate text replaces each finished line (a Whisper-style provider). Either can be off; with both on, the live
@@ -167,22 +181,23 @@ data class SpeechSettings(
         return manager.statusAction(voskBuiltinModel)
     }
 
+    val speechMode: SpeechMode get() = SpeechMode.fromLabel(mode)
+
     val speechProvider: SpeechProvider
-        get() = if (mode == MODE_LOCAL) SpeechProvider.NONE else SpeechProvider.fromLabel(provider)
+        get() = if (speechMode == SpeechMode.LOCAL) SpeechProvider.NONE else SpeechProvider.fromLabel(provider)
 
     val effectiveLiveApiKey: String get() = liveApiKey.trim().ifEmpty { apiKey.trim() }
 
     val liveEnabled: Boolean
-        get() = when (mode) {
-            MODE_CLOUD -> false
-            MODE_LOCAL -> liveEngine == LIVE_VOSK_BUILTIN
-            MODE_HYBRID -> when (liveEngine) {
+        get() = when (speechMode) {
+            SpeechMode.CLOUD -> false
+            SpeechMode.LOCAL -> liveEngine == LIVE_VOSK_BUILTIN
+            SpeechMode.HYBRID -> when (liveEngine) {
                 LIVE_VOSK_BUILTIN -> true
                 LIVE_DEEPGRAM -> effectiveLiveApiKey.isNotBlank()
                 LIVE_OPENAI -> effectiveLiveApiKey.isNotBlank()
                 else -> false
             }
-            else -> false
         }
 
     /** The address requests go to: the user's, or the provider's when left blank. */
@@ -192,7 +207,7 @@ data class SpeechSettings(
 
     /** What is wrong with the address, or null when it is usable. */
     fun urlError(): ServiceError? {
-        if (mode == MODE_LOCAL || speechProvider == SpeechProvider.NONE) return null
+        if (speechMode == SpeechMode.LOCAL || speechProvider == SpeechProvider.NONE) return null
         val url = effectiveBaseUrl
         if (url.isEmpty()) {
             return ServiceError.ConfigurationError(

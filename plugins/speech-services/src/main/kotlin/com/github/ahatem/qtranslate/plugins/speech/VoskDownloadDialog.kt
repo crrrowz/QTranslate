@@ -37,25 +37,26 @@ class VoskDownloadDialog(
     parent: Window?,
     private val model: VoskModel,
     private val controller: VoskDownloadController
-) : JDialog(parent, "Download Vosk Model", ModalityType.MODELESS) {
+) : JDialog(parent, SpeechLocalization.get("dialog_title")) {
 
-    private val titleLabel = JLabel("Model: ${model.label}").apply {
+    private val titleLabel = JLabel(SpeechLocalization.get("model_label", model.label)).apply {
         font = font.deriveFont(Font.BOLD, 13f)
     }
-    private val sourceLabel = JLabel("Source: alphacephei.com (local offline storage)").apply {
+    private val sourceLabel = JLabel(SpeechLocalization.get("source_label")).apply {
         font = font.deriveFont(Font.PLAIN, 11f)
     }
     private val progressBar = JProgressBar(0, 100).apply {
         isStringPainted = true
         preferredSize = Dimension(430, 24)
     }
-    private val statsLabel = JLabel("Connecting to server...").apply {
+    private val statsLabel = JLabel(SpeechLocalization.get("connecting")).apply {
         font = font.deriveFont(Font.PLAIN, 12f)
     }
-    private val pauseResumeButton = JButton("Pause")
-    private val cancelButton = JButton("Cancel")
+    private val pauseResumeButton = JButton(SpeechLocalization.get("pause"))
+    private val cancelButton = JButton(SpeechLocalization.get("cancel"))
 
     init {
+        modalityType = ModalityType.MODELESS
         defaultCloseOperation = DO_NOTHING_ON_CLOSE
         addWindowListener(object : java.awt.event.WindowAdapter() {
             override fun windowClosing(e: java.awt.event.WindowEvent?) {
@@ -79,11 +80,11 @@ class VoskDownloadDialog(
         pauseResumeButton.addActionListener {
             if (controller.isPaused.get()) {
                 controller.resume()
-                pauseResumeButton.text = "Pause"
-                statsLabel.text = "Resuming download..."
+                pauseResumeButton.text = SpeechLocalization.get("pause")
+                statsLabel.text = SpeechLocalization.get("resuming")
             } else {
                 controller.pause()
-                pauseResumeButton.text = "Resume"
+                pauseResumeButton.text = SpeechLocalization.get("resume")
             }
         }
 
@@ -112,7 +113,7 @@ class VoskDownloadDialog(
             return
         }
         controller.cancel()
-        statsLabel.text = "Cancelling..."
+        statsLabel.text = SpeechLocalization.get("cancelling")
         pauseResumeButton.isEnabled = false
         cancelButton.isEnabled = false
         dispose()
@@ -123,7 +124,7 @@ class VoskDownloadDialog(
             if (controller.isCancelled.get() || !isVisible) return@invokeLater
             if (controller.isPaused.get()) {
                 val pct = if (total > 0) ((downloaded * 100) / total).toInt().coerceIn(0, 100) else 0
-                statsLabel.text = "Paused at ${formatBytes(downloaded)} / ${formatBytes(total)} ($pct%). Click Resume to continue."
+                statsLabel.text = SpeechLocalization.get("paused_stats", formatBytes(downloaded), formatBytes(total), pct)
                 return@invokeLater
             }
             if (total > 0) {
@@ -145,7 +146,7 @@ class VoskDownloadDialog(
     fun notifyExtracting() {
         SwingUtilities.invokeLater {
             progressBar.isIndeterminate = true
-            statsLabel.text = "Extracting model files into local storage..."
+            statsLabel.text = SpeechLocalization.get("extracting")
             pauseResumeButton.isEnabled = false
             cancelButton.isEnabled = false
         }
@@ -156,9 +157,9 @@ class VoskDownloadDialog(
             controller.isFinished.set(true)
             progressBar.isIndeterminate = false
             progressBar.value = 100
-            statsLabel.text = "Done! Model installed successfully."
+            statsLabel.text = SpeechLocalization.get("done")
             pauseResumeButton.isEnabled = false
-            cancelButton.text = "Close"
+            cancelButton.text = SpeechLocalization.get("close")
             cancelButton.isEnabled = true
             val timer = javax.swing.Timer(1200) { dispose() }
             timer.isRepeats = false
@@ -169,9 +170,9 @@ class VoskDownloadDialog(
     fun notifyError(msg: String) {
         SwingUtilities.invokeLater {
             progressBar.isIndeterminate = false
-            statsLabel.text = "Error: $msg"
+            statsLabel.text = SpeechLocalization.get("error", msg)
             pauseResumeButton.isEnabled = false
-            cancelButton.text = "Close"
+            cancelButton.text = SpeechLocalization.get("close")
             cancelButton.isEnabled = true
         }
     }
@@ -188,10 +189,10 @@ class VoskDownloadDialog(
 
         fun formatEta(seconds: Long): String {
             if (seconds < 0) return "--"
-            if (seconds < 60) return "${seconds}s remaining"
+            if (seconds < 60) return SpeechLocalization.get("remaining_sec", seconds)
             val m = seconds / 60
             val s = seconds % 60
-            return "${m}m ${s}s remaining"
+            return SpeechLocalization.get("remaining_min_sec", m, s)
         }
     }
 }

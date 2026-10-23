@@ -69,19 +69,7 @@ class DeepgramLiveService(
     }
 }
 
-class DeepgramLiveSession private constructor() : LiveSpeechSession {
-    private val channel = Channel<LiveSpeechEvent>(Channel.UNLIMITED)
-    override val events: Flow<LiveSpeechEvent> = channel.receiveAsFlow()
-
-    private var socket: WebSocket? = null
-    private val ready = CompletableDeferred<Result<Unit, ServiceError>>()
-    private val closed = CompletableDeferred<Unit>()
-
-    // Sequential send chain to satisfy JDK WebSocket non-overlapping contract
-    private var sendChain: CompletableFuture<*> = CompletableFuture.completedFuture(null)
-
-    @Volatile
-    private var ended = false
+class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram") {
 
     override fun sendAudio(pcm: ByteArray) {
         if (ended || pcm.isEmpty()) return
@@ -92,32 +80,7 @@ class DeepgramLiveSession private constructor() : LiveSpeechSession {
         if (ended) return
         // Deepgram ends stream with an empty binary frame or CloseStream message
         enqueue { it.sendText("""{"type":"CloseStream"}""", true) }
-        withTimeoutOrNull(3_000L) { closed.await() }
-        end(null)
-        runCatching { socket?.sendClose(WebSocket.NORMAL_CLOSURE, "")?.await() }
-    }
-
-    override fun cancel() {
-        end(null)
-        runCatching { socket?.abort() }
-    }
-
-    private fun enqueue(send: (WebSocket) -> CompletableFuture<WebSocket>) {
-        val ws = socket ?: return
-        synchronized(this) {
-            sendChain = sendChain.thenCompose { send(ws) }.exceptionally { error ->
-                end(ServiceError.NetworkError("Deepgram live connection error: ${error.message}", error))
-                null
-            }
-        }
-    }
-
-    private fun end(failure: ServiceError?) {
-        if (ended) return
-        ended = true
-        failure?.let { channel.trySend(LiveSpeechEvent.Failed(it)) }
-        channel.close()
-        closed.complete(Unit)
+        closeSocket()
     }
 
     private fun handleMessage(text: String) {
