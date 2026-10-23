@@ -176,13 +176,11 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
         // Highlight colors for the very first card (the latest message in newestFirst mode)
         val latestCardBg = if (isDark) {
-            // Subtle warm amber / gold tint in dark mode
-            Color((defaultCardBg.red + 26).coerceAtMost(255), (defaultCardBg.green + 20).coerceAtMost(255), (defaultCardBg.blue + 2).coerceAtMost(255))
+            Color(46, 38, 18)
         } else {
-            // Soft warm cream / light yellow tint in light mode
-            Color(255, 250, 225)
+            Color(255, 248, 205)
         }
-        val latestBorderColor = if (isDark) Color(255, 210, 80, 100) else Color(220, 175, 40, 140)
+        val latestBorderColor = if (isDark) Color(245, 190, 45, 220) else Color(215, 160, 20, 220)
 
         // Draw individual cards behind each segment span
         spans.forEachIndexed { index, span ->
