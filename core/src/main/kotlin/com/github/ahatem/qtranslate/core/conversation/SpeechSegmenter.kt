@@ -19,10 +19,10 @@ import kotlin.math.sqrt
  */
 class SpeechSegmenter(
     private val sampleRate: Int = PcmStream.SAMPLE_RATE,
-    private val silenceToEndMillis: Int = 700,
-    private val minSpeechMillis: Int = 300,
-    private val maxUtteranceMillis: Int = 15_000,
-    private val preRollMillis: Int = 250
+    private val silenceToEndMillis: Int = 1_400,
+    private val minSpeechMillis: Int = 500,
+    private val maxUtteranceMillis: Int = 25_000,
+    private val preRollMillis: Int = 300
 ) {
     /** A finished stretch of speech. */
     class Utterance(val startSample: Long, val pcm: ByteArray) {

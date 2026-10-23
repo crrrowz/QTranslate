@@ -281,6 +281,12 @@ class ConversationRecorder(
         }
     }
 
+    @Volatile
+    var isMicrophoneMuted: Boolean = false
+
+    @Volatile
+    var isSystemMuted: Boolean = false
+
     fun updateSpokenLanguage(language: LanguageCode) {
         options = options?.copy(microphoneLanguage = language)
         scope.launch { updateSession { it.copy(spokenLanguage = language.tag) } }
@@ -345,18 +351,8 @@ class ConversationRecorder(
             }
         }
 
-        // If it's on the MICROPHONE stream, check if an earlier SYSTEM segment echoed this speech, and remove that echo
-        var segments = current.segments
-        if (segment.source == AudioSource.MICROPHONE && segment.text.isNotBlank()) {
-            val echoed = segments.filter { it.source == AudioSource.SYSTEM && isEchoPair(it, segment) }
-            if (echoed.isNotEmpty()) {
-                logger.warn("Retroactive echo detected: removing ${echoed.size} echoed call segment(s)")
-                _state.update { it.copy(notice = RecorderNotice.EchoDetected) }
-                segments = segments.filterNot { it in echoed }
-            }
-        }
-
-        return current.copy(segments = segments).withSegment(segment)
+        // Both MICROPHONE and SYSTEM streams operate as independent channels without cancelling each other.
+        return current.withSegment(segment)
     }
 
     private fun isEcho(candidate: TranscriptSegment, allSegments: List<TranscriptSegment>): Boolean =
@@ -524,8 +520,10 @@ class ConversationRecorder(
                     flushedForPause = false
                     if (chunk.isEmpty()) continue
                     val playing = isPlaybackActive()
-                    val effectiveChunk = if (playing) ByteArray(chunk.size) else chunk
-                    if (playing) {
+                    val isMuted = (source == AudioSource.MICROPHONE && isMicrophoneMuted) ||
+                        (source == AudioSource.SYSTEM && isSystemMuted)
+                    val effectiveChunk = if (playing || isMuted) ByteArray(chunk.size) else chunk
+                    if (playing || isMuted) {
                         segmenter.resetUtterance()
                     }
                     if (offsetMillis == null) {
@@ -544,7 +542,7 @@ class ConversationRecorder(
 
                         val session = live
                         if (session != null) {
-                            if (!playing) {
+                            if (!playing && !isMuted) {
                                 session.sendAudio(effectiveChunk)
                             }
                             samplesSentToLive = samplesWritten
@@ -553,10 +551,6 @@ class ConversationRecorder(
                             val completed = segmenter.accept(effectiveChunk)
                             if (voicedStartSample == null) {
                                 voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
-                            }
-                            if (completed.isNotEmpty() && !playing) {
-                                // Natural pause detected by VAD: feed silence to ensure Kaldi/live recognizer commits trailing words
-                                session.sendAudio(ByteArray(1600 * 2))
                             }
                         } else {
                             segmenter.accept(effectiveChunk).forEach(::announce)

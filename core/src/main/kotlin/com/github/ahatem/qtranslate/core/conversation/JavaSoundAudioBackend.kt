@@ -26,24 +26,30 @@ class JavaSoundAudioBackend : AudioBackend {
     override fun open(device: AudioDevice): PcmStream {
         // Names are not unique: SteelSeries Sonar, for one, has an output and an input both called
         // "Sonar - Microphone". Only the one that can record is wanted.
-        val mixer = AudioSystem.getMixerInfo()
-            .filter { it.name == device.id }
-            .map(AudioSystem::getMixer)
-            .firstOrNull { it.canRecord() }
-            ?: throw AudioDeviceUnavailableException(device)
+        var lastError: Exception? = null
+        for (attempt in 1..4) {
+            val mixer = AudioSystem.getMixerInfo()
+                .filter { it.name == device.id }
+                .map(AudioSystem::getMixer)
+                .firstOrNull { it.canRecord() }
 
-        for (format in CANDIDATE_FORMATS) {
-            val info = DataLine.Info(TargetDataLine::class.java, format)
-            if (!runCatching { mixer.isLineSupported(info) }.getOrDefault(false)) continue
-            val line = try {
-                (mixer.getLine(info) as TargetDataLine).apply { open(format, bufferBytes(format)) }
-            } catch (e: Exception) {
-                continue
+            if (mixer != null) {
+                for (format in CANDIDATE_FORMATS) {
+                    val info = DataLine.Info(TargetDataLine::class.java, format)
+                    if (!runCatching { mixer.isLineSupported(info) }.getOrDefault(false)) continue
+                    val line = try {
+                        (mixer.getLine(info) as TargetDataLine).apply { open(format, bufferBytes(format)) }
+                    } catch (e: Exception) {
+                        lastError = e
+                        continue
+                    }
+                    line.start()
+                    return JavaSoundPcmStream(line, format)
+                }
             }
-            line.start()
-            return JavaSoundPcmStream(line, format)
+            if (attempt < 4) Thread.sleep(250)
         }
-        throw AudioDeviceUnavailableException(device)
+        throw AudioDeviceUnavailableException(device, lastError)
     }
 
     private fun bufferBytes(format: AudioFormat): Int =

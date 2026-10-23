@@ -173,6 +173,26 @@ class ConversationWindow(
         liveLines.values.forEach { add(it, "wmin 0") }
         isVisible = false
     }
+    private val micMuteButton = JButton("🎙").apply {
+        toolTipText = "Mute / Unmute Microphone"
+        putClientProperty("JButton.buttonType", "toolBarButton")
+        margin = Insets(2, 6, 2, 6)
+        addActionListener {
+            recorder.isMicrophoneMuted = !recorder.isMicrophoneMuted
+            text = if (recorder.isMicrophoneMuted) "🎙 Muted" else "🎙"
+            foreground = if (recorder.isMicrophoneMuted) (UIManager.getColor("Actions.Red") ?: Color.RED) else null
+        }
+    }
+    private val callMuteButton = JButton("🔊").apply {
+        toolTipText = "Mute / Unmute Call Audio"
+        putClientProperty("JButton.buttonType", "toolBarButton")
+        margin = Insets(2, 6, 2, 6)
+        addActionListener {
+            recorder.isSystemMuted = !recorder.isSystemMuted
+            text = if (recorder.isSystemMuted) "🔊 Muted" else "🔊"
+            foreground = if (recorder.isSystemMuted) (UIManager.getColor("Actions.Red") ?: Color.RED) else null
+        }
+    }
     private val transcriptScroll = JScrollPane(transcript)
     private val orderButton = JButton("⇅ Newest at top").apply {
         putClientProperty("JButton.buttonType", "toolBarButton")
@@ -261,10 +281,11 @@ class ConversationWindow(
         // A typical-length prototype sizes them instead, and "wmin" lets each give way further, so
         // the pickers share whatever width the window has rather than overlapping or clipping.
         listOf(microphoneCombo, systemCombo).forEach { it.prototypeDisplayValue = DeviceItem(null, "SteelSeries Sonar - Chat (Virtual)") }
-        val pickers = shrinkable(MigLayout("fillx, insets 10 12 4 12, gap 8 6", "[trailing][grow,fill][trailing][grow,fill][][]")).apply {
-            // Row 1: Audio Devices with Test and Refresh buttons
+        val pickers = shrinkable(MigLayout("fillx, insets 10 12 4 12, gap 8 6", "[trailing][grow,fill][][trailing][grow,fill][][][]")).apply {
+            // Row 1: Audio Devices with Mute, Test and Refresh buttons
             add(JLabel(strings.microphone))
             add(microphoneCombo, "wmin 100, growx")
+            add(micMuteButton)
 
             val callHeader = JPanel(FlowLayout(FlowLayout.TRAILING, 4, 0)).apply {
                 isOpaque = false
@@ -284,6 +305,7 @@ class ConversationWindow(
             }
             add(callHeader)
             add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "wmin 100, growx")
+            add(callMuteButton)
             add(testDevicesButton)
             add(refreshDevicesButton, "wrap")
 
@@ -553,7 +575,26 @@ class ConversationWindow(
         val options = arrayOf(strings.closeStop, strings.closeKeep, strings.cancel)
         when (JOptionPane.showOptionDialog(this, strings.closeWhileRecording, strings.title,
             JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0])) {
-            0 -> scope.launch { recorder.stop(); isVisible = false }
+            0 -> scope.launch {
+                val current = recorder.state.value.session
+                recorder.stop()
+                if (current != null) {
+                    val saveChoice = JOptionPane.showConfirmDialog(
+                        this@ConversationWindow,
+                        strings.confirmSaveSession,
+                        strings.confirmSaveTitle,
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE
+                    )
+                    if (saveChoice == JOptionPane.NO_OPTION) {
+                        feature.repository.delete(current.id)
+                        viewed = null
+                        transcript.render(null)
+                        reloadSessions()
+                    }
+                }
+                isVisible = false
+            }
             1 -> { hideCard(); isVisible = false } // keeps recording; the menu brings the window back
         }
     }
@@ -625,14 +666,20 @@ class ConversationWindow(
         if (active || state.phase == RecorderPhase.STOPPING) {
             val liveSegments = state.live.mapNotNull { (source, line) ->
                 if (line.text.isBlank()) null
-                else TranscriptSegment(
-                    id = "live-${source.name.lowercase()}",
-                    source = source,
-                    startMillis = line.startMillis,
-                    endMillis = maxOf(line.startMillis, state.elapsedMillis),
-                    text = line.text,
-                    draft = true
-                )
+                else {
+                    val alreadySettled = state.session?.segments?.any {
+                        it.source == source && (kotlin.math.abs(it.startMillis - line.startMillis) < 1_500L || it.text.trim().equals(line.text.trim(), ignoreCase = true))
+                    } == true
+                    if (alreadySettled) null
+                    else TranscriptSegment(
+                        id = "live-${source.name.lowercase()}",
+                        source = source,
+                        startMillis = line.startMillis,
+                        endMillis = maxOf(line.startMillis, state.elapsedMillis),
+                        text = line.text,
+                        draft = true
+                    )
+                }
             }
             val sessionToRender = if (liveSegments.isEmpty()) state.session else {
                 state.session?.let { s -> s.copy(segments = s.segments + liveSegments) }
