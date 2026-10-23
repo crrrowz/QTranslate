@@ -20,6 +20,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - Fixed an issue where Windows System OCR would fail with an argument null exception in `windows-ocr.ps1` when an image contained no detectable text lines
+- Disabled Java2D Direct3D acceleration by default on Windows (`sun.java2d.d3d=false`) in `AppUiSetup` to eliminate GPU-specific rendering artifacts (white blocks, tearing, duplicated toolbars) on NVIDIA and multi-GPU systems
+- Constrained Conversation Sessions phrase selection in the transcript pane to spoken text spans, ignoring header row elements
 
 ## [1.5.0] — 2026-09-29
 
