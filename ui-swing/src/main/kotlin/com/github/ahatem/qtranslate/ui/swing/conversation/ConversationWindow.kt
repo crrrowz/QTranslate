@@ -1,6 +1,7 @@
 package com.github.ahatem.qtranslate.ui.swing.conversation
 
 import com.github.ahatem.qtranslate.api.language.LanguageCode
+import com.github.ahatem.qtranslate.core.conversation.AudioBackend
 import com.github.ahatem.qtranslate.core.conversation.AudioDevice
 import com.github.ahatem.qtranslate.core.conversation.AudioLevels
 import com.github.ahatem.qtranslate.core.conversation.AudioSource
@@ -631,43 +632,25 @@ class ConversationWindow(
             val startTime = System.currentTimeMillis()
             val durationMillis = 3_000L
 
-            val micJob = micDevice?.let { dev ->
-                launch(Dispatchers.IO) {
-                    runCatching {
-                        val stream = feature.microphoneBackend.open(dev)
-                        try {
-                            while (System.currentTimeMillis() - startTime < durationMillis && testingDevices) {
-                                val chunk = stream.read() ?: break
-                                val level = AudioLevels.rmsLevel(chunk)
-                                withContext(Dispatchers.Swing) {
-                                    microphoneLight.render(StreamStatus(state = StreamState.LIVE, level = level, deviceName = dev.name))
-                                }
+            fun monitorDeviceLevel(backend: AudioBackend, dev: AudioDevice, light: StreamLight) = launch(Dispatchers.IO) {
+                runCatching {
+                    val stream = backend.open(dev)
+                    try {
+                        while (System.currentTimeMillis() - startTime < durationMillis && testingDevices) {
+                            val chunk = stream.read() ?: break
+                            val level = AudioLevels.rmsLevel(chunk)
+                            withContext(Dispatchers.Swing) {
+                                light.render(StreamStatus(state = StreamState.LIVE, level = level, deviceName = dev.name))
                             }
-                        } finally {
-                            runCatching { stream.close() }
                         }
+                    } finally {
+                        runCatching { stream.close() }
                     }
                 }
             }
 
-            val sysJob = sysDevice?.let { dev ->
-                launch(Dispatchers.IO) {
-                    runCatching {
-                        val stream = feature.systemBackend.open(dev)
-                        try {
-                            while (System.currentTimeMillis() - startTime < durationMillis && testingDevices) {
-                                val chunk = stream.read() ?: break
-                                val level = AudioLevels.rmsLevel(chunk)
-                                withContext(Dispatchers.Swing) {
-                                    systemLight.render(StreamStatus(state = StreamState.LIVE, level = level, deviceName = dev.name))
-                                }
-                            }
-                        } finally {
-                            runCatching { stream.close() }
-                        }
-                    }
-                }
-            }
+            val micJob = micDevice?.let { monitorDeviceLevel(feature.microphoneBackend, it, microphoneLight) }
+            val sysJob = sysDevice?.let { monitorDeviceLevel(feature.systemBackend, it, systemLight) }
 
             while (System.currentTimeMillis() - startTime < durationMillis && testingDevices) {
                 val remainingSec = ((durationMillis - (System.currentTimeMillis() - startTime) + 999) / 1000).toInt()
