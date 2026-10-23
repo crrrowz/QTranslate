@@ -85,7 +85,8 @@ class ConversationFeature(
         set(value) = ConversationPreferences.save(preferencesFile, value)
 
     /** Whether a speech service is active, so the window can say so before recording starts. */
-    val hasSpeechService: Boolean get() = speechServiceName != null
+    val hasSpeechService: Boolean
+        get() = (speechServiceName != null && speechServiceName != "Speech Recognition (None (live text only))") || liveServiceName != null
 
     /** The active speech service's name, e.g. "Speech Recognition (Groq)", or null when none is. */
     val speechServiceName: String?

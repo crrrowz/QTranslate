@@ -164,7 +164,7 @@ data class SpeechSettings(
     )
     fun checkModels(): String? {
         val manager = modelManager ?: return "Model manager not initialized."
-        return manager.statusAction()
+        return manager.statusAction(voskBuiltinModel)
     }
 
     val speechProvider: SpeechProvider

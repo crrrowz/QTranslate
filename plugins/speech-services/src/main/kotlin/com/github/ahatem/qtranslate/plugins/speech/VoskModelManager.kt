@@ -71,15 +71,13 @@ class VoskModelManager(
         if (!preferredModelName.isNullOrBlank()) {
             val preferredDir = File(modelsDirectory, preferredModelName)
             if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
-                // If it matches the language or if language is generic, return it
                 val info = MODELS_BY_NAME[preferredModelName]
-                if (info == null || info.language == lang) {
+                if (info == null || info.language == lang || lang == "au") {
                     return preferredDir
                 }
             }
         }
 
-        // Check installed models matching language
         val installed = listInstalledModels()
         val matchingInstalled = installed.firstOrNull { dir ->
             val info = MODELS_BY_NAME[dir.name]
@@ -87,12 +85,15 @@ class VoskModelManager(
         }
         if (matchingInstalled != null) return matchingInstalled
 
-        // Fallback: if preferredModel is installed regardless of language tag
-        if (!preferredModelName.isNullOrBlank()) {
-            val preferredDir = File(modelsDirectory, preferredModelName)
-            if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
-                return preferredDir
+        // If language is "auto", fall back to preferred model or first installed model
+        if (lang == "au") {
+            if (!preferredModelName.isNullOrBlank()) {
+                val preferredDir = File(modelsDirectory, preferredModelName)
+                if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
+                    return preferredDir
+                }
             }
+            return installed.firstOrNull()
         }
 
         return null
@@ -152,28 +153,36 @@ class VoskModelManager(
         val model = MODELS_BY_NAME[modelName]
             ?: return "Unknown model '$modelName'."
         if (!isInstalled(model.name)) {
-            return "Model '${model.label}' is not installed on disk."
+            return "Model '${model.label}' is not downloaded on this machine."
         }
         val deleted = deleteModel(model.name)
         return if (deleted) {
-            "Model '${model.label}' has been deleted from local storage."
+            "Model '${model.label}' has been successfully deleted from your computer."
         } else {
             "Failed to delete model '${model.label}'. Please check file permissions."
         }
     }
 
     /** Message for the settings "Check Models" action. */
-    fun statusAction(): String {
+    fun statusAction(selectedModelName: String? = null): String {
         val installed = listInstalledModels()
+        val selected = selectedModelName?.let { MODELS_BY_NAME[it] }
+        val sb = StringBuilder()
+        if (selected != null) {
+            val isInst = isInstalled(selected.name)
+            sb.append("Selected model: ${selected.label}\nStatus: ${if (isInst) "✓ Installed and ready to use" else "✗ Not downloaded yet"}\n\n")
+        }
         if (installed.isEmpty()) {
-            return "No built-in Vosk models downloaded yet.\nChoose a model from the dropdown and click 'Download Model'."
+            sb.append("No built-in Vosk models downloaded yet.\nChoose a model from the dropdown and click 'Download Model'.")
+        } else {
+            sb.append("Installed Vosk models (${installed.size}):\n")
+            installed.forEach { dir ->
+                val info = MODELS_BY_NAME[dir.name]
+                val desc = info?.label ?: dir.name
+                sb.append("• $desc (${dir.name})\n")
+            }
         }
-        val lines = installed.map { dir ->
-            val info = MODELS_BY_NAME[dir.name]
-            val desc = info?.label ?: dir.name
-            "• $desc (${dir.name})"
-        }
-        return "Installed Vosk models (${installed.size}):\n" + lines.joinToString("\n")
+        return sb.toString().trimEnd()
     }
 
     /**
@@ -399,18 +408,18 @@ class VoskModelManager(
                 isLarge = true
             ),
             VoskModel(
-                name = "vosk-model-small-ar-mgb2-0.4",
+                name = "vosk-model-ar-mgb2-0.4",
                 language = "ar",
-                label = "Arabic small ~31MB",
-                sizeBytes = 31 * 1024 * 1024L,
-                url = "https://alphacephei.com/vosk/models/vosk-model-small-ar-mgb2-0.4.zip",
+                label = "Arabic ~318MB",
+                sizeBytes = 333_241_610L,
+                url = "https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip",
                 isLarge = false
             ),
             VoskModel(
                 name = "vosk-model-ar-0.22-linto-1.1.0",
                 language = "ar",
-                label = "Arabic large ~318MB",
-                sizeBytes = 318 * 1024 * 1024L,
+                label = "Arabic large ~1.3GB",
+                sizeBytes = 1_377_395_170L,
                 url = "https://alphacephei.com/vosk/models/vosk-model-ar-0.22-linto-1.1.0.zip",
                 isLarge = true
             ),
@@ -500,7 +509,7 @@ class VoskModelManager(
         const val DEFAULT_MODEL_NAME = "vosk-model-small-en-us-0.15"
 
         const val DROPDOWN_OPTIONS: String =
-            "vosk-model-small-en-us-0.15,vosk-model-en-us-0.22-lgraph,vosk-model-small-ar-mgb2-0.4,vosk-model-ar-0.22-linto-1.1.0,vosk-model-small-de-0.15,vosk-model-small-fr-0.22,vosk-model-small-es-0.42,vosk-model-small-it-0.22,vosk-model-small-ru-0.22,vosk-model-small-tr-0.3,vosk-model-small-pt-0.3,vosk-model-small-ja-0.22,vosk-model-small-cn-0.22,vosk-model-small-uk-v3-nano"
+            "vosk-model-small-en-us-0.15,vosk-model-en-us-0.22-lgraph,vosk-model-ar-mgb2-0.4,vosk-model-ar-0.22-linto-1.1.0,vosk-model-small-de-0.15,vosk-model-small-fr-0.22,vosk-model-small-es-0.42,vosk-model-small-it-0.22,vosk-model-small-ru-0.22,vosk-model-small-tr-0.3,vosk-model-small-pt-0.3,vosk-model-small-ja-0.22,vosk-model-small-cn-0.22,vosk-model-small-uk-v3-nano"
 
         private suspend fun defaultDownload(
             urlStr: String,

@@ -100,7 +100,8 @@ class VoskBuiltinService(
 
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
         val current = settings()
-        val lang = SpeechClient.primaryTag(language) ?: "en"
+        val preferredInfo = VoskModelManager.MODELS_BY_NAME[current.voskBuiltinModel]
+        val lang = SpeechClient.primaryTag(language) ?: preferredInfo?.language ?: "en"
 
         val modelDir = modelManager.findModelForLanguage(lang, current.voskBuiltinModel)
             ?: return Err(

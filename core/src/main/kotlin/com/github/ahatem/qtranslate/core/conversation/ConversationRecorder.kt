@@ -483,7 +483,7 @@ class ConversationRecorder(
                             if (voicedStartSample == null) {
                                 voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
                             }
-                        } else if (liveUnavailable) {
+                        } else {
                             segmenter.accept(effectiveChunk).forEach(::announce)
                         }
                     }
