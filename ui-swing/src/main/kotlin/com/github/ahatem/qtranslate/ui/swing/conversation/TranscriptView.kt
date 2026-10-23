@@ -73,6 +73,20 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         isOpaque = false // Allows custom card background rendering in paintComponent
         border = javax.swing.BorderFactory.createEmptyBorder(12, 16, 16, 16)
         font = font.deriveFont(font.size2D + 2f)
+
+        // Clear any text selection that is dragged exclusively across the header or play button
+        addCaretListener { e ->
+            val dot = e.dot
+            val mark = e.mark
+            if (dot != mark) {
+                val start = minOf(dot, mark)
+                val end = maxOf(dot, mark)
+                val span = spans.firstOrNull { it.textEnd > start && it.playStart <= end }
+                if (span != null && end <= span.textStart) {
+                    SwingUtilities.invokeLater { select(0, 0) }
+                }
+            }
+        }
     }
 
     /**
@@ -153,17 +167,31 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         g2.fillRect(0, 0, width, height)
 
         val isDark = isDark(bg)
-        val cardBg = if (isDark) {
+        val defaultCardBg = if (isDark) {
             Color((bg.red + 14).coerceAtMost(255), (bg.green + 14).coerceAtMost(255), (bg.blue + 16).coerceAtMost(255))
         } else {
             Color((bg.red - 8).coerceAtLeast(0), (bg.green - 8).coerceAtLeast(0), (bg.blue - 8).coerceAtLeast(0))
         }
-        val borderColor = if (isDark) Color(255, 255, 255, 22) else Color(0, 0, 0, 20)
+        val defaultBorderColor = if (isDark) Color(255, 255, 255, 22) else Color(0, 0, 0, 20)
+
+        // Highlight colors for the very first card (the latest message in newestFirst mode)
+        val latestCardBg = if (isDark) {
+            // Subtle warm amber / gold tint in dark mode
+            Color((defaultCardBg.red + 26).coerceAtMost(255), (defaultCardBg.green + 20).coerceAtMost(255), (defaultCardBg.blue + 2).coerceAtMost(255))
+        } else {
+            // Soft warm cream / light yellow tint in light mode
+            Color(255, 250, 225)
+        }
+        val latestBorderColor = if (isDark) Color(255, 210, 80, 100) else Color(220, 175, 40, 140)
 
         // Draw individual cards behind each segment span
-        spans.forEach { span ->
-            val topBox = runCatching { modelToView2D(span.playStart) }.getOrNull() ?: return@forEach
-            val bottomBox = runCatching { modelToView2D(span.textEnd) }.getOrNull() ?: return@forEach
+        spans.forEachIndexed { index, span ->
+            val topBox = runCatching { modelToView2D(span.playStart) }.getOrNull() ?: return@forEachIndexed
+            val bottomBox = runCatching { modelToView2D(span.textEnd) }.getOrNull() ?: return@forEachIndexed
+
+            val isLatest = index == 0
+            val cardBg = if (isLatest) latestCardBg else defaultCardBg
+            val borderColor = if (isLatest) latestBorderColor else defaultBorderColor
 
             val x = 10
             val y = topBox.y.toInt() - 4
@@ -174,8 +202,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             g2.color = cardBg
             g2.fillRoundRect(x, y, w, h, 10, 10)
 
-            // Accent stripe on the left edge (blue for ME, green for CALL)
-            g2.color = sourceColor(span.segment.source)
+            // Accent stripe on the left edge (amber for latest message, or blue for ME / green for CALL)
+            g2.color = if (isLatest) Color(245, 175, 35) else sourceColor(span.segment.source)
             g2.fillRoundRect(x, y, 4, h, 4, 4)
 
             // Subtle card border
