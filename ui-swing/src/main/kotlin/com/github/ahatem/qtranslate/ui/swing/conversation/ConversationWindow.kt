@@ -806,18 +806,25 @@ class ConversationWindow(
         val start = transcript.selectionStart
         val end = transcript.selectionEnd
         if (start == end) return
-        val phrase = transcript.selectedText?.trim().orEmpty()
-        if (phrase.isEmpty() || phrase.length > MAX_PHRASE_CHARS) return
 
-        val spans = transcript.spans.filter { it.textEnd > start && it.textStart < end }
-        val span = spans.singleOrNull()
-        val timed = span?.words?.filter { (chars, _) -> chars.first < end && chars.last >= start }?.map { it.second }.orEmpty()
-        val anchor = transcript.boundsOf(start until end) ?: return
+        // Must overlap actual spoken text, never the header row (play button, speaker, timestamp)
+        val span = transcript.spans.firstOrNull { it.textEnd > start && it.textStart < end } ?: return
+        if (end <= span.textStart || start >= span.textEnd) return
+
+        val effectiveStart = maxOf(start, span.textStart)
+        val effectiveEnd = minOf(end, span.textEnd)
+        if (effectiveStart >= effectiveEnd) return
+
+        val phrase = transcript.textOf(effectiveStart until effectiveEnd).trim()
+        if (phrase.isEmpty() || phrase.length > MAX_PHRASE_CHARS || phrase.none { it.isLetterOrDigit() }) return
+
+        val timed = span.words.filter { (chars, _) -> chars.first < effectiveEnd && chars.last >= effectiveStart }.map { it.second }
+        val anchor = transcript.boundsOf(effectiveStart until effectiveEnd) ?: return
         val session = displayedSession() ?: return
 
-        showCard(anchor, phrase, contextSentence = null, onPlay = timed.takeIf { it.isNotEmpty() && span != null }?.let {
-            { playRange(span!!.segment, it.first().startMillis, it.last().endMillis) }
-        }, segment = span?.segment, session = session)
+        showCard(anchor, phrase, contextSentence = null, onPlay = timed.takeIf { it.isNotEmpty() }?.let {
+            { playRange(span.segment, it.first().startMillis, it.last().endMillis) }
+        }, segment = span.segment, session = session)
     }
 
     private fun showWordCard() {
