@@ -244,23 +244,23 @@ class ConversationWindow(
         // Device names run to 70 characters, and a combo box will not shrink below its widest item.
         // A typical-length prototype sizes them instead, and "wmin" lets each give way further, so
         // the pickers share whatever width the window has rather than overlapping or clipping.
-        listOf(microphoneCombo, systemCombo).forEach { it.prototypeDisplayValue = DeviceItem(null, "Headset Microphone (USB)") }
-        // Only the pickers share a grid. The wider rows below are panels of their own: a row that
-        // spans grid columns makes MigLayout widen the last column to its preferred width and
-        // never give it back, which clipped the right-hand side of the window.
-        val pickers = shrinkable(MigLayout("fillx, insets 10 12 4 12, gap 8 6", "[][60:200:,grow,fill][][60:200:,grow,fill]")).apply {
+        listOf(microphoneCombo, systemCombo).forEach { it.prototypeDisplayValue = DeviceItem(null, "SteelSeries Sonar - Chat (Virtual)") }
+        val pickers = shrinkable(MigLayout("fillx, insets 10 12 4 12, gap 8 6", "[trailing][grow,fill][trailing][grow,fill][][]")).apply {
+            // Row 1: Audio Devices with Test and Refresh buttons
             add(JLabel(strings.microphone))
-            add(microphoneCombo, "wmin 60")
+            add(microphoneCombo, "wmin 100, growx")
             add(JLabel(strings.callAudio).apply { toolTipText = strings.callAudioTooltip })
-            add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "split 3, growx, wmin 60")
+            add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "wmin 100, growx")
             add(testDevicesButton)
             add(refreshDevicesButton, "wrap")
+
+            // Row 2: Languages
             add(JLabel(strings.myLanguage))
-            add(myLanguageCombo, "wmin 60")
+            add(myLanguageCombo, "wmin 90, growx")
             add(JLabel(strings.callLanguage))
-            add(callLanguageCombo, "wmin 60, wrap")
+            add(callLanguageCombo, "wmin 90, growx")
             add(JLabel(strings.translateTo))
-            add(targetCombo, "wmin 60")
+            add(targetCombo, "wmin 90, wrap")
         }
         val speechRow = shrinkable(MigLayout("fillx, insets 0 12 4 12, gap 8", "[grow,fill][]")).apply {
             add(speechLabel, "wmin 0")
