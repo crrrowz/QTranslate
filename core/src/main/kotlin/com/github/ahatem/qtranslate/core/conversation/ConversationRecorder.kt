@@ -464,7 +464,7 @@ class ConversationRecorder(
                         offsetMillis = offset
                         updateSession { it.copy(streams = it.streams + SessionStream(source, device.name, offset)) }
                     }
-                    writer?.write(effectiveChunk)
+                    writer?.write(chunk)
                     val chunkCopy = effectiveChunk.copyOf()
                     synchronized(liveLock) {
                         rollingBuffer.addLast(chunkCopy)
