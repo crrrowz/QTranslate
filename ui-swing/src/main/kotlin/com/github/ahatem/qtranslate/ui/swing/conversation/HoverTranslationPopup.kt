@@ -1,5 +1,7 @@
 package com.github.ahatem.qtranslate.ui.swing.conversation
 
+import com.formdev.flatlaf.extras.FlatSVGIcon
+import com.github.ahatem.qtranslate.ui.swing.shared.icon.Icons
 import net.miginfocom.swing.MigLayout
 import java.awt.BorderLayout
 import java.awt.Color
@@ -76,11 +78,11 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
         add(context, BorderLayout.CENTER)
     }
 
-    private val playWord = JButton("▶ ${strings.playWord}")
-    private val playSentence = JButton("▶ ${strings.playSentence}")
-    private val sentenceButton = JButton("💬 ${strings.inContext}")
+    private val playWord = JButton(strings.playWord, FlatSVGIcon(Icons.PLAY, 12, 12))
+    private val playSentence = JButton(strings.playSentence, FlatSVGIcon(Icons.PLAY, 12, 12))
+    private val sentenceButton = JButton(strings.inContext)
     private val meaningsButton = JButton(strings.meanings)
-    private val copyButton = JButton(strings.copy)
+    private val copyButton = JButton(strings.copy, FlatSVGIcon(Icons.COPY, 12, 12))
 
     private val panel = JPanel(MigLayout("wrap 1, insets 10 12 10 12, gap 6, wmax 430")).apply {
         border = BorderFactory.createCompoundBorder(

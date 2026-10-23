@@ -98,7 +98,7 @@ class VoskBuiltinServiceTest {
         kotlinx.coroutines.delay(50)
         val finalEvent = eventsList.filterIsInstance<LiveSpeechEvent.Final>().firstOrNull()
         assertNotNull(finalEvent)
-        assertEquals("testing completed", finalEvent.text)
+        assertEquals("Testing completed", finalEvent.text)
         assertEquals(1, finalEvent.words.size)
         assertEquals("testing", finalEvent.words[0].text)
         assertEquals(100L, finalEvent.words[0].startMillis)
@@ -110,7 +110,7 @@ class VoskBuiltinServiceTest {
         collectJob.join()
 
         assertTrue(recognizer.closed.get())
-        assertTrue(eventsList.any { it is LiveSpeechEvent.Final && it.text == "done" })
+        assertTrue(eventsList.any { it is LiveSpeechEvent.Final && it.text == "Done" })
     }
 
     @Test
@@ -208,7 +208,7 @@ class VoskBuiltinServiceTest {
 
         val response = service.transcribeClip(ByteArray(1600), LanguageCode.ENGLISH).get()
         assertNotNull(response)
-        assertEquals("test offline speech", response.text)
+        assertEquals("Test offline speech", response.text)
         assertEquals(LanguageCode.ENGLISH, response.detectedLanguage)
         assertEquals(2, response.words.size)
         assertEquals("test", response.words[0].text)
@@ -222,5 +222,14 @@ class VoskBuiltinServiceTest {
 
         val plainEnglish = "hello world"
         assertEquals(plainEnglish, fixMojibake(plainEnglish))
+    }
+
+    @Test
+    fun `formatVoskText capitalizes English sentences and I pronouns`() {
+        val raw = "i think i'm ready to go"
+        assertEquals("I think I'm ready to go", formatVoskText(raw, "en"))
+
+        val arabic = "السلام عليكم ورحمة الله"
+        assertEquals("السلام عليكم ورحمة الله", formatVoskText(arabic, "ar"))
     }
 }

@@ -96,6 +96,18 @@ class SessionStorageTest {
     }
 
     @Test
+    fun `exportSrt produces valid subtitle entries with millisecond timestamps`() {
+        val repository = SessionRepository(createTempDirectory("sessions").toFile())
+        val session = ConversationSession(id = "s", title = "Call", createdAt = 0)
+            .withSegment(TranscriptSegment("a", AudioSource.MICROPHONE, 65_120, 68_450, text = "hello world"))
+        val srt = repository.exportSrt(session) { if (it == AudioSource.MICROPHONE) "Me" else "Call" }
+        assertTrue("1" in srt)
+        assertTrue("00:01:05,120 --> 00:01:08,450" in srt)
+        assertTrue("Me: hello world" in srt)
+        repository.root.deleteRecursively()
+    }
+
+    @Test
     fun `concurrent hovers over the same word make one request and the answer is cached`() = runTest {
         val calls = AtomicInteger()
         val gate = CompletableDeferred<Unit>()

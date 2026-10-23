@@ -109,6 +109,26 @@ class SessionRepository(val root: File) {
         }
     }
 
+    /** Exports the transcript in standard SubRip (.srt) subtitle format. */
+    fun exportSrt(session: ConversationSession, speakerName: (AudioSource) -> String): String = buildString {
+        var index = 1
+        session.segments.filter { it.text.isNotBlank() }.forEach { segment ->
+            appendLine(index++)
+            appendLine("${formatSrtTimestamp(segment.startMillis)} --> ${formatSrtTimestamp(segment.endMillis)}")
+            appendLine("${speakerName(segment.source)}: ${segment.text}")
+            appendLine()
+        }
+    }
+
+    private fun formatSrtTimestamp(millis: Long): String {
+        val totalSec = millis / 1000
+        val h = totalSec / 3600
+        val m = totalSec % 3600 / 60
+        val s = totalSec % 60
+        val ms = millis % 1000
+        return "%02d:%02d:%02d,%03d".format(Locale.ROOT, h, m, s, ms)
+    }
+
     private companion object {
         const val SESSION_FILE = "session.json"
     }

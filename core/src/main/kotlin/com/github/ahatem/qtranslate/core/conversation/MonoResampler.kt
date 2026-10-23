@@ -28,6 +28,16 @@ class MonoResampler(
     private var previous = 0.0
     private var hasPrevious = false
 
+    private val weights: DoubleArray = when (channels) {
+        1 -> doubleArrayOf(1.0)
+        2 -> doubleArrayOf(0.5, 0.5)
+        // 5.1 surround (FL, FR, Center, LFE, RL, RR): emphasize dialogue/center, eliminate bass LFE mud
+        6 -> doubleArrayOf(0.25, 0.25, 0.40, 0.0, 0.05, 0.05)
+        // 7.1 surround (FL, FR, Center, LFE, RL, RR, SL, SR): emphasize speech, reduce surround/subwoofer
+        8 -> doubleArrayOf(0.20, 0.20, 0.35, 0.0, 0.05, 0.05, 0.075, 0.075)
+        else -> DoubleArray(channels) { 1.0 / channels }
+    }
+
     /** Converts the first [length] bytes of [input]; a trailing partial frame is ignored. */
     fun process(input: ByteArray, length: Int = input.size): ByteArray {
         val frameBytes = channels * 2
@@ -35,12 +45,15 @@ class MonoResampler(
         if (frames == 0) return ByteArray(0)
 
         val mono = DoubleArray(frames) { frame ->
-            var sum = 0
+            var sum = 0.0
             for (channel in 0 until channels) {
                 val offset = frame * frameBytes + channel * 2
-                sum += (input[offset].toInt() and 0xFF) or (input[offset + 1].toInt() shl 8)
+                val low = input[offset].toInt() and 0xFF
+                val high = input[offset + 1].toInt()
+                val sample = ((high shl 8) or low).toShort().toDouble()
+                sum += sample * weights[channel]
             }
-            sum.toDouble() / channels
+            sum
         }
 
         if (sourceRate == targetRate) return toBytes(mono)

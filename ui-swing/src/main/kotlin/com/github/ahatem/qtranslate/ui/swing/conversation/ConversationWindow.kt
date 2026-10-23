@@ -980,12 +980,26 @@ class ConversationWindow(
         val session = viewed ?: return
         val chooser = JFileChooser().apply {
             selectedFile = File(session.title.replace(Regex("""[\\/:*?"<>|]"""), "_") + ".txt")
-            fileFilter = FileNameExtensionFilter("Text", "txt")
+            addChoosableFileFilter(FileNameExtensionFilter("Text Document (*.txt)", "txt"))
+            addChoosableFileFilter(FileNameExtensionFilter("SubRip Subtitle (*.srt)", "srt"))
+            fileFilter = choosableFileFilters.first()
         }
         if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return
-        val target = chooser.selectedFile.let { if (it.extension.isEmpty()) File(it.path + ".txt") else it }
+        val ext = chooser.fileFilter?.description?.let {
+            if (it.contains(".srt", ignoreCase = true)) "srt" else "txt"
+        } ?: chooser.selectedFile.extension.ifEmpty { "txt" }
+        val target = chooser.selectedFile.let {
+            if (it.extension.isEmpty()) File(it.path + ".$ext") else it
+        }
         scope.launch {
-            withContext(Dispatchers.IO) { target.writeText(feature.repository.exportText(session, ::sourceName), Charsets.UTF_8) }
+            val content = withContext(Dispatchers.IO) {
+                if (target.extension.equals("srt", ignoreCase = true)) {
+                    feature.repository.exportSrt(session, ::sourceName)
+                } else {
+                    feature.repository.exportText(session, ::sourceName)
+                }
+            }
+            withContext(Dispatchers.IO) { target.writeText(content, Charsets.UTF_8) }
             JOptionPane.showMessageDialog(this@ConversationWindow, strings.exported(target.absolutePath))
         }
     }

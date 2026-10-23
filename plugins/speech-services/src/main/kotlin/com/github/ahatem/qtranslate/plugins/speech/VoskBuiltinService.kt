@@ -106,6 +106,25 @@ class VoskBuiltinService(
 
     private val modelCache = ConcurrentHashMap<String, VoskModelHandle>()
 
+    private fun getOrLoadModel(path: String, modelDir: File): VoskModelHandle {
+        val cached = modelCache[path]
+        if (cached != null) return cached
+        synchronized(modelCache) {
+            val existing = modelCache[path]
+            if (existing != null) return existing
+            // Keep at most 2 models loaded concurrently to bound RAM footprint
+            if (modelCache.size >= 2) {
+                val toEvict = modelCache.keys.filter { it != path }
+                toEvict.forEach { key ->
+                    modelCache.remove(key)?.let { runCatching { it.close() } }
+                }
+            }
+            val loaded = modelFactory(modelDir)
+            modelCache[path] = loaded
+            return loaded
+        }
+    }
+
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
         val current = settings()
         val preferredInfo = VoskModelManager.MODELS_BY_NAME[current.voskBuiltinModel]
@@ -121,9 +140,7 @@ class VoskBuiltinService(
 
         val modelHandle = try {
             withContext(Dispatchers.IO) {
-                modelCache.computeIfAbsent(modelDir.absolutePath) {
-                    modelFactory(modelDir)
-                }
+                getOrLoadModel(modelDir.absolutePath, modelDir)
             }
         } catch (t: Throwable) {
             return Err(ServiceError.ServiceUnavailableError("Failed to load Vosk model at ${modelDir.name}: ${t.message}", t))
@@ -135,7 +152,7 @@ class VoskBuiltinService(
             return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t))
         }
 
-        return Ok(VoskBuiltinSession(recognizer))
+        return Ok(VoskBuiltinSession(recognizer, lang = lang))
     }
 
     /**
@@ -157,9 +174,7 @@ class VoskBuiltinService(
 
         val modelHandle = try {
             withContext(Dispatchers.IO) {
-                modelCache.computeIfAbsent(modelDir.absolutePath) {
-                    modelFactory(modelDir)
-                }
+                getOrLoadModel(modelDir.absolutePath, modelDir)
             }
         } catch (t: Throwable) {
             return Err(ServiceError.ServiceUnavailableError("Failed to load Vosk model at ${modelDir.name}: ${t.message}", t))
@@ -177,9 +192,11 @@ class VoskBuiltinService(
                 val finalJson = recognizer.getFinalResult()
                 val parsed = parseVoskJson(finalJson)
                 if (parsed is VoskParsedResult.Final) {
-                    Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = parsed.text, detectedLanguage = LanguageCode(lang), words = parsed.words))
+                    val formatted = formatVoskText(parsed.text, lang)
+                    Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = formatted, detectedLanguage = LanguageCode(lang), words = parsed.words))
                 } else if (parsed is VoskParsedResult.Partial) {
-                    Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = parsed.text, detectedLanguage = LanguageCode(lang), words = emptyList()))
+                    val formatted = formatVoskText(parsed.text, lang)
+                    Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = formatted, detectedLanguage = LanguageCode(lang), words = emptyList()))
                 } else {
                     Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = "", detectedLanguage = LanguageCode(lang), words = emptyList()))
                 }
@@ -239,7 +256,8 @@ class VoskBuiltinService(
  */
 class VoskBuiltinSession(
     private val recognizer: VoskRecognizerHandle,
-    scope: CoroutineScope? = null
+    scope: CoroutineScope? = null,
+    private val lang: String? = null
 ) : LiveSpeechSession {
     private val ownedExecutor: ExecutorService? = if (scope == null) {
         Executors.newSingleThreadExecutor { runnable ->
@@ -321,7 +339,8 @@ class VoskBuiltinSession(
     private fun emitResult(jsonString: String) {
         val parsed = parseVoskJson(jsonString)
         if (parsed is VoskParsedResult.Final && parsed.text.isNotEmpty()) {
-            eventChannel.trySend(LiveSpeechEvent.Final(parsed.text, parsed.words))
+            val formatted = formatVoskText(parsed.text, lang)
+            eventChannel.trySend(LiveSpeechEvent.Final(formatted, parsed.words))
         }
     }
 }
@@ -333,6 +352,21 @@ internal sealed interface VoskParsedResult {
 }
 
 private val jsonParser = Json { ignoreUnknownKeys = true; isLenient = true }
+
+internal fun formatVoskText(raw: String, lang: String?): String {
+    val clean = fixMojibake(raw).trim()
+    if (clean.isEmpty()) return clean
+    val primary = lang?.lowercase()?.take(2)
+    if (primary == "ar") return clean
+
+    val withCap = clean.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    return withCap
+        .replace(Regex("""\bi\b"""), "I")
+        .replace(Regex("""\bi'm\b""", RegexOption.IGNORE_CASE), "I'm")
+        .replace(Regex("""\bi've\b""", RegexOption.IGNORE_CASE), "I've")
+        .replace(Regex("""\bi'll\b""", RegexOption.IGNORE_CASE), "I'll")
+        .replace(Regex("""\bi'd\b""", RegexOption.IGNORE_CASE), "I'd")
+}
 
 internal fun fixMojibake(raw: String): String {
     if (raw.isBlank()) return raw
