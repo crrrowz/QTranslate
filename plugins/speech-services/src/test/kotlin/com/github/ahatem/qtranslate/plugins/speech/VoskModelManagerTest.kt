@@ -48,7 +48,9 @@ class VoskModelManagerTest {
         assertEquals(1, manager.listInstalledModels().size)
         assertEquals(enModelDir.absolutePath, manager.findModelForLanguage("en")?.absolutePath)
         assertEquals(enModelDir.absolutePath, manager.findModelForLanguage("en-US")?.absolutePath)
+        assertEquals(enModelDir.absolutePath, manager.findModelForLanguage("auto")?.absolutePath)
         assertNull(manager.findModelForLanguage("ar"))
+        assertNull(manager.findModelForLanguage("de"))
     }
 
     @Test

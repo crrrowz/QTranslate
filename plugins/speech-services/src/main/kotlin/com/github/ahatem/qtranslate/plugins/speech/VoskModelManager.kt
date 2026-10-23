@@ -67,36 +67,30 @@ class VoskModelManager(
      * model matching the language prefix.
      */
     fun findModelForLanguage(language: String, preferredModelName: String? = null): File? {
-        val lang = language.lowercase().take(2)
+        val clean = language.trim().lowercase()
+        val isAuto = clean == "auto" || clean.isEmpty()
+        val lang = if (isAuto) "auto" else clean.substringBefore('-').substringBefore('_').take(2)
+
         if (!preferredModelName.isNullOrBlank()) {
             val preferredDir = File(modelsDirectory, preferredModelName)
             if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
                 val info = MODELS_BY_NAME[preferredModelName]
-                if (info == null || info.language == lang || lang == "au") {
+                if (info == null || isAuto || info.language == lang) {
                     return preferredDir
                 }
             }
         }
 
         val installed = listInstalledModels()
-        val matchingInstalled = installed.firstOrNull { dir ->
-            val info = MODELS_BY_NAME[dir.name]
-            info?.language == lang || dir.name.contains("-$lang-") || dir.name.contains("-$lang")
-        }
-        if (matchingInstalled != null) return matchingInstalled
-
-        // If language is "auto", fall back to preferred model or first installed model
-        if (lang == "au") {
-            if (!preferredModelName.isNullOrBlank()) {
-                val preferredDir = File(modelsDirectory, preferredModelName)
-                if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
-                    return preferredDir
-                }
-            }
+        if (isAuto) {
             return installed.firstOrNull()
         }
 
-        return null
+        val matchingInstalled = installed.firstOrNull { dir ->
+            val info = MODELS_BY_NAME[dir.name]
+            info?.language == lang || dir.name.contains("-$lang-") || dir.name.endsWith("-$lang")
+        }
+        return matchingInstalled
     }
 
     /**
