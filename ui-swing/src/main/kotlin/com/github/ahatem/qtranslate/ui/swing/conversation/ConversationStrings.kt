@@ -37,6 +37,7 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val dismiss = localizer.getString("conversation.dismiss")
     val noSpeechServiceConfirm = localizer.getString("conversation.no_speech_service_confirm")
     val noticeNoSpeechService = localizer.getString("conversation.notice_no_speech_service")
+    val noticeEchoDetected = localizer.getString("conversation.notice_echo_detected")
     val speakerMe = localizer.getString("conversation.speaker_me")
     val speakerCall = localizer.getString("conversation.speaker_call")
     val transcribing = localizer.getString("conversation.transcribing")

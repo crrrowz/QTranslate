@@ -7,27 +7,34 @@ import com.github.ahatem.qtranslate.core.conversation.TranscriptWord
 import com.github.ahatem.qtranslate.core.conversation.formatTimestamp
 import java.awt.Color
 import java.awt.Cursor
+import java.awt.Graphics
+import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.Rectangle
+import java.awt.RenderingHints
 import java.text.BreakIterator
+import javax.swing.JScrollPane
 import javax.swing.JTextPane
+import javax.swing.SwingUtilities
 import javax.swing.UIManager
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
 import javax.swing.text.StyledDocument
 
 /**
- * The transcript, rendered as read-only selectable text that knows which segment and which
- * recognised word sits under every character, so the window can translate and replay them.
+ * The transcript, rendered as distinct card bubbles per message.
  *
- * Each segment is a small header ("CALL · 1:05", clickable to replay the segment) over its text.
- * The original text is never altered: translations appear only in the hover popup.
+ * Audio replay is explicitly triggered by clicking the dedicated "▶" play button in each card
+ * rather than clicking anywhere on the speaker text.
+ * Messages can be displayed newest-at-top or oldest-first.
  */
 class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
     /** Where a segment landed in the document. */
     class SegmentSpan(
         val segment: TranscriptSegment,
+        val playStart: Int,
+        val playEnd: Int,
         val headerStart: Int,
         val headerEnd: Int,
         val textStart: Int,
@@ -39,6 +46,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     sealed interface Hit {
         val span: SegmentSpan
 
+        data class PlayButton(override val span: SegmentSpan) : Hit
         data class Header(override val span: SegmentSpan) : Hit
         data class Text(override val span: SegmentSpan, val offset: Int) : Hit
     }
@@ -46,13 +54,24 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     var spans: List<SegmentSpan> = emptyList()
         private set
 
+    /** Newest messages appear at the top by default so users see incoming speech without scrolling. */
+    var newestFirst: Boolean = true
+        set(value) {
+            if (field != value) {
+                field = value
+                renderedKey = null
+                render(currentSession)
+            }
+        }
+
+    private var currentSession: ConversationSession? = null
     private var renderedKey: Any? = null
 
     init {
         isEditable = false
-        // Read-only but still selectable and navigable, so a phrase can be selected for translation.
         caret.isVisible = false
-        border = javax.swing.BorderFactory.createEmptyBorder(12, 16, 12, 16)
+        isOpaque = false // Allows custom card background rendering in paintComponent
+        border = javax.swing.BorderFactory.createEmptyBorder(12, 16, 16, 16)
         font = font.deriveFont(font.size2D + 2f)
     }
 
@@ -61,27 +80,36 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
      * state updates (levels, timer) never disturb a selection or the scroll position.
      */
     fun render(session: ConversationSession?) {
-        val key = session?.let { it.id to it.segments }
+        currentSession = session
+        val key = session?.let { (it.id to it.segments) to newestFirst }
         if (key == renderedKey) return
         renderedKey = key
 
-        val scrollBar = (parent?.parent as? javax.swing.JScrollPane)?.verticalScrollBar
+        val scrollBar = (parent?.parent as? JScrollPane)?.verticalScrollBar
+        val wasAtTop = scrollBar == null || scrollBar.value <= 24
         val wasAtBottom = scrollBar == null || scrollBar.value + scrollBar.visibleAmount >= scrollBar.maximum - 24
 
         val doc = styledDocument
         doc.remove(0, doc.length)
         val built = ArrayList<SegmentSpan>()
 
-        val segments = session?.segments.orEmpty()
+        val rawSegments = session?.segments.orEmpty()
+        val segments = if (newestFirst) rawSegments.reversed() else rawSegments
+
         if (segments.isEmpty()) {
             doc.insertString(0, strings.emptyHint, muted(italic = true))
         }
+
         segments.forEach { segment ->
             if (doc.length > 0) doc.insertString(doc.length, "\n\n", null)
 
+            val playStart = doc.length
+            doc.insertString(doc.length, " ▶ ", playButton(segment.source))
+            val playEnd = doc.length
+
             val headerStart = doc.length
             val speaker = if (segment.source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
-            doc.insertString(doc.length, "${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
+            doc.insertString(doc.length, " ${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
             val headerEnd = doc.length
             doc.insertString(doc.length, "\n", null)
 
@@ -97,31 +125,85 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             val textEnd = doc.length
             // Header and text together: a paragraph inserted after an Arabic line would otherwise
             // inherit its right alignment, header included.
-            alignParagraph(doc, headerStart, textEnd - headerStart, text)
+            alignParagraph(doc, playStart, textEnd - playStart, text)
 
             built += SegmentSpan(
-                segment, headerStart, headerEnd, textStart, textEnd,
+                segment, playStart, playEnd, headerStart, headerEnd, textStart, textEnd,
                 if (segment.pending || segment.failed) emptyList() else locateWords(segment, textStart)
             )
         }
         spans = built
 
-        if (wasAtBottom) caretPosition = doc.length
+        SwingUtilities.invokeLater {
+            if (newestFirst && wasAtTop) {
+                scrollBar?.value = 0
+            } else if (!newestFirst && wasAtBottom) {
+                scrollBar?.value = scrollBar.maximum
+            }
+        }
     }
+
+    override fun paintComponent(g: Graphics) {
+        val g2 = g.create() as Graphics2D
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+
+        // Fill background
+        val bg = UIManager.getColor("TextPane.background") ?: background ?: Color(0x1e1e1e)
+        g2.color = bg
+        g2.fillRect(0, 0, width, height)
+
+        val isDark = isDark(bg)
+        val cardBg = if (isDark) {
+            Color((bg.red + 14).coerceAtMost(255), (bg.green + 14).coerceAtMost(255), (bg.blue + 16).coerceAtMost(255))
+        } else {
+            Color((bg.red - 8).coerceAtLeast(0), (bg.green - 8).coerceAtLeast(0), (bg.blue - 8).coerceAtLeast(0))
+        }
+        val borderColor = if (isDark) Color(255, 255, 255, 22) else Color(0, 0, 0, 20)
+
+        // Draw individual cards behind each segment span
+        spans.forEach { span ->
+            val topBox = runCatching { modelToView2D(span.playStart) }.getOrNull() ?: return@forEach
+            val bottomBox = runCatching { modelToView2D(span.textEnd) }.getOrNull() ?: return@forEach
+
+            val x = 10
+            val y = topBox.y.toInt() - 4
+            val w = (width - 20).coerceAtLeast(100)
+            val h = (bottomBox.y + bottomBox.height - topBox.y).toInt() + 8
+
+            // Rounded card body
+            g2.color = cardBg
+            g2.fillRoundRect(x, y, w, h, 10, 10)
+
+            // Accent stripe on the left edge (blue for ME, green for CALL)
+            g2.color = sourceColor(span.segment.source)
+            g2.fillRoundRect(x, y, 4, h, 4, 4)
+
+            // Subtle card border
+            g2.color = borderColor
+            g2.drawRoundRect(x, y, w, h, 10, 10)
+        }
+
+        g2.dispose()
+        super.paintComponent(g)
+    }
+
+    private fun isDark(color: Color): Boolean =
+        (0.299 * color.red + 0.587 * color.green + 0.114 * color.blue) < 128
 
     /** What is under [point], if anything. */
     fun hitTest(point: Point): Hit? {
         val offset = viewToModel2D(point).takeIf { it >= 0 } ?: return null
-        // viewToModel snaps to the nearest character even far to the right of a short line; only
-        // count it when the character's box actually contains the point.
         val box = runCatching { modelToView2D(offset) }.getOrNull() ?: return null
         val next = runCatching { modelToView2D((offset + 1).coerceAtMost(document.length)) }.getOrNull()
         val right = if (next != null && next.y == box.y) next.x else box.x + 12
         if (point.x < minOf(box.x, right) - 6 || point.x > maxOf(box.x, right) + 6) return null
 
-        val span = spans.firstOrNull { offset in it.headerStart until it.headerEnd || offset in it.textStart until it.textEnd }
-            ?: return null
-        return if (offset < span.headerEnd) Hit.Header(span) else Hit.Text(span, offset)
+        val span = spans.firstOrNull { offset in it.playStart until it.textEnd } ?: return null
+        return when {
+            offset in span.playStart until span.playEnd -> Hit.PlayButton(span)
+            offset < span.headerEnd -> Hit.Header(span)
+            else -> Hit.Text(span, offset)
+        }
     }
 
     /** The word around [offset] inside [span], as a document range, or null on spaces and punctuation. */
@@ -176,7 +258,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         } ?: false
         val attributes = SimpleAttributeSet().apply {
             StyleConstants.setAlignment(this, if (rtl) StyleConstants.ALIGN_RIGHT else StyleConstants.ALIGN_LEFT)
-            StyleConstants.setSpaceBelow(this, 2f)
+            StyleConstants.setSpaceBelow(this, 3f)
         }
         doc.setParagraphAttributes(start, length.coerceAtLeast(1), attributes, false)
     }
@@ -195,9 +277,15 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         StyleConstants.setUnderline(this, true)
     }
 
+    private fun playButton(source: AudioSource) = SimpleAttributeSet().apply {
+        StyleConstants.setBold(this, true)
+        StyleConstants.setFontSize(this, (font.size - 2).coerceAtLeast(11))
+        StyleConstants.setForeground(this, sourceColor(source))
+    }
+
     private fun header(source: AudioSource) = SimpleAttributeSet().apply {
         StyleConstants.setBold(this, true)
-        StyleConstants.setFontSize(this, (font.size - 4).coerceAtLeast(10))
+        StyleConstants.setFontSize(this, (font.size - 3).coerceAtLeast(10))
         StyleConstants.setForeground(this, sourceColor(source))
     }
 

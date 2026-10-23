@@ -158,6 +158,10 @@ class ConversationWindow(
         isVisible = false
     }
     private val transcriptScroll = JScrollPane(transcript)
+    private val orderButton = JButton("⇅ Newest at top").apply {
+        putClientProperty("JButton.buttonType", "toolBarButton")
+        toolTipText = "Toggle message order (newest at top or oldest first)"
+    }
     private val popup = HoverTranslationPopup(this, strings)
 
     /** The saved session on screen when nothing is recording. */
@@ -272,7 +276,10 @@ class ConversationWindow(
             add(microphoneLight, "wmin 0")
             add(systemLight, "wmin 0")
         }
-        val keepAudioRow = shrinkable(MigLayout("insets 0 12 6 12")).apply { add(keepAudioCheck, "wmin 0") }
+        val keepAudioRow = shrinkable(MigLayout("fillx, insets 0 12 6 12", "[grow,fill][]")).apply {
+            add(keepAudioCheck, "wmin 0")
+            add(orderButton)
+        }
         val top = JPanel(MigLayout("fillx, wrap 1, insets 0, gap 0", "[grow,fill]")).apply {
             add(pickers)
             add(speechRow)
@@ -375,6 +382,10 @@ class ConversationWindow(
         }
         speechSettingsButton.addActionListener { onOpenSpeechSettings() }
         retryFailedButton.addActionListener { retryAllFailed() }
+        orderButton.addActionListener {
+            transcript.newestFirst = !transcript.newestFirst
+            orderButton.text = if (transcript.newestFirst) "⇅ Newest at top" else "⇅ Oldest at top"
+        }
         newButton.addActionListener {
             if (!recorder.state.value.isActive) {
                 sessionsList.clearSelection()
@@ -520,6 +531,7 @@ class ConversationWindow(
         is RecorderNotice.DeviceLost -> strings.noticeDeviceLost(sourceName(notice.source), notice.message.trimEnd('.'))
         is RecorderNotice.SaveFailed -> strings.noticeSaveFailed(notice.message.trimEnd('.'))
         is RecorderNotice.LiveFailed -> strings.noticeLiveFailed(sourceName(notice.source), notice.message.trimEnd('.'))
+        RecorderNotice.EchoDetected -> strings.noticeEchoDetected
     }
 
     private fun sourceName(source: AudioSource) = if (source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
@@ -761,7 +773,9 @@ class ConversationWindow(
 
     private fun onTranscriptHover(e: MouseEvent) {
         val hit = transcript.hitTest(e.point)
-        transcript.setHandCursor(hit is TranscriptView.Hit.Header || (hit is TranscriptView.Hit.Text && hit.span.segment.failed))
+        val isClickable = hit is TranscriptView.Hit.PlayButton || (hit is TranscriptView.Hit.Text && hit.span.segment.failed)
+        transcript.setHandCursor(isClickable)
+        transcript.toolTipText = if (hit is TranscriptView.Hit.PlayButton) "Play audio" else null
         // A selection owns the card until it is cleared.
         if (transcript.selectionStart != transcript.selectionEnd) return
 
@@ -781,7 +795,8 @@ class ConversationWindow(
     private fun onTranscriptClick(e: MouseEvent) {
         if (e.clickCount != 1 || !SwingUtilities.isLeftMouseButton(e)) return
         when (val hit = transcript.hitTest(e.point)) {
-            is TranscriptView.Hit.Header -> playRange(hit.span.segment, hit.span.segment.startMillis, hit.span.segment.endMillis)
+            is TranscriptView.Hit.PlayButton -> playRange(hit.span.segment, hit.span.segment.startMillis, hit.span.segment.endMillis)
+            is TranscriptView.Hit.Header -> Unit // Clicking speaker label or timestamp does not trigger playback
             is TranscriptView.Hit.Text -> if (hit.span.segment.failed) retry(hit.span.segment)
             null -> Unit
         }
@@ -826,14 +841,28 @@ class ConversationWindow(
     ) {
         val target = targetCombo.selectedItem as? LanguageCode ?: return
         val hasAudio = segment != null && feature.hasAudio(session, segment.source)
+        val hasContext = contextSentence != null && contextSentence.trim() != text.trim()
         val content = HoverTranslationPopup.Content(
             text = text,
             translation = feature.translations.peek(text, target),
+            context = if (!hasContext) contextSentence?.let { feature.translations.peek(it, target) } else null,
+            hasContextSentence = hasContext,
             canPlayWord = onPlay != null && hasAudio,
             canPlaySentence = hasAudio
         )
         popup.onPlayWord = { onPlay?.invoke() }
         popup.onPlaySentence = { segment?.let { playRange(it, it.startMillis, it.endMillis) } }
+        popup.onShowSentence = {
+            if (contextSentence != null) {
+                updateCard(text) { it.copy(contextLoading = true) }
+                scope.launch {
+                    feature.translations.translate(contextSentence, target).fold(
+                        success = { sentence -> updateCard(text) { it.copy(context = sentence, contextLoading = false) } },
+                        failure = { updateCard(text) { it.copy(contextLoading = false) } }
+                    )
+                }
+            }
+        }
         popup.onCopy = { popupContent?.translation?.let { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(it), null) } }
         popup.onMeanings = { loadMeanings(text, segment, session, target) }
 
@@ -852,12 +881,6 @@ class ConversationWindow(
                 translated.fold(
                     success = { current.copy(translation = it, error = null) },
                     failure = { current.copy(error = it.message) }
-                )
-            }
-            if (contextSentence != null) {
-                feature.translations.translate(contextSentence, target).fold(
-                    success = { sentence -> updateCard(text) { it.copy(context = sentence) } },
-                    failure = { }
                 )
             }
         }

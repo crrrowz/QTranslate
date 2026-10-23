@@ -51,6 +51,15 @@ class VoskModelManagerTest {
         assertEquals(enModelDir.absolutePath, manager.findModelForLanguage("auto")?.absolutePath)
         assertNull(manager.findModelForLanguage("ar"))
         assertNull(manager.findModelForLanguage("de"))
+
+        // Create an Arabic model folder
+        val arModelDir = File(modelsRoot, "vosk-model-ar-mgb2-0.4").apply { mkdirs() }
+        File(arModelDir, "model.conf").writeText("sample_rate=16000")
+        assertEquals(arModelDir.absolutePath, manager.findModelForLanguage("ar")?.absolutePath)
+        // Auto mode prefers English when preferred model is not specified
+        assertEquals(enModelDir.absolutePath, manager.findModelForLanguage("auto")?.absolutePath)
+        // When preferred model is Arabic, auto mode respects it
+        assertEquals(arModelDir.absolutePath, manager.findModelForLanguage("auto", "vosk-model-ar-mgb2-0.4")?.absolutePath)
     }
 
     @Test

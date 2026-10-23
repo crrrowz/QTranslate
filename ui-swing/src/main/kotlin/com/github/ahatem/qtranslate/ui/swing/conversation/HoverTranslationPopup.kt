@@ -1,7 +1,9 @@
 package com.github.ahatem.qtranslate.ui.swing.conversation
 
 import net.miginfocom.swing.MigLayout
+import java.awt.BorderLayout
 import java.awt.Color
+import java.awt.Font
 import java.awt.Rectangle
 import java.awt.Window
 import java.awt.event.MouseAdapter
@@ -15,10 +17,11 @@ import javax.swing.SwingUtilities
 import javax.swing.UIManager
 
 /**
- * The small card that appears over a hovered word or a selected phrase: its translation, what the
- * whole sentence means, and buttons to replay it or look up its meanings.
+ * The translation popup card for a hovered word or selected phrase.
  *
- * Never takes focus, so it can appear and vanish while the user keeps typing in Discord.
+ * Clearly displays the translated word in a focused translation box.
+ * The full sentence translation is separated into an optional context section
+ * so single-word translations are never confused with whole-sentence translations.
  */
 class HoverTranslationPopup(owner: Window, private val strings: ConversationStrings) {
 
@@ -26,8 +29,10 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
         val text: String,
         val translation: String? = null,
         val error: String? = null,
-        /** Translation of the sentence the word sits in; null for a phrase or while loading. */
+        /** Full sentence translation, shown only when requested or when translating a phrase. */
         val context: String? = null,
+        val contextLoading: Boolean = false,
+        val hasContextSentence: Boolean = false,
         /** Null until requested; empty when the dictionary found nothing. */
         val meanings: List<String>? = null,
         val meaningsLoading: Boolean = false,
@@ -37,6 +42,7 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
 
     var onPlayWord: () -> Unit = {}
     var onPlaySentence: () -> Unit = {}
+    var onShowSentence: () -> Unit = {}
     var onMeanings: () -> Unit = {}
     var onCopy: () -> Unit = {}
     /** Called when the pointer enters (true) or leaves (false) the card. */
@@ -51,20 +57,43 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
     private val translation = JLabel()
     private val context = JLabel()
     private val meanings = JLabel()
+
+    private val translationCard = JPanel(BorderLayout()).apply {
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(UIManager.getColor("Component.borderColor") ?: Color(0x444444), 1, true),
+            BorderFactory.createEmptyBorder(6, 10, 6, 10)
+        )
+        isOpaque = false
+        add(translation, BorderLayout.CENTER)
+    }
+
+    private val contextCard = JPanel(BorderLayout()).apply {
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(1, 0, 0, 0, UIManager.getColor("Component.borderColor") ?: Color(0x444444)),
+            BorderFactory.createEmptyBorder(6, 4, 4, 4)
+        )
+        isOpaque = false
+        add(context, BorderLayout.CENTER)
+    }
+
     private val playWord = JButton("▶ ${strings.playWord}")
     private val playSentence = JButton("▶ ${strings.playSentence}")
+    private val sentenceButton = JButton("💬 ${strings.inContext}")
     private val meaningsButton = JButton(strings.meanings)
     private val copyButton = JButton(strings.copy)
 
-    private val panel = JPanel(MigLayout("wrap 1, insets 10 12 10 12, gap 4, wmax 420")).apply {
-        border = BorderFactory.createLineBorder(UIManager.getColor("Component.borderColor") ?: Color.GRAY)
+    private val panel = JPanel(MigLayout("wrap 1, insets 10 12 10 12, gap 6, wmax 430")).apply {
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(UIManager.getColor("Component.borderColor") ?: Color.GRAY, 1, true),
+            BorderFactory.createEmptyBorder(2, 2, 2, 2)
+        )
         add(source)
-        add(translation)
-        add(context)
-        add(meanings)
-        add(JPanel(MigLayout("insets 6 0 0 0, gap 4")).apply {
+        add(translationCard, "growx")
+        add(contextCard, "growx")
+        add(meanings, "growx")
+        add(JPanel(MigLayout("insets 4 0 0 0, gap 4")).apply {
             isOpaque = false
-            listOf(playWord, playSentence, meaningsButton, copyButton).forEach { button ->
+            listOf(playWord, playSentence, sentenceButton, meaningsButton, copyButton).forEach { button ->
                 button.putClientProperty("JButton.buttonType", "toolBarButton")
                 button.isFocusable = false
                 add(button)
@@ -78,9 +107,11 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
         window.contentPane = panel
         source.foreground = UIManager.getColor("Label.disabledForeground")
         context.foreground = UIManager.getColor("Label.disabledForeground")
-        translation.font = translation.font.deriveFont(translation.font.size2D + 3f)
+        translation.font = translation.font.deriveFont(Font.BOLD, translation.font.size2D + 2f)
+
         playWord.addActionListener { onPlayWord() }
         playSentence.addActionListener { onPlaySentence() }
+        sentenceButton.addActionListener { onShowSentence() }
         meaningsButton.addActionListener { onMeanings() }
         copyButton.addActionListener { onCopy() }
 
@@ -91,13 +122,12 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
                 if (!panel.contains(point)) onHoverChanged(false)
             }
         }
-        (listOf(panel, source, translation, context, meanings, playWord, playSentence, meaningsButton, copyButton))
+        listOf(panel, source, translation, context, meanings, playWord, playSentence, sentenceButton, meaningsButton, copyButton)
             .forEach { it.addMouseListener(hover) }
     }
 
     val isVisible: Boolean get() = window.isVisible
 
-    /** The text the card is about, or null when hidden. */
     val text: String? get() = current?.text?.takeIf { window.isVisible }
 
     /** Shows the card just below [anchor] (screen coordinates), flipping above near the screen edge. */
@@ -123,8 +153,18 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
                 else -> content.translation
             }
         )
-        context.isVisible = content.context != null
-        context.text = content.context?.let { html("${strings.inContext} $it", small = true) }
+
+        // Show context only when requested or loading
+        val showContext = content.context != null || content.contextLoading
+        contextCard.isVisible = showContext
+        if (showContext) {
+            context.text = when {
+                content.contextLoading -> html(strings.loading, small = true)
+                content.context != null -> html("${strings.inContext} ${content.context}", small = true)
+                else -> ""
+            }
+        }
+
         meanings.isVisible = content.meanings != null || content.meaningsLoading
         meanings.text = when {
             content.meaningsLoading -> html(strings.loading, small = true)
@@ -132,10 +172,14 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
             else -> "<html><div style='width:360px'>" +
                 content.meanings.joinToString("<br>") { "• ${escape(it)}" } + "</div></html>"
         }
+
         playWord.isVisible = content.canPlayWord
         playSentence.isVisible = content.canPlaySentence
+        sentenceButton.isVisible = content.hasContextSentence && content.context == null
+        sentenceButton.isEnabled = !content.contextLoading
         meaningsButton.isEnabled = content.meanings == null && !content.meaningsLoading
         copyButton.isEnabled = content.translation != null
+
         window.pack()
     }
 
@@ -151,7 +195,6 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
     private fun html(text: String, bold: Boolean = false, small: Boolean = false): String {
         val body = escape(text).let { if (bold) "<b>$it</b>" else it }
         val size = if (small) "font-size:95%;" else ""
-        // A fixed width only once the text is long, so a one-word card stays compact.
         val width = if (text.length > 40) "width:360px;" else ""
         return "<html><div style='$width$size'>$body</div></html>"
     }

@@ -49,6 +49,9 @@ sealed interface RecorderNotice {
 
     /** The live recognizer dropped out; recording carries on without live text while it reconnects. */
     data class LiveFailed(val source: AudioSource, val message: String) : RecorderNotice
+
+    /** Microphone audio is bleeding into the call track (sidetone / loopback). */
+    data object EchoDetected : RecorderNotice
 }
 
 /** What the live recognizer currently thinks is being said, not yet settled into a segment. */
@@ -297,6 +300,33 @@ class ConversationRecorder(
         }
     }
 
+    private fun applySegment(current: ConversationSession, segment: TranscriptSegment): ConversationSession {
+        // If it's on the SYSTEM stream and duplicates recent speech on the MICROPHONE stream, drop it
+        if (segment.source == AudioSource.SYSTEM && segment.text.isNotBlank()) {
+            if (isEcho(segment, current.segments)) {
+                logger.warn("Echo detected: microphone audio bled into call stream ('${segment.text}')")
+                _state.update { it.copy(notice = RecorderNotice.EchoDetected) }
+                return current.copy(segments = current.segments.filterNot { it.id == segment.id })
+            }
+        }
+
+        // If it's on the MICROPHONE stream, check if an earlier SYSTEM segment echoed this speech, and remove that echo
+        var segments = current.segments
+        if (segment.source == AudioSource.MICROPHONE && segment.text.isNotBlank()) {
+            val echoed = segments.filter { it.source == AudioSource.SYSTEM && isEchoPair(it, segment) }
+            if (echoed.isNotEmpty()) {
+                logger.warn("Retroactive echo detected: removing ${echoed.size} echoed call segment(s)")
+                _state.update { it.copy(notice = RecorderNotice.EchoDetected) }
+                segments = segments.filterNot { it in echoed }
+            }
+        }
+
+        return current.copy(segments = segments).withSegment(segment)
+    }
+
+    private fun isEcho(candidate: TranscriptSegment, allSegments: List<TranscriptSegment>): Boolean =
+        allSegments.any { other -> isEchoPair(candidate, other) }
+
     private fun report(outcome: SegmentTranscriber.Outcome) {
         val notice = when (outcome) {
             is SegmentTranscriber.Outcome.Done -> return
@@ -413,14 +443,14 @@ class ConversationRecorder(
                             // The accurate recognizer heard no speech where the live one guessed words.
                             updateSession { s -> s.copy(segments = s.segments.filterNot { it.id == placeholder.id }) }
                         } else {
-                            updateSession { it.withSegment(outcome.segment) }
+                            updateSession { applySegment(it, outcome.segment) }
                         }
                     // Live text alone is a legitimate setup, not an error.
-                    is SegmentTranscriber.Outcome.NoService -> updateSession { it.withSegment(placeholder.copy(draft = false)) }
+                    is SegmentTranscriber.Outcome.NoService -> updateSession { applySegment(it, placeholder.copy(draft = false)) }
                     is SegmentTranscriber.Outcome.Failed -> {
                         // "No accurate provider chosen" is a setup, not a failure, when live text is on.
                         if (outcome.error !is ServiceError.ConfigurationError) report(outcome)
-                        updateSession { it.withSegment(placeholder.copy(draft = false)) }
+                        updateSession { applySegment(it, placeholder.copy(draft = false)) }
                     }
                 }
                 return
@@ -430,7 +460,7 @@ class ConversationRecorder(
             if (outcome is SegmentTranscriber.Outcome.Done && outcome.segment.text.isBlank()) {
                 updateSession { s -> s.copy(segments = s.segments.filterNot { it.id == placeholder.id }) }
             } else {
-                updateSession { it.withSegment(outcome.segment) }
+                updateSession { applySegment(it, outcome.segment) }
             }
         }
 
@@ -688,14 +718,14 @@ class ConversationRecorder(
                 words = words,
                 draft = true
             )
-            scope.launch { updateSession { it.withSegment(draft) } }
+            scope.launch { updateSession { applySegment(it, draft) } }
             val audio = WavFiles.readRange(
                 repository.audioFile(sessionId, source),
                 startSample * 1000 / PcmStream.SAMPLE_RATE,
                 endSample * 1000 / PcmStream.SAMPLE_RATE
             )
             if (audio.isEmpty()) {
-                scope.launch { updateSession { it.withSegment(draft.copy(draft = false)) } }
+                scope.launch { updateSession { applySegment(it, draft.copy(draft = false)) } }
             } else {
                 utterances.trySend(draft to audio)
             }
@@ -760,7 +790,7 @@ class ConversationRecorder(
         java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(java.util.Date(clock())) +
             "-" + UUID.randomUUID().toString().take(6)
 
-    private companion object {
+    internal companion object {
         const val TICK_MILLIS = 200L
         const val SHUTDOWN_MILLIS = 5_000L
         const val MAX_CONCURRENT_TRANSCRIPTIONS = 3
@@ -770,5 +800,40 @@ class ConversationRecorder(
         const val LEAD_SAMPLES = PcmStream.SAMPLE_RATE * 6 / 10
         const val ROLLING_BUFFER_SECONDS = 10
         const val ROLLING_BUFFER_MAX_BYTES = PcmStream.SAMPLE_RATE * 2 * ROLLING_BUFFER_SECONDS
+
+        fun isEchoPair(systemSegment: TranscriptSegment, micSegment: TranscriptSegment): Boolean {
+            val sys = if (systemSegment.source == AudioSource.SYSTEM) systemSegment else micSegment
+            val mic = if (systemSegment.source == AudioSource.MICROPHONE) systemSegment else micSegment
+            if (sys.source != AudioSource.SYSTEM || mic.source != AudioSource.MICROPHONE) return false
+            if (sys.text.isBlank() || mic.text.isBlank()) return false
+            if (kotlin.math.abs(sys.startMillis - mic.startMillis) > 12_000) return false
+
+            val sysText = sys.text.trim().lowercase()
+            val micText = mic.text.trim().lowercase()
+            if (sysText.length < 5 || micText.length < 5) return false
+
+            val sysWords = sysText.split(Regex("""[\s\p{Punct}]+""")).filter { it.isNotBlank() }
+            val micWords = micText.split(Regex("""[\s\p{Punct}]+""")).filter { it.isNotBlank() }
+            if (sysWords.size < 2 && micWords.size < 2 && sysText.length < 10) return false
+
+            if (sysText == micText ||
+                (sysWords.size >= 3 && micText.contains(sysText)) ||
+                (micWords.size >= 3 && sysText.contains(micText))
+            ) {
+                return true
+            }
+
+            val set1 = sysWords.toSet()
+            val set2 = micWords.toSet()
+            val intersection = set1.intersect(set2).size
+            val union = set1.union(set2).size
+            if (union > 0) {
+                val jaccard = intersection.toDouble() / union
+                if (jaccard >= 0.6 && intersection >= 2) {
+                    return true
+                }
+            }
+            return false
+        }
     }
 }

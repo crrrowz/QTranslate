@@ -83,7 +83,25 @@ class VoskModelManager(
 
         val installed = listInstalledModels()
         if (isAuto) {
-            return installed.firstOrNull()
+            // Prioritize English model if installed
+            val enModel = installed.firstOrNull { dir ->
+                val info = MODELS_BY_NAME[dir.name]
+                info?.language == "en" || dir.name.contains("-en-") || dir.name.endsWith("-en")
+            }
+            if (enModel != null) return enModel
+
+            // Fallback to model matching system locale language if installed
+            val systemLang = java.util.Locale.getDefault().language.lowercase()
+            if (systemLang.isNotEmpty() && systemLang != "en") {
+                val sysModel = installed.firstOrNull { dir ->
+                    val info = MODELS_BY_NAME[dir.name]
+                    info?.language == systemLang || dir.name.contains("-$systemLang-") || dir.name.endsWith("-$systemLang")
+                }
+                if (sysModel != null) return sysModel
+            }
+
+            // Otherwise pick the first installed model alphabetically
+            return installed.minByOrNull { it.name }
         }
 
         val matchingInstalled = installed.firstOrNull { dir ->

@@ -804,6 +804,7 @@ notice_transcription_failed = "A segment could not be transcribed: %s. Click it 
 notice_device_lost = "%s audio stopped: %s"
 notice_save_failed = "The transcript could not be saved: %s. Recording continues."
 notice_live_failed = "Live text for %s stopped (%s). Recording continues; reconnecting."
+notice_echo_detected = "Your voice is bleeding into the call track. Turn off microphone monitoring (sidetone) or select a Chat output device."
 speaker_me = "Me"
 speaker_call = "Call"
 transcribing = "Transcribing..."

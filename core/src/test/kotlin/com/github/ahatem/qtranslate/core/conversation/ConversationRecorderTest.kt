@@ -130,7 +130,7 @@ class ConversationRecorderTest {
         val system = ScriptedDevice()
         val recorder = recorder(mic, system) { request ->
             // Tells the sources apart by clip length: the mic says a short line, the call a long one.
-            val text = if (request.audio.durationMillis < 1_400) "maybe check the logs" else "the server keeps timing out"
+            val text = if (request.audio.durationMillis < 2_000) "maybe check the logs" else "the server keeps timing out"
             Ok(SpeechRecognitionResponse(text, words = listOf(RecognizedWord("the", 100, 300))))
         }
 
@@ -450,5 +450,34 @@ class ConversationRecorderTest {
 
         recorder.stop()
         assertEquals(LiveRecognitionStatus.OFF, recorder.state.value.liveStatus)
+    }
+
+    @Test
+    fun `isEchoPair detects matching speech across microphone and system streams`() {
+        val micSegment = TranscriptSegment(
+            id = "seg-1",
+            source = AudioSource.MICROPHONE,
+            startMillis = 1000,
+            endMillis = 3000,
+            text = "I speak English now with my friends"
+        )
+        val sysEchoSegment = TranscriptSegment(
+            id = "seg-2",
+            source = AudioSource.SYSTEM,
+            startMillis = 1400,
+            endMillis = 3500,
+            text = "I speak English now with my friends"
+        )
+        val sysDifferentSegment = TranscriptSegment(
+            id = "seg-3",
+            source = AudioSource.SYSTEM,
+            startMillis = 2000,
+            endMillis = 4000,
+            text = "Sounds great we are ready"
+        )
+
+        assertTrue(ConversationRecorder.isEchoPair(sysEchoSegment, micSegment))
+        assertTrue(ConversationRecorder.isEchoPair(micSegment, sysEchoSegment))
+        kotlin.test.assertFalse(ConversationRecorder.isEchoPair(sysDifferentSegment, micSegment))
     }
 }
