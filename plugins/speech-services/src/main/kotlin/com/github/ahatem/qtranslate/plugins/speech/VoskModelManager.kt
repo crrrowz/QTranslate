@@ -147,6 +147,21 @@ class VoskModelManager(
         return if (dir.exists()) dir.deleteRecursively() else false
     }
 
+    /** Message for the settings "Delete Model" action. */
+    fun deleteAction(modelName: String): String {
+        val model = MODELS_BY_NAME[modelName]
+            ?: return "Unknown model '$modelName'."
+        if (!isInstalled(model.name)) {
+            return "Model '${model.label}' is not installed on disk."
+        }
+        val deleted = deleteModel(model.name)
+        return if (deleted) {
+            "Model '${model.label}' has been deleted from local storage."
+        } else {
+            "Failed to delete model '${model.label}'. Please check file permissions."
+        }
+    }
+
     /** Message for the settings "Check Models" action. */
     fun statusAction(): String {
         val installed = listInstalledModels()

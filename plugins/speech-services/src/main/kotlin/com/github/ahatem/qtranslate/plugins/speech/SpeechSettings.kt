@@ -137,7 +137,7 @@ data class SpeechSettings(
     @PluginAction(
         label = "Download Model",
         group = "live",
-        order = 1,
+        order = 45,
         tooltip = "Downloads and installs the selected Vosk model from alphacephei.com"
     )
     fun downloadSelectedModel(): String? {
@@ -146,9 +146,20 @@ data class SpeechSettings(
     }
 
     @PluginAction(
+        label = "Delete Model",
+        group = "live",
+        order = 46,
+        tooltip = "Deletes the selected Vosk model from local storage"
+    )
+    fun deleteSelectedModel(): String? {
+        val manager = modelManager ?: return "Model manager not initialized."
+        return manager.deleteAction(voskBuiltinModel)
+    }
+
+    @PluginAction(
         label = "Check Models",
         group = "live",
-        order = 2,
+        order = 47,
         tooltip = "Lists locally downloaded Vosk models"
     )
     fun checkModels(): String? {

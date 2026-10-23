@@ -74,6 +74,7 @@ class DynamicPluginSettingsDialog(
     )
 
     private val components = mutableMapOf<String, SettingComponent>()
+    private val actionStrips = mutableMapOf<String, JPanel>()
 
     /** A field rather than an inline lambda, so [dispose] can detach it again. */
     private val themeListener = java.beans.PropertyChangeListener { event ->
@@ -172,18 +173,21 @@ class DynamicPluginSettingsDialog(
             addToPanel(panel, buildGroupHeader(group))
         }
 
-        // Action button strip (standalone @PluginAction buttons)
-        if (group.actions.isNotEmpty()) {
-            addToPanel(panel, buildActionStrip(group.actions), topInset = if (group.title.isNotBlank()) 4 else 0)
-        }
+        val actionStrip = if (group.actions.isNotEmpty()) buildActionStrip(group.actions).also { actionStrips[group.key] = it } else null
+        val minActionOrder = group.actions.minOfOrNull { it.order } ?: Int.MAX_VALUE
+        var actionAdded = false
 
         // Fields — detect consecutive "compact" pairs for side-by-side layout
         val fields = group.fields
         var i = 0
         while (i < fields.size) {
             val current = fields[i]
-            val next = fields.getOrNull(i + 1)
+            if (actionStrip != null && !actionAdded && minActionOrder <= current.order) {
+                addToPanel(panel, actionStrip, topInset = 6)
+                actionAdded = true
+            }
 
+            val next = fields.getOrNull(i + 1)
             if (isCompact(current) && next != null && isCompact(next)) {
                 // Place two compact fields side-by-side
                 addToPanel(panel, buildSideBySideRow(current, next))
@@ -192,6 +196,10 @@ class DynamicPluginSettingsDialog(
                 addToPanel(panel, buildFieldBlock(current))
                 i++
             }
+        }
+
+        if (actionStrip != null && !actionAdded) {
+            addToPanel(panel, actionStrip, topInset = 8)
         }
     }
 
@@ -300,6 +308,16 @@ class DynamicPluginSettingsDialog(
 
     private fun invokeAction(action: PluginActionSchema, sourceButton: JButton) {
         val instance = settingsInstance ?: return
+
+        // Sync current UI component values into settingsInstance fields before invoking action
+        components.forEach { (propName, comp) ->
+            runCatching {
+                val field = instance::class.java.getDeclaredField(propName)
+                field.isAccessible = true
+                field.set(instance, comp.getValue())
+            }
+        }
+
         sourceButton.isEnabled = false
         object : SwingWorker<String?, Unit>() {
             override fun doInBackground(): String? = runCatching {
@@ -597,6 +615,15 @@ class DynamicPluginSettingsDialog(
             }
             components[setting.propertyName]?.fieldBlock?.isVisible = visible
         }
+
+        // Action strips visibility
+        if (actionStrips.containsKey("live")) {
+            val liveEngineVal = currentValues["liveEngine"]
+            val modeVal = currentValues["mode"]
+            val visible = modeVal != "Cloud only" && liveEngineVal == "Vosk (built-in)"
+            actionStrips["live"]?.isVisible = visible
+        }
+
         // Force layout update
         components.values.firstOrNull()?.fieldBlock?.parent?.let { parent ->
             parent.revalidate()
