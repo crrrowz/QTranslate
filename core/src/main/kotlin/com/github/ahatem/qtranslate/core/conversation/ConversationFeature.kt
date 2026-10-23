@@ -86,11 +86,12 @@ class ConversationFeature(
 
     /** Whether a speech service is active, so the window can say so before recording starts. */
     val hasSpeechService: Boolean
-        get() = (speechServiceName != null && speechServiceName != "Speech Recognition (None (live text only))") || liveServiceName != null
+        get() = speechServiceName != null || liveServiceName != null
 
     /** The active speech service's name, e.g. "Speech Recognition (Groq)", or null when none is. */
     val speechServiceName: String?
         get() = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)?.name
+            ?.takeUnless { it.contains("None (live text only)") || it.contains("Vosk offline") }
 
     /** The active live recognizer's name, or null. Whether it is actually set up shows when recording starts. */
     val liveServiceName: String?

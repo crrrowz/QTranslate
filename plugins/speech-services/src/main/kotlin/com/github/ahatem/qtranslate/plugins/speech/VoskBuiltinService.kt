@@ -117,17 +117,84 @@ class VoskBuiltinService(
                     modelFactory(modelDir)
                 }
             }
-        } catch (e: Exception) {
-            return Err(ServiceError.ServiceUnavailableError("Failed to load Vosk model at ${modelDir.name}: ${e.message}", e))
+        } catch (t: Throwable) {
+            return Err(ServiceError.ServiceUnavailableError("Failed to load Vosk model at ${modelDir.name}: ${t.message}", t))
         }
 
         val recognizer = try {
             modelHandle.createRecognizer(SAMPLE_RATE)
-        } catch (e: Exception) {
-            return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${e.message}", e))
+        } catch (t: Throwable) {
+            return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t))
         }
 
         return Ok(VoskBuiltinSession(recognizer))
+    }
+
+    /**
+     * Transcribes a finished audio clip locally using the in-process Vosk engine.
+     * Used when running offline (Local only or Provider = None).
+     */
+    suspend fun transcribeClip(pcm: ByteArray, language: LanguageCode): Result<com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse, ServiceError> {
+        val current = settings()
+        val preferredInfo = VoskModelManager.MODELS_BY_NAME[current.voskBuiltinModel]
+        val lang = SpeechClient.primaryTag(language) ?: preferredInfo?.language ?: "en"
+
+        val modelDir = modelManager.findModelForLanguage(lang, current.voskBuiltinModel)
+            ?: return Err(
+                ServiceError.ConfigurationError(
+                    "No built-in Vosk model found for language '$lang' (${current.voskBuiltinModel}). " +
+                        "Please download it in Settings > Plugins > Speech Recognition."
+                )
+            )
+
+        val modelHandle = try {
+            withContext(Dispatchers.IO) {
+                modelCache.computeIfAbsent(modelDir.absolutePath) {
+                    modelFactory(modelDir)
+                }
+            }
+        } catch (t: Throwable) {
+            return Err(ServiceError.ServiceUnavailableError("Failed to load Vosk model at ${modelDir.name}: ${t.message}", t))
+        }
+
+        val recognizer = try {
+            modelHandle.createRecognizer(SAMPLE_RATE)
+        } catch (t: Throwable) {
+            return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t))
+        }
+
+        return try {
+            withContext(Dispatchers.IO) {
+                recognizer.acceptWaveForm(pcm, pcm.size)
+                val finalJson = recognizer.getFinalResult()
+                val parsed = parseVoskJson(finalJson)
+                if (parsed is VoskParsedResult.Final) {
+                    Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = parsed.text, detectedLanguage = LanguageCode(lang), words = parsed.words))
+                } else if (parsed is VoskParsedResult.Partial) {
+                    Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = parsed.text, detectedLanguage = LanguageCode(lang), words = emptyList()))
+                } else {
+                    Ok(com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse(text = "", detectedLanguage = LanguageCode(lang), words = emptyList()))
+                }
+            }
+        } finally {
+            recognizer.close()
+        }
+    }
+
+    fun preloadModel(modelName: String) {
+        val model = VoskModelManager.MODELS_BY_NAME[modelName] ?: return
+        val dir = File(modelManager.modelsDirectory, model.name)
+        if (dir.isDirectory && (dir.list()?.isNotEmpty() == true)) {
+            try {
+                if (!modelCache.containsKey(dir.absolutePath)) {
+                    modelCache.computeIfAbsent(dir.absolutePath) {
+                        modelFactory(dir)
+                    }
+                }
+            } catch (_: Throwable) {
+                // Ignore background preload failures
+            }
+        }
     }
 
     override suspend fun validate(): Result<Unit, ServiceError> {

@@ -13,6 +13,9 @@ import com.github.ahatem.qtranslate.api.speech.SpeechRecognizer
 import com.github.michaelbull.result.Err
 import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Speech-to-text for Conversation Sessions, through whichever provider the user picks: a cloud
@@ -60,9 +63,12 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         val deepgramLive = DeepgramLiveService { settings }
         val openAiRealtime = OpenAiRealtimeService { settings }
         services = listOf(
-            SpeechRecognitionService(SpeechClient(context, http) { settings }) { settings },
+            SpeechRecognitionService(SpeechClient(context, http) { settings }, builtin) { settings },
             VoskLiveService({ settings }, builtin, deepgramLive, openAiRealtime)
         )
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            builtin.preloadModel(settings.voskBuiltinModel)
+        }
         return Ok(Unit)
     }
 
@@ -136,20 +142,46 @@ class SpeechPlugin : Plugin<SpeechSettings> {
 
 class SpeechRecognitionService(
     private val client: SpeechClient,
+    private val builtinLive: VoskBuiltinService? = null,
     private val settings: () -> SpeechSettings
 ) : SpeechRecognizer {
-    override val metadata = ServiceMetadata(requiresConfiguration = true)
+    override val metadata: ServiceMetadata get() = ServiceMetadata(requiresConfiguration = settings().mode == MODE_CLOUD)
     override val key: String = "speech"
     override val version: String = "1.0.0"
     override val iconPath: String = "assets/speech.svg"
     override val supportedLanguages: SupportedLanguages = SupportedLanguages.All
 
     /** Names the provider, so the Services list and the conversation window say what is in use. */
-    override val name: String get() = "Speech Recognition (${settings().speechProvider.label})"
+    override val name: String
+        get() {
+            val current = settings()
+            return when {
+                current.mode == MODE_LOCAL || current.speechProvider == SpeechProvider.NONE ->
+                    "Speech Recognition (Vosk offline)"
+                else -> "Speech Recognition (${current.speechProvider.label})"
+            }
+        }
 
-    override suspend fun transcribe(request: SpeechRecognitionRequest): Result<SpeechRecognitionResponse, ServiceError> =
-        client.transcribe(request)
+    override suspend fun transcribe(request: SpeechRecognitionRequest): Result<SpeechRecognitionResponse, ServiceError> {
+        val current = settings()
+        if (current.mode == MODE_LOCAL || current.speechProvider == SpeechProvider.NONE) {
+            val builtin = builtinLive
+                ?: return Err(ServiceError.ConfigurationError("Local offline Vosk speech recognizer is not available."))
+            val rawBytes = request.audio.bytes
+            val pcm = if (rawBytes.size > 44 && rawBytes[0] == 'R'.code.toByte() && rawBytes[1] == 'I'.code.toByte()) {
+                rawBytes.copyOfRange(44, rawBytes.size)
+            } else rawBytes
+            return builtin.transcribeClip(pcm, request.language)
+        }
+        return client.transcribe(request)
+    }
 
     /** Backs the settings dialog's Test button, which applies what is on screen first. */
-    override suspend fun validate(): Result<Unit, ServiceError> = client.testConnection()
+    override suspend fun validate(): Result<Unit, ServiceError> {
+        val current = settings()
+        if (current.mode == MODE_LOCAL || current.speechProvider == SpeechProvider.NONE) {
+            return builtinLive?.validate() ?: Ok(Unit)
+        }
+        return client.testConnection()
+    }
 }
