@@ -175,7 +175,8 @@ data class SpeechSettings(
     val liveEnabled: Boolean
         get() = when (mode) {
             MODE_CLOUD -> false
-            MODE_LOCAL, MODE_HYBRID -> when (liveEngine) {
+            MODE_LOCAL -> liveEngine == LIVE_VOSK_BUILTIN
+            MODE_HYBRID -> when (liveEngine) {
                 LIVE_VOSK_BUILTIN -> true
                 LIVE_DEEPGRAM -> effectiveLiveApiKey.isNotBlank()
                 LIVE_OPENAI -> effectiveLiveApiKey.isNotBlank()

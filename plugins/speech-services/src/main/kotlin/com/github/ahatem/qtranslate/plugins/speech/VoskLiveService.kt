@@ -51,6 +51,9 @@ class VoskLiveService(
         if (current.mode == MODE_CLOUD) {
             return Err(ServiceError.ConfigurationError("Live text is off in Cloud only mode."))
         }
+        if (current.mode == MODE_LOCAL && current.liveEngine != LIVE_VOSK_BUILTIN) {
+            return Err(ServiceError.ConfigurationError("Only local engines are allowed in Local only mode."))
+        }
         return when (current.liveEngine) {
             LIVE_VOSK_BUILTIN -> {
                 val builtin = builtinService
@@ -73,6 +76,10 @@ class VoskLiveService(
 
     override suspend fun validate(): Result<Unit, ServiceError> {
         val current = settings()
+        if (current.mode == MODE_CLOUD) return Ok(Unit)
+        if (current.mode == MODE_LOCAL && current.liveEngine != LIVE_VOSK_BUILTIN) {
+            return Err(ServiceError.ConfigurationError("Only local engines are allowed in Local only mode."))
+        }
         return when (current.liveEngine) {
             LIVE_VOSK_BUILTIN -> builtinService?.validate() ?: Ok(Unit)
             LIVE_DEEPGRAM -> deepgramService?.validate() ?: Ok(Unit)

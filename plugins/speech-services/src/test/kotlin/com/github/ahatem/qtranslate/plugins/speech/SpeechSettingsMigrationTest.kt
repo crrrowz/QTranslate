@@ -22,6 +22,9 @@ class SpeechSettingsMigrationTest {
         val localSettings = SpeechSettings(mode = MODE_LOCAL, liveEngine = LIVE_VOSK_BUILTIN)
         assertTrue(localSettings.liveEnabled, "Live text is enabled in Local only mode")
 
+        val localDeepgram = SpeechSettings(mode = MODE_LOCAL, liveEngine = LIVE_DEEPGRAM, liveApiKey = "key123")
+        assertFalse(localDeepgram.liveEnabled, "Deepgram live must NOT be enabled in Local only mode")
+
         val deepgramSettings = SpeechSettings(mode = MODE_HYBRID, liveEngine = LIVE_DEEPGRAM, liveApiKey = "key123")
         assertTrue(deepgramSettings.liveEnabled, "Deepgram live is enabled with key")
     }
@@ -93,5 +96,13 @@ class SpeechSettingsMigrationTest {
 
         val liveEngineAnn = fields["liveEngine"]?.getAnnotation(com.github.ahatem.qtranslate.api.settings.Setting::class.java)
         assertEquals("mode=!Cloud only", liveEngineAnn?.showIf)
+    }
+
+    @Test
+    fun `VoskLiveService rejects cloud live engines in Local only mode`() = kotlinx.coroutines.runBlocking {
+        val settings = SpeechSettings(mode = MODE_LOCAL, liveEngine = LIVE_DEEPGRAM, liveApiKey = "key123")
+        val service = VoskLiveService({ settings })
+        assertTrue(service.openSession(com.github.ahatem.qtranslate.api.language.LanguageCode("en")).getError() is com.github.ahatem.qtranslate.api.plugin.ServiceError.ConfigurationError)
+        assertTrue(service.validate().getError() is com.github.ahatem.qtranslate.api.plugin.ServiceError.ConfigurationError)
     }
 }
