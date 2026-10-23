@@ -167,6 +167,13 @@ class VoskModelManager(
                 return@withContext Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
             }
 
+            runCatching {
+                if (targetDir.exists()) {
+                    val persistentTarget = File(persistentModelsDirectory, targetDir.name)
+                    targetDir.copyRecursively(persistentTarget, overwrite = true)
+                }
+            }
+
             Ok(targetDir)
         } catch (e: Exception) {
             tempZip.delete()
