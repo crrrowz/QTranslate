@@ -1,5 +1,6 @@
 package com.github.ahatem.qtranslate.plugins.speech
 
+import com.github.michaelbull.result.getError
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
