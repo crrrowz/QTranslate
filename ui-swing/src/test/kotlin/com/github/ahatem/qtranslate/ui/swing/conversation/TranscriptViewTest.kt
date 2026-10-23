@@ -19,7 +19,7 @@ class TranscriptViewTest {
         override fun debug(message: String) = Unit
         override fun info(message: String) = Unit
         override fun warn(message: String) = Unit
-        override fun error(message: String, throwable: Throwable?) = Unit
+        override fun error(message: String, error: Throwable?) = Unit
     }
 
     private fun strings(): ConversationStrings {
