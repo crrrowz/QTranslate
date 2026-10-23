@@ -928,7 +928,7 @@ class ConversationWindow(
                 LiveRecognitionStatus.RECONNECTING -> strings.liveStatusReconnecting
                 LiveRecognitionStatus.OFF -> strings.liveStatusOff
             }
-            " · Live: $status"
+            strings.liveStatusTag(status)
         } else ""
         speechLabel.text = baseText + statusText
         speechLabel.foreground = when {

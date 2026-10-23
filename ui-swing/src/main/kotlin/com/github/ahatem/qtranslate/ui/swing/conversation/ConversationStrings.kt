@@ -75,6 +75,7 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val liveStatusConnected get() = localizer.getString("conversation.live_status_connected")
     val liveStatusReconnecting get() = localizer.getString("conversation.live_status_reconnecting")
     val liveStatusOff get() = localizer.getString("conversation.live_status_off")
+    fun liveStatusTag(status: String) = localizer.getString("conversation.live_status_tag", status)
     val testDevices get() = localizer.getString("conversation.test_devices")
     fun testingDevices(seconds: Int) = localizer.getString("conversation.testing_devices", seconds)
     fun warningSuspiciousMic(name: String) = localizer.getString("conversation.warning_suspicious_mic", name)
