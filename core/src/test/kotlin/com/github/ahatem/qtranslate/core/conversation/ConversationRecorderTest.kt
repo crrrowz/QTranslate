@@ -271,6 +271,11 @@ class ConversationRecorderTest {
         val retried = recorder.retry(session, session.segments.single())
         assertEquals("hello there", retried?.segments?.single()?.text)
         assertEquals("hello there", repository.load(session.id)?.segments?.single()?.text, "the retry is saved")
+
+        // Delete segment
+        val withoutSegment = recorder.deleteSegment(retried!!, retried.segments.single().id)
+        assertTrue(withoutSegment.segments.isEmpty())
+        assertTrue(repository.load(session.id)!!.segments.isEmpty(), "deletion is saved to repository")
     }
 
     @Test
