@@ -52,7 +52,7 @@ completely offline with zero data leaving your machine.
 QTranslate includes Vosk's native offline recognition engine directly inside the Speech Recognition plugin:
 
 1. In **Settings > Plugins > Speech Recognition**, under **Live text**, set **Live engine** to **Vosk (built-in)**.
-2. Select a model from **Built-in model** (for example, `vosk-model-small-en-us-0.15` for English ~40MB, or `vosk-model-small-ar-mgb2-0.4` for Arabic ~31MB).
+2. Select a model from **Built-in model** (for example, `vosk-model-small-en-us-0.15` for English ~40MB, or `vosk-model-ar-mgb2-0.4` for Arabic ~318MB).
 3. Click **Download Model** to download and install the model into local storage directly from alphacephei.com. A progress window shows real-time transfer speed, remaining time, and supports pausing, resuming, or cancelling.
 4. Click **Check Models** anytime to inspect installed models on disk.
 
