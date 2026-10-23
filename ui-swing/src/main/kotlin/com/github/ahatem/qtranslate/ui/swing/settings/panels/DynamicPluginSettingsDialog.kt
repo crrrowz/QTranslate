@@ -75,6 +75,7 @@ class DynamicPluginSettingsDialog(
 
     private val components = mutableMapOf<String, SettingComponent>()
     private val actionStrips = mutableMapOf<String, JPanel>()
+    private val actionStripAnchorField = mutableMapOf<String, String>()
 
     /** A field rather than an inline lambda, so [dispose] can detach it again. */
     private val themeListener = java.beans.PropertyChangeListener { event ->
@@ -175,6 +176,10 @@ class DynamicPluginSettingsDialog(
 
         val actionStrip = if (group.actions.isNotEmpty()) buildActionStrip(group.actions).also { actionStrips[group.key] = it } else null
         val minActionOrder = group.actions.minOfOrNull { it.order } ?: Int.MAX_VALUE
+        val anchorField = group.fields.lastOrNull { it.order <= minActionOrder } ?: group.fields.firstOrNull()
+        if (anchorField != null) {
+            actionStripAnchorField[group.key] = anchorField.propertyName
+        }
         var actionAdded = false
 
         // Fields — detect consecutive "compact" pairs for side-by-side layout
@@ -616,12 +621,15 @@ class DynamicPluginSettingsDialog(
             components[setting.propertyName]?.fieldBlock?.isVisible = visible
         }
 
-        // Action strips visibility
-        if (actionStrips.containsKey("live")) {
-            val liveEngineVal = currentValues["liveEngine"]
-            val modeVal = currentValues["mode"]
-            val visible = modeVal != "Cloud only" && liveEngineVal == "Vosk (built-in)"
-            actionStrips["live"]?.isVisible = visible
+        // Action strips visibility: follows the visibility of the field preceding them in the group
+        actionStrips.forEach { (groupKey, strip) ->
+            val anchorProp = actionStripAnchorField[groupKey]
+            val visible = if (anchorProp != null) {
+                components[anchorProp]?.fieldBlock?.isVisible ?: true
+            } else {
+                true
+            }
+            strip.isVisible = visible
         }
 
         // Force layout update
