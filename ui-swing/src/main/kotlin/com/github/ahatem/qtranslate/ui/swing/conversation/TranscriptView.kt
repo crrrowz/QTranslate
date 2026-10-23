@@ -17,6 +17,8 @@ import java.awt.RenderingHints
 import java.awt.event.MouseEvent
 import java.text.BreakIterator
 import javax.swing.Icon
+import com.formdev.flatlaf.extras.FlatSVGIcon
+import com.github.ahatem.qtranslate.ui.swing.shared.icon.Icons
 import javax.swing.JScrollPane
 import javax.swing.JTextPane
 import javax.swing.SwingUtilities
@@ -25,71 +27,6 @@ import javax.swing.text.DefaultCaret
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
 import javax.swing.text.StyledDocument
-
-enum class ActionBadgeType { PLAY, RETRY, DELETE }
-
-class ActionBadgeIcon(
-    val type: ActionBadgeType,
-    val color: Color,
-    val size: Int = 13
-) : Icon {
-    override fun getIconWidth() = size + 6
-    override fun getIconHeight() = size + 2
-
-    override fun paintIcon(c: Component?, g: Graphics?, x: Int, y: Int) {
-        val g2 = g?.create() as? Graphics2D ?: return
-        try {
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
-            g2.color = color
-            val cx = x + 3
-            val cy = y + 1
-
-            when (type) {
-                ActionBadgeType.PLAY -> {
-                    val px = intArrayOf(cx + 3, cx + size - 2, cx + 3)
-                    val py = intArrayOf(cy + 2, cy + size / 2, cy + size - 2)
-                    g2.fillPolygon(px, py, 3)
-                }
-                ActionBadgeType.RETRY -> {
-                    g2.stroke = BasicStroke(1.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                    val s = size.toFloat()
-                    val r = (s - 3f) / 2f
-                    val midX = cx + s / 2f
-                    val midY = cy + s / 2f
-                    // Draw clean 270 degree arc clockwise
-                    g2.draw(java.awt.geom.Arc2D.Float(midX - r, midY - r, r * 2f, r * 2f, 50f, -270f, java.awt.geom.Arc2D.OPEN))
-                    // Arrowhead attached to the start of the arc (top-right quadrant)
-                    val arrowX = (midX + r * 0.64f).toInt()
-                    val arrowY = (midY - r * 0.77f).toInt()
-                    g2.drawLine(arrowX, arrowY, arrowX - 4, arrowY)
-                    g2.drawLine(arrowX, arrowY, arrowX, arrowY + 4)
-                }
-                ActionBadgeType.DELETE -> {
-                    g2.stroke = BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                    val w = size - 3
-                    val h = size - 3
-                    // Top lid line
-                    g2.drawLine(cx, cy + 3, cx + w, cy + 3)
-                    // Top handle
-                    g2.drawLine(cx + w / 2 - 2, cy + 1, cx + w / 2 + 2, cy + 1)
-                    // Bin body
-                    val bx = cx + 2
-                    val by = cy + 4
-                    val bw = w - 4
-                    val bh = h - 4
-                    g2.drawRoundRect(bx, by, bw, bh, 2, 2)
-                    // Slats
-                    val mid = bx + bw / 2
-                    g2.drawLine(mid - 1, by + 2, mid - 1, by + bh - 2)
-                    g2.drawLine(mid + 2, by + 2, mid + 2, by + bh - 2)
-                }
-            }
-        } finally {
-            g2.dispose()
-        }
-    }
-}
 
 /**
  * The transcript, rendered as distinct card bubbles per message.
@@ -231,7 +168,10 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             if (doc.length > 0) doc.insertString(doc.length, "\n\n", null)
 
             val playStart = doc.length
-            val playIcon = ActionBadgeIcon(ActionBadgeType.PLAY, sourceColor(segment.source), (font.size - 2).coerceAtLeast(12))
+            val iconSize = (font.size - 2).coerceIn(12, 16)
+            val playIcon = FlatSVGIcon(Icons.PLAY, iconSize, iconSize).apply {
+                colorFilter = FlatSVGIcon.ColorFilter { sourceColor(segment.source) }
+            }
             doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, playIcon) })
             doc.insertString(doc.length, " ", null)
             val playEnd = doc.length
@@ -244,13 +184,17 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             // Action buttons on the opposite side of the header row
             doc.insertString(doc.length, "    ", null)
             val retryStart = doc.length
-            val retryIcon = ActionBadgeIcon(ActionBadgeType.RETRY, UIManager.getColor("Actions.Blue") ?: Color(0x389FD6), (font.size - 3).coerceAtLeast(11))
+            val retryIcon = FlatSVGIcon(Icons.RETRY, iconSize, iconSize).apply {
+                colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Blue") ?: Color(0x389FD6) }
+            }
             doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, retryIcon) })
             doc.insertString(doc.length, " ", null)
             val retryEnd = doc.length
 
             val deleteStart = doc.length
-            val deleteIcon = ActionBadgeIcon(ActionBadgeType.DELETE, UIManager.getColor("Actions.Red") ?: Color(0xE05555), (font.size - 3).coerceAtLeast(11))
+            val deleteIcon = FlatSVGIcon(Icons.DELETE, iconSize, iconSize).apply {
+                colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Red") ?: Color(0xE05555) }
+            }
             doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, deleteIcon) })
             doc.insertString(doc.length, " ", null)
             val deleteEnd = doc.length
