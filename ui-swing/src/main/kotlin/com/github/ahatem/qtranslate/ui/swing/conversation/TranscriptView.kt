@@ -181,31 +181,42 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             doc.insertString(doc.length, "${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
             val headerEnd = doc.length
 
-            // Action buttons on the opposite side of the header row
-            doc.insertString(doc.length, "    ", null)
-            val retryStart = doc.length
-            val retryIcon = FlatSVGIcon(Icons.RETRY, iconSize, iconSize).apply {
-                colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Blue") ?: Color(0x389FD6) }
-            }
-            doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, retryIcon) })
-            doc.insertString(doc.length, " ", null)
-            val retryEnd = doc.length
+            val isLiveDraft = segment.id.startsWith("live-")
+            var retryStart = doc.length
+            var retryEnd = retryStart
+            var deleteStart = doc.length
+            var deleteEnd = deleteStart
 
-            val deleteStart = doc.length
-            val deleteIcon = FlatSVGIcon(Icons.DELETE, iconSize, iconSize).apply {
-                colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Red") ?: Color(0xE05555) }
+            if (!isLiveDraft) {
+                // Action buttons on the opposite side of the header row
+                doc.insertString(doc.length, "    ", null)
+                retryStart = doc.length
+                val retryIcon = FlatSVGIcon(Icons.RETRY, iconSize, iconSize).apply {
+                    colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Blue") ?: Color(0x389FD6) }
+                }
+                doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, retryIcon) })
+                doc.insertString(doc.length, " ", null)
+                retryEnd = doc.length
+
+                deleteStart = doc.length
+                val deleteIcon = FlatSVGIcon(Icons.DELETE, iconSize, iconSize).apply {
+                    colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Red") ?: Color(0xE05555) }
+                }
+                doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, deleteIcon) })
+                doc.insertString(doc.length, " ", null)
+                deleteEnd = doc.length
             }
-            doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, deleteIcon) })
-            doc.insertString(doc.length, " ", null)
-            val deleteEnd = doc.length
             doc.insertString(doc.length, "\n", null)
 
             val textStart = doc.length
             val (text, style) = when {
                 segment.pending -> strings.transcribing to muted(italic = true)
                 segment.failed -> strings.failedRetry to link()
-                // Live text awaiting the accurate recognizer: shown, but visibly provisional.
-                segment.draft -> segment.text to body().apply { StyleConstants.setItalic(this, true) }
+                // Live text awaiting the accurate recognizer: shown in speaker color, italicized.
+                segment.draft -> segment.text to body().apply {
+                    StyleConstants.setItalic(this, true)
+                    StyleConstants.setForeground(this, sourceColor(segment.source))
+                }
                 else -> segment.text to body()
             }
             doc.insertString(doc.length, text, style)

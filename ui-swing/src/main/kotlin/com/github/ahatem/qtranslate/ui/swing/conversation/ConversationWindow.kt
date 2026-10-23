@@ -327,11 +327,10 @@ class ConversationWindow(
         transcriptScroll.verticalScrollBar.unitIncrement = 16
         add(transcriptScroll, BorderLayout.CENTER)
         add(JPanel(BorderLayout()).apply {
-            add(liveStrip, BorderLayout.NORTH)
             add(JLabel(strings.interactionHint).apply {
                 foreground = UIManager.getColor("Label.disabledForeground")
                 border = BorderFactory.createEmptyBorder(6, 12, 6, 12)
-            }, BorderLayout.SOUTH)
+            }, BorderLayout.CENTER)
         }, BorderLayout.SOUTH)
     }
 
@@ -623,8 +622,23 @@ class ConversationWindow(
         noticeBar.isVisible = state.notice != null
         noticeText.text = state.notice?.let(::noticeMessage).orEmpty()
 
-        if (active || state.phase == RecorderPhase.STOPPING) transcript.render(state.session)
-        renderLive(state)
+        if (active || state.phase == RecorderPhase.STOPPING) {
+            val liveSegments = state.live.mapNotNull { (source, line) ->
+                if (line.text.isBlank()) null
+                else TranscriptSegment(
+                    id = "live-${source.name.lowercase()}",
+                    source = source,
+                    startMillis = line.startMillis,
+                    endMillis = maxOf(line.startMillis, state.elapsedMillis),
+                    text = line.text,
+                    draft = true
+                )
+            }
+            val sessionToRender = if (liveSegments.isEmpty()) state.session else {
+                state.session?.let { s -> s.copy(segments = s.segments + liveSegments) }
+            }
+            transcript.render(sessionToRender)
+        }
         renderSpeechStatus()
         checkDeviceWarnings()
 
