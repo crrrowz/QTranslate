@@ -8,5 +8,3 @@ npx skills@latest add mattpocock/skills
 npx skills@latest
 npx skills list
 npx skills list -g
-gradlew.bat build
-.\gradlew.bat build
