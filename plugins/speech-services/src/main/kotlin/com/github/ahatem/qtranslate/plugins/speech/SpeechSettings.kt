@@ -159,6 +159,11 @@ data class SpeechSettings(
         return manager.downloadAction(voskBuiltinModel)
     }
 
+    fun downloadSelectedModelVisible(): Boolean {
+        val manager = modelManager ?: return true
+        return !manager.isInstalled(voskBuiltinModel)
+    }
+
     @PluginAction(
         label = "Import Model",
         group = "live",
@@ -170,6 +175,11 @@ data class SpeechSettings(
         return manager.importModelInteractive()
     }
 
+    fun importModelVisible(): Boolean {
+        val manager = modelManager ?: return true
+        return !manager.isInstalled(voskBuiltinModel)
+    }
+
     @PluginAction(
         label = "Delete Model",
         group = "live",
@@ -179,6 +189,11 @@ data class SpeechSettings(
     fun deleteSelectedModel(): String? {
         val manager = modelManager ?: return "Model manager not initialized."
         return manager.deleteAction(voskBuiltinModel)
+    }
+
+    fun deleteSelectedModelVisible(): Boolean {
+        val manager = modelManager ?: return false
+        return manager.isInstalled(voskBuiltinModel)
     }
 
     @PluginAction(

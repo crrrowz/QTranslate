@@ -34,7 +34,8 @@ class VoskModelManagerTest {
 
     @Test
     fun `model manager detects installed models and resolves for language`() {
-        val manager = VoskModelManager({ tempDir })
+        val isolatedDir = File(tempDir, "isolated").apply { mkdirs() }
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { isolatedDir })
         val modelsRoot = manager.modelsDirectory
 
         assertFalse(manager.isInstalled("vosk-model-small-en-us-0.15"))

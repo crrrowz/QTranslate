@@ -75,6 +75,7 @@ class DynamicPluginSettingsDialog(
 
     private val components = mutableMapOf<String, SettingComponent>()
     private val actionStrips = mutableMapOf<String, JPanel>()
+    private val actionButtons = mutableMapOf<PluginActionSchema, JButton>()
     private val actionStripAnchorField = mutableMapOf<String, String>()
 
     /** A field rather than an inline lambda, so [dispose] can detach it again. */
@@ -306,6 +307,7 @@ class DynamicPluginSettingsDialog(
                 if (action.tooltip.isNotBlank()) toolTipText = action.tooltip
                 addActionListener { invokeAction(action, this) }
             }
+            actionButtons[action] = btn
             strip.add(btn)
         }
         return strip
@@ -343,6 +345,7 @@ class DynamicPluginSettingsDialog(
                         result, action.label, JOptionPane.INFORMATION_MESSAGE
                     )
                 }
+                updateVisibility()
             }
         }.execute()
     }
@@ -630,6 +633,32 @@ class DynamicPluginSettingsDialog(
                 true
             }
             strip.isVisible = visible
+        }
+
+        // Per-action button visibility based on action.showIf and dynamic predicate
+        val instance = settingsInstance
+        actionButtons.forEach { (action, btn) ->
+            val rule = action.showIf
+            val ruleVisible = if (rule != null) {
+                val currentVal = currentValues[rule.propertyName]
+                if (rule.requiredValue.startsWith("!")) {
+                    currentVal != rule.requiredValue.removePrefix("!")
+                } else {
+                    rule.requiredValue.split(',').map { it.trim() }.contains(currentVal)
+                }
+            } else true
+
+            val predicateVisible = if (instance != null) {
+                val predicateMethod = runCatching {
+                    instance::class.java.getDeclaredMethod(action.methodName + "Visible")
+                }.getOrNull()
+                if (predicateMethod != null) {
+                    predicateMethod.isAccessible = true
+                    runCatching { predicateMethod.invoke(instance) as? Boolean }.getOrNull() ?: true
+                } else true
+            } else true
+
+            btn.isVisible = ruleVisible && predicateVisible
         }
 
         // Force layout update

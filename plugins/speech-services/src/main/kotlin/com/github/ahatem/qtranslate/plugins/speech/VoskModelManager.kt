@@ -44,14 +44,19 @@ data class VoskModel(
  */
 class VoskModelManager(
     private val dataDirectory: () -> File,
+    private val persistentDirectoryProvider: (() -> File)? = null,
     private val downloader: suspend (url: String, targetZip: File, onProgress: ((Long, Long) -> Unit)?) -> Result<Unit, ServiceError> = ::defaultDownload
 ) {
     val modelsDirectory: File
         get() = File(dataDirectory(), "vosk-models").apply { if (!exists()) mkdirs() }
 
     val persistentModelsDirectory: File by lazy {
-        val base = System.getenv("APPDATA") ?: System.getProperty("user.home")
-        File(base, "QTranslate/plugins_data/speech-services/vosk-models").apply { if (!exists()) mkdirs() }
+        if (persistentDirectoryProvider != null) {
+            persistentDirectoryProvider.invoke().apply { if (!exists()) mkdirs() }
+        } else {
+            val base = System.getenv("APPDATA") ?: System.getProperty("user.home")
+            File(base, "QTranslate/plugins_data/speech-services/vosk-models").apply { if (!exists()) mkdirs() }
+        }
     }
 
     private fun File.isValidModelDir(): Boolean =

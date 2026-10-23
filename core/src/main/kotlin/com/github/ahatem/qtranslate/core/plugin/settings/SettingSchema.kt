@@ -22,7 +22,8 @@ data class PluginActionSchema(
     val label: String,
     val tooltip: String,
     val order: Int,
-    val group: String
+    val group: String,
+    val showIf: ShowIfRule? = null
 )
 
 // =============================================================================

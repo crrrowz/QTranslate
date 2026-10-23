@@ -288,5 +288,11 @@ public annotation class PluginAction(
     /** Display order of this action button within its group's action strip. */
     val order: Int = 0,
     /** Tooltip shown on the button. */
-    val tooltip: String = ""
+    val tooltip: String = "",
+    /**
+     * Conditional visibility rule, matching [@Setting.showIf][Setting.showIf].
+     * Format: `"propertyName=value"` or `"propertyName!=value"`.
+     * Empty string = always visible.
+     */
+    val showIf: String = ""
 )
