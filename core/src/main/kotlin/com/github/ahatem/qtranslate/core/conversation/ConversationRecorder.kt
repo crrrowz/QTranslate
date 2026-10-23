@@ -105,7 +105,9 @@ class ConversationRecorder(
     private val logger: Logger,
     private val clock: () -> Long = System::currentTimeMillis,
     /** The active live recognizer, if any. Without one, speech is cut at pauses and sent as clips. */
-    private val openLive: OpenLive = { null }
+    private val openLive: OpenLive = { null },
+    /** True while in-app playback is active, so recorded audio is muted to prevent acoustic/loopback feedback. */
+    private val isPlaybackActive: () -> Boolean = { false }
 ) {
     private val transcriber = SegmentTranscriber(recognize)
 
@@ -456,13 +458,14 @@ class ConversationRecorder(
                     if (flushedForPause) connectLive()
                     flushedForPause = false
                     if (chunk.isEmpty()) continue
+                    val effectiveChunk = if (isPlaybackActive()) ByteArray(chunk.size) else chunk
                     if (offsetMillis == null) {
                         val offset = recordedMillis()
                         offsetMillis = offset
                         updateSession { it.copy(streams = it.streams + SessionStream(source, device.name, offset)) }
                     }
-                    writer?.write(chunk)
-                    val chunkCopy = chunk.copyOf()
+                    writer?.write(effectiveChunk)
+                    val chunkCopy = effectiveChunk.copyOf()
                     synchronized(liveLock) {
                         rollingBuffer.addLast(chunkCopy)
                         rollingBufferBytes += chunkCopy.size
@@ -472,16 +475,16 @@ class ConversationRecorder(
 
                         val session = live
                         if (session != null) {
-                            session.sendAudio(chunk)
+                            session.sendAudio(effectiveChunk)
                             samplesSentToLive = samplesWritten
                             // The live recognizer decides where lines end; the voice detector still
                             // knows where speech began, which a late partial cannot tell.
-                            val completed = segmenter.accept(chunk)
+                            val completed = segmenter.accept(effectiveChunk)
                             if (voicedStartSample == null) {
                                 voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
                             }
                         } else if (liveUnavailable) {
-                            segmenter.accept(chunk).forEach(::announce)
+                            segmenter.accept(effectiveChunk).forEach(::announce)
                         }
                     }
                 }
@@ -574,12 +577,10 @@ class ConversationRecorder(
                         liveFailures = 0
                         liveStatus = LiveRecognitionStatus.CONNECTED
                         updateLiveStatus()
-                        liveStartSample = samplesWritten
-                        lastFinalSample = samplesWritten
-                        utteranceStartSample = null
 
-                        synchronized(liveLock) {
+                        val actualGapSamples = synchronized(liveLock) {
                             val gapSamples = (samplesWritten - samplesSentToLive).coerceAtLeast(0)
+                            var replayed = 0L
                             if (gapSamples > 0) {
                                 val gapBytes = (gapSamples * 2).coerceAtMost(rollingBufferBytes.toLong()).toInt()
                                 val gapChunks = extractLastBytes(gapBytes)
@@ -587,9 +588,14 @@ class ConversationRecorder(
                                     session.sendAudio(gapChunk)
                                 }
                                 samplesSentToLive = samplesWritten
+                                replayed = (gapBytes / 2).toLong()
                             }
                             live = session
+                            replayed
                         }
+                        liveStartSample = samplesWritten - actualGapSamples
+                        lastFinalSample = liveStartSample
+                        utteranceStartSample = null
                         liveEvents = scope.launch { session.events.collect { onLiveEvent(session, it) } }
                         logger.info("Live recognition active for $source")
                     },

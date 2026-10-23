@@ -46,6 +46,19 @@ class ConversationFeature(
         scope.launch(Dispatchers.IO) { runCatching { repository.recoverInterrupted() } }
     }
 
+    val player = SegmentPlayer()
+
+    @Volatile
+    private var lastPlaybackTime = 0L
+
+    private fun isPlaybackActive(): Boolean {
+        if (player.playing.value != null) {
+            lastPlaybackTime = System.currentTimeMillis()
+            return true
+        }
+        return (System.currentTimeMillis() - lastPlaybackTime) < 200L
+    }
+
     val recorder = ConversationRecorder(
         scope = scope,
         repository = repository,
@@ -59,12 +72,11 @@ class ConversationFeature(
         logger = loggerFactory.getLogger("ConversationRecorder"),
         openLive = { language ->
             activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)?.openSession(language)
-        }
+        },
+        isPlaybackActive = ::isPlaybackActive
     )
 
     val translations = TranslationCache(scope, { text, target -> translateString(text, target) })
-
-    val player = SegmentPlayer()
 
     private val preferencesFile = File(repository.root, "preferences.json")
 

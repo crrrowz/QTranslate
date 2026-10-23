@@ -434,6 +434,20 @@ class ConversationRecorderTest {
         // Verify that the gap audio was replayed to session2
         waitUntil { session2.received.get() >= gapAudio.size }
 
+        session2.channel.send(
+            com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final(
+                text = "gap speech",
+                words = listOf(
+                    com.github.ahatem.qtranslate.api.speech.RecognizedWord("gap", 100, 400),
+                    com.github.ahatem.qtranslate.api.speech.RecognizedWord("speech", 500, 900)
+                )
+            )
+        )
+        waitUntil { recorder.state.value.session?.segments?.isNotEmpty() == true }
+        val segment = recorder.state.value.session!!.segments.first()
+        assertTrue(segment.startMillis < segment.endMillis)
+        assertTrue(segment.startMillis in 0 until segment.endMillis)
+
         recorder.stop()
         assertEquals(LiveRecognitionStatus.OFF, recorder.state.value.liveStatus)
     }
