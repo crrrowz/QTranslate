@@ -33,7 +33,7 @@ class ActionBadgeIcon(
     val color: Color,
     val size: Int = 13
 ) : Icon {
-    override fun getIconWidth() = size + 4
+    override fun getIconWidth() = size + 6
     override fun getIconHeight() = size + 2
 
     override fun paintIcon(c: Component?, g: Graphics?, x: Int, y: Int) {
@@ -42,37 +42,47 @@ class ActionBadgeIcon(
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
             g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
             g2.color = color
-            val cx = x + 2
+            val cx = x + 3
             val cy = y + 1
 
             when (type) {
                 ActionBadgeType.PLAY -> {
-                    val px = intArrayOf(cx + 2, cx + size - 2, cx + 2)
-                    val py = intArrayOf(cy + 1, cy + size / 2, cy + size - 1)
+                    val px = intArrayOf(cx + 3, cx + size - 2, cx + 3)
+                    val py = intArrayOf(cy + 2, cy + size / 2, cy + size - 2)
                     g2.fillPolygon(px, py, 3)
                 }
                 ActionBadgeType.RETRY -> {
-                    g2.stroke = BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                    g2.drawArc(cx + 1, cy + 1, size - 2, size - 2, 45, 270)
-                    val ax = cx + size / 2 + 2
-                    val ay = cy + 1
-                    g2.drawLine(ax, ay, ax + 3, ay + 2)
-                    g2.drawLine(ax, ay, ax, ay + 4)
+                    g2.stroke = BasicStroke(1.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                    val s = size.toFloat()
+                    val r = (s - 3f) / 2f
+                    val midX = cx + s / 2f
+                    val midY = cy + s / 2f
+                    // Draw clean 270 degree arc clockwise
+                    g2.draw(java.awt.geom.Arc2D.Float(midX - r, midY - r, r * 2f, r * 2f, 50f, -270f, java.awt.geom.Arc2D.OPEN))
+                    // Arrowhead attached to the start of the arc (top-right quadrant)
+                    val arrowX = (midX + r * 0.64f).toInt()
+                    val arrowY = (midY - r * 0.77f).toInt()
+                    g2.drawLine(arrowX, arrowY, arrowX - 4, arrowY)
+                    g2.drawLine(arrowX, arrowY, arrowX, arrowY + 4)
                 }
                 ActionBadgeType.DELETE -> {
                     g2.stroke = BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-                    // Lid
-                    g2.drawLine(cx + 1, cy + 3, cx + size - 1, cy + 3)
-                    g2.drawLine(cx + 4, cy + 1, cx + size - 4, cy + 1)
+                    val w = size - 3
+                    val h = size - 3
+                    // Top lid line
+                    g2.drawLine(cx, cy + 3, cx + w, cy + 3)
+                    // Top handle
+                    g2.drawLine(cx + w / 2 - 2, cy + 1, cx + w / 2 + 2, cy + 1)
                     // Bin body
                     val bx = cx + 2
                     val by = cy + 4
-                    val bw = size - 4
-                    val bh = size - 5
+                    val bw = w - 4
+                    val bh = h - 4
                     g2.drawRoundRect(bx, by, bw, bh, 2, 2)
                     // Slats
-                    g2.drawLine(cx + size / 2 - 1, by + 2, cx + size / 2 - 1, by + bh - 2)
-                    g2.drawLine(cx + size / 2 + 2, by + 2, cx + size / 2 + 2, by + bh - 2)
+                    val mid = bx + bw / 2
+                    g2.drawLine(mid - 1, by + 2, mid - 1, by + bh - 2)
+                    g2.drawLine(mid + 2, by + 2, mid + 2, by + bh - 2)
                 }
             }
         } finally {
@@ -336,15 +346,27 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     private fun isDark(color: Color): Boolean =
         (0.299 * color.red + 0.587 * color.green + 0.114 * color.blue) < 128
 
+    private fun Rectangle.grow(pad: Int): Rectangle = Rectangle(x - pad, y - pad, width + pad * 2, height + pad * 2)
+
     /** What is under [point], if anything. */
     fun hitTest(point: Point): Hit? {
         val offset = viewToModel2D(point).takeIf { it >= 0 } ?: return null
+        val span = spans.firstOrNull { offset in it.playStart until it.textEnd } ?: return null
+
+        val playBox = boundsOf(span.playStart until span.playEnd)
+        if (playBox != null && playBox.grow(4).contains(point)) return Hit.PlayButton(span)
+
+        val retryBox = boundsOf(span.retryStart until span.retryEnd)
+        if (retryBox != null && retryBox.grow(4).contains(point)) return Hit.RetryButton(span)
+
+        val deleteBox = boundsOf(span.deleteStart until span.deleteEnd)
+        if (deleteBox != null && deleteBox.grow(4).contains(point)) return Hit.DeleteButton(span)
+
         val box = runCatching { modelToView2D(offset) }.getOrNull() ?: return null
         val next = runCatching { modelToView2D((offset + 1).coerceAtMost(document.length)) }.getOrNull()
         val right = if (next != null && next.y == box.y) next.x else box.x + 12
         if (point.x < minOf(box.x, right) - 6 || point.x > maxOf(box.x, right) + 6) return null
 
-        val span = spans.firstOrNull { offset in it.playStart until it.textEnd } ?: return null
         return when {
             offset in span.playStart until span.playEnd -> Hit.PlayButton(span)
             offset in span.retryStart until span.retryEnd -> Hit.RetryButton(span)

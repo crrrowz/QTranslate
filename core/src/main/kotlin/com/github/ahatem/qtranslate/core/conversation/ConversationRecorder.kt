@@ -257,8 +257,12 @@ class ConversationRecorder(
             WavFiles.readRange(file, segment.startMillis - stream.offsetMillis, segment.endMillis - stream.offsetMillis)
         }
         if (pcm.isEmpty()) return null
+        val pendingSegment = segment.copy(pending = true, draft = false, failed = false, text = "")
+        if (_state.value.session?.id == session.id) {
+            updateSession { it.withSegment(pendingSegment) }
+        }
         val outcome = transcriber.transcribe(
-            segment.copy(pending = true, failed = false), pcm,
+            pendingSegment, pcm,
             LanguageCode(session.languageOf(segment.source)), promptBefore(session, segment)
         )
         report(outcome)
@@ -269,6 +273,24 @@ class ConversationRecorder(
             withContext(Dispatchers.IO) { runCatching { repository.save(updated) } }
         }
         return updated
+    }
+
+    fun updateLiveSession(transform: (ConversationSession) -> ConversationSession) {
+        if (_state.value.isActive) {
+            scope.launch { updateSession(transform) }
+        }
+    }
+
+    fun updateSpokenLanguage(language: LanguageCode) {
+        options = options?.copy(microphoneLanguage = language)
+        scope.launch { updateSession { it.copy(spokenLanguage = language.tag) } }
+        streams.firstOrNull { it.source == AudioSource.MICROPHONE }?.switchLiveLanguage(language)
+    }
+
+    fun updateCallLanguage(language: LanguageCode) {
+        options = options?.copy(systemLanguage = language)
+        scope.launch { updateSession { it.copy(callLanguage = language.tag) } }
+        streams.firstOrNull { it.source == AudioSource.SYSTEM }?.switchLiveLanguage(language)
     }
 
     /**
@@ -532,6 +554,10 @@ class ConversationRecorder(
                             if (voicedStartSample == null) {
                                 voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
                             }
+                            if (completed.isNotEmpty() && !playing) {
+                                // Natural pause detected by VAD: feed silence to ensure Kaldi/live recognizer commits trailing words
+                                session.sendAudio(ByteArray(1600 * 2))
+                            }
                         } else {
                             segmenter.accept(effectiveChunk).forEach(::announce)
                         }
@@ -680,6 +706,14 @@ class ConversationRecorder(
             }
             liveEvents?.cancel()
             clearLiveLine()
+        }
+
+        fun switchLiveLanguage(language: LanguageCode) {
+            scope.launch {
+                closeLive()
+                liveUnavailable = false
+                connectLive()
+            }
         }
 
         private suspend fun onLiveEvent(session: LiveSpeechSession, event: LiveSpeechEvent) {

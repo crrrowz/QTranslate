@@ -37,6 +37,7 @@ import java.awt.ComponentOrientation
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Insets
+import java.awt.Point
 import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -401,7 +402,27 @@ class ConversationWindow(
                 RecorderPhase.STOPPING -> Unit
             }
         }
-        stopButton.addActionListener { scope.launch { recorder.stop() } }
+        stopButton.addActionListener {
+            scope.launch {
+                val current = recorder.state.value.session
+                recorder.stop()
+                if (current != null) {
+                    val choice = JOptionPane.showConfirmDialog(
+                        this@ConversationWindow,
+                        strings.confirmSaveSession,
+                        strings.confirmSaveTitle,
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.QUESTION_MESSAGE
+                    )
+                    if (choice == JOptionPane.NO_OPTION) {
+                        feature.repository.delete(current.id)
+                        viewed = null
+                        transcript.render(null)
+                        reloadSessions()
+                    }
+                }
+            }
+        }
         refreshDevicesButton.addActionListener { loadDevices() }
         testDevicesButton.addActionListener { testDevices() }
         deviceModeButton.addActionListener {
@@ -433,6 +454,22 @@ class ConversationWindow(
         systemCombo.addActionListener {
             deviceWarningDismissed = false
             checkDeviceWarnings()
+        }
+        myLanguageCombo.addActionListener {
+            (myLanguageCombo.selectedItem as? LanguageCode)?.let { lang ->
+                feature.preferences = feature.preferences.copy(spokenLanguage = lang.tag)
+                if (recorder.state.value.isActive) {
+                    recorder.updateSpokenLanguage(lang)
+                }
+            }
+        }
+        callLanguageCombo.addActionListener {
+            (callLanguageCombo.selectedItem as? LanguageCode)?.let { lang ->
+                feature.preferences = feature.preferences.copy(callLanguage = lang.tag)
+                if (recorder.state.value.isActive) {
+                    recorder.updateCallLanguage(lang)
+                }
+            }
         }
         speechSettingsButton.addActionListener { onOpenSpeechSettings() }
         retryFailedButton.addActionListener { retryAllFailed() }
@@ -473,14 +510,30 @@ class ConversationWindow(
             override fun changedUpdate(e: DocumentEvent) = searchTimer.restart()
         })
 
+        var pressPoint: Point? = null
         val mouse = object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                pressPoint = e.point
+            }
             override fun mouseMoved(e: MouseEvent) = onTranscriptHover(e)
             override fun mouseExited(e: MouseEvent) {
                 showTimer.stop()
                 hideTimer.restart()
             }
             override fun mouseClicked(e: MouseEvent) = onTranscriptClick(e)
-            override fun mouseReleased(e: MouseEvent) = onTranscriptSelection()
+            override fun mouseReleased(e: MouseEvent) {
+                val pressed = pressPoint
+                pressPoint = null
+                val didDrag = pressed != null && pressed.distance(e.point) > 5
+                if (!didDrag && SwingUtilities.isLeftMouseButton(e)) {
+                    val hit = transcript.hitTest(e.point)
+                    if (hit is TranscriptView.Hit.PlayButton || hit is TranscriptView.Hit.RetryButton || hit is TranscriptView.Hit.DeleteButton) {
+                        onTranscriptClick(e)
+                        return
+                    }
+                }
+                onTranscriptSelection()
+            }
         }
         transcript.addMouseListener(mouse)
         transcript.addMouseMotionListener(mouse)
@@ -554,8 +607,10 @@ class ConversationWindow(
         }
         recordButton.isEnabled = state.phase != RecorderPhase.STOPPING && !loadingDevices && !testingDevices
         stopButton.isEnabled = active
-        listOf(microphoneCombo, systemCombo, deviceModeButton, appModeButton, refreshDevicesButton, testDevicesButton, myLanguageCombo, callLanguageCombo, keepAudioCheck, newButton)
+        listOf(refreshDevicesButton, testDevicesButton, newButton)
             .forEach { it.isEnabled = state.phase == RecorderPhase.IDLE && !loadingDevices && !testingDevices }
+        listOf(microphoneCombo, systemCombo, deviceModeButton, appModeButton, myLanguageCombo, callLanguageCombo, keepAudioCheck)
+            .forEach { it.isEnabled = !loadingDevices && !testingDevices }
         sessionsList.isEnabled = !active
         timerLabel.text = formatTimestamp(if (active || state.phase == RecorderPhase.STOPPING) state.elapsedMillis else viewed?.durationMillis ?: 0)
         microphoneLight.render(state.streams.getValue(AudioSource.MICROPHONE))
@@ -1108,11 +1163,24 @@ class ConversationWindow(
 
     private fun retry(segment: TranscriptSegment) {
         val session = displayedSession() ?: return
+        val pendingSegment = segment.copy(pending = true, draft = false, failed = false, text = "")
+        val interim = session.withSegment(pendingSegment)
+        if (recorder.state.value.isActive) {
+            recorder.updateLiveSession { it.withSegment(pendingSegment) }
+        } else {
+            viewed = interim
+            transcript.render(interim)
+        }
         scope.launch {
             val updated = recorder.retry(session, segment)
-            if (updated != null && !recorder.state.value.isActive) {
-                viewed = updated
-                transcript.render(updated)
+            if (updated != null) {
+                if (recorder.state.value.isActive) {
+                    val finalSeg = updated.segments.firstOrNull { s -> s.id == segment.id } ?: segment
+                    recorder.updateLiveSession { it.withSegment(finalSeg) }
+                } else {
+                    viewed = updated
+                    transcript.render(updated)
+                }
             }
         }
     }
@@ -1121,7 +1189,9 @@ class ConversationWindow(
         val session = displayedSession() ?: return
         scope.launch {
             val updated = recorder.deleteSegment(session, segment.id)
-            if (!recorder.state.value.isActive) {
+            if (recorder.state.value.isActive) {
+                recorder.updateLiveSession { it.withoutSegment(segment.id) }
+            } else {
                 viewed = updated
                 transcript.render(updated)
             }

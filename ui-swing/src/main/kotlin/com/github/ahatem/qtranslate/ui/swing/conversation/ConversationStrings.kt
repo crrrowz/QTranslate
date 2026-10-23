@@ -33,6 +33,8 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val pause = localizer.getString("conversation.pause")
     val resume = localizer.getString("conversation.resume")
     val stop = localizer.getString("conversation.stop")
+    val confirmSaveTitle = localizer.getString("conversation.confirm_save_title")
+    val confirmSaveSession = localizer.getString("conversation.confirm_save_session")
     val statusOff = localizer.getString("conversation.status_off")
     val statusConnecting = localizer.getString("conversation.status_connecting")
     val statusLive = localizer.getString("conversation.status_live")
