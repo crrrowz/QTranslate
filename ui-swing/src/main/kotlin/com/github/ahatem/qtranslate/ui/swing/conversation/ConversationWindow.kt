@@ -865,11 +865,7 @@ class ConversationWindow(
 
     private fun onTranscriptHover(e: MouseEvent) {
         val hit = transcript.hitTest(e.point)
-        val isClickable = hit is TranscriptView.Hit.PlayButton ||
-            hit is TranscriptView.Hit.RetryButton ||
-            hit is TranscriptView.Hit.DeleteButton ||
-            (hit is TranscriptView.Hit.Text && hit.span.segment.failed)
-        transcript.setHandCursor(isClickable)
+        transcript.updateCursor(hit)
         transcript.toolTipText = when (hit) {
             is TranscriptView.Hit.PlayButton -> "Play audio"
             is TranscriptView.Hit.RetryButton -> "Re-transcribe segment"

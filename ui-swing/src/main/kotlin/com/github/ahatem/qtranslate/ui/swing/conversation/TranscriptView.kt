@@ -5,21 +5,81 @@ import com.github.ahatem.qtranslate.core.conversation.ConversationSession
 import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
 import com.github.ahatem.qtranslate.core.conversation.TranscriptWord
 import com.github.ahatem.qtranslate.core.conversation.formatTimestamp
+import java.awt.BasicStroke
 import java.awt.Color
+import java.awt.Component
 import java.awt.Cursor
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.RenderingHints
+import java.awt.event.MouseEvent
 import java.text.BreakIterator
+import javax.swing.Icon
 import javax.swing.JScrollPane
 import javax.swing.JTextPane
 import javax.swing.SwingUtilities
 import javax.swing.UIManager
+import javax.swing.text.DefaultCaret
 import javax.swing.text.SimpleAttributeSet
 import javax.swing.text.StyleConstants
 import javax.swing.text.StyledDocument
+
+enum class ActionBadgeType { PLAY, RETRY, DELETE }
+
+class ActionBadgeIcon(
+    val type: ActionBadgeType,
+    val color: Color,
+    val size: Int = 13
+) : Icon {
+    override fun getIconWidth() = size + 4
+    override fun getIconHeight() = size + 2
+
+    override fun paintIcon(c: Component?, g: Graphics?, x: Int, y: Int) {
+        val g2 = g?.create() as? Graphics2D ?: return
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+            g2.color = color
+            val cx = x + 2
+            val cy = y + 1
+
+            when (type) {
+                ActionBadgeType.PLAY -> {
+                    val px = intArrayOf(cx + 2, cx + size - 2, cx + 2)
+                    val py = intArrayOf(cy + 1, cy + size / 2, cy + size - 1)
+                    g2.fillPolygon(px, py, 3)
+                }
+                ActionBadgeType.RETRY -> {
+                    g2.stroke = BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                    g2.drawArc(cx + 1, cy + 1, size - 2, size - 2, 45, 270)
+                    val ax = cx + size / 2 + 2
+                    val ay = cy + 1
+                    g2.drawLine(ax, ay, ax + 3, ay + 2)
+                    g2.drawLine(ax, ay, ax, ay + 4)
+                }
+                ActionBadgeType.DELETE -> {
+                    g2.stroke = BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+                    // Lid
+                    g2.drawLine(cx + 1, cy + 3, cx + size - 1, cy + 3)
+                    g2.drawLine(cx + 4, cy + 1, cx + size - 4, cy + 1)
+                    // Bin body
+                    val bx = cx + 2
+                    val by = cy + 4
+                    val bw = size - 4
+                    val bh = size - 5
+                    g2.drawRoundRect(bx, by, bw, bh, 2, 2)
+                    // Slats
+                    g2.drawLine(cx + size / 2 - 1, by + 2, cx + size / 2 - 1, by + bh - 2)
+                    g2.drawLine(cx + size / 2 + 2, by + 2, cx + size / 2 + 2, by + bh - 2)
+                }
+            }
+        } finally {
+            g2.dispose()
+        }
+    }
+}
 
 /**
  * The transcript, rendered as distinct card bubbles per message.
@@ -73,8 +133,45 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     private var currentSession: ConversationSession? = null
     private var renderedKey: Any? = null
 
+    inner class TranscriptCaret : DefaultCaret() {
+        private var draggingFromHeader = false
+
+        override fun mousePressed(e: MouseEvent) {
+            val hit = hitTest(e.point)
+            if (hit !is Hit.Text) {
+                draggingFromHeader = true
+                select(0, 0)
+                return
+            }
+            draggingFromHeader = false
+            super.mousePressed(e)
+        }
+
+        override fun mouseDragged(e: MouseEvent) {
+            if (draggingFromHeader) return
+            val offset = viewToModel2D(e.point)
+            val span = spans.firstOrNull { it.textStart <= mark && mark <= it.textEnd }
+            if (span != null) {
+                val clamped = offset.coerceIn(span.textStart, span.textEnd)
+                super.moveDot(clamped)
+                return
+            }
+            super.mouseDragged(e)
+        }
+
+        override fun mouseReleased(e: MouseEvent) {
+            if (draggingFromHeader) {
+                draggingFromHeader = false
+                select(0, 0)
+                return
+            }
+            super.mouseReleased(e)
+        }
+    }
+
     init {
         isEditable = false
+        caret = TranscriptCaret()
         caret.isVisible = false
         isOpaque = false // Allows custom card background rendering in paintComponent
         border = javax.swing.BorderFactory.createEmptyBorder(12, 16, 16, 16)
@@ -124,23 +221,28 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             if (doc.length > 0) doc.insertString(doc.length, "\n\n", null)
 
             val playStart = doc.length
-            doc.insertString(doc.length, " ▶ ", playButton(segment.source))
+            val playIcon = ActionBadgeIcon(ActionBadgeType.PLAY, sourceColor(segment.source), (font.size - 2).coerceAtLeast(12))
+            doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, playIcon) })
+            doc.insertString(doc.length, " ", null)
             val playEnd = doc.length
 
             val headerStart = doc.length
             val speaker = if (segment.source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
-            doc.insertString(doc.length, " ${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
+            doc.insertString(doc.length, "${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
             val headerEnd = doc.length
 
             // Action buttons on the opposite side of the header row
             doc.insertString(doc.length, "    ", null)
             val retryStart = doc.length
-            doc.insertString(doc.length, " 🔄 ", actionButton(UIManager.getColor("Actions.Blue") ?: Color(0x389FD6)))
+            val retryIcon = ActionBadgeIcon(ActionBadgeType.RETRY, UIManager.getColor("Actions.Blue") ?: Color(0x389FD6), (font.size - 3).coerceAtLeast(11))
+            doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, retryIcon) })
+            doc.insertString(doc.length, " ", null)
             val retryEnd = doc.length
 
-            doc.insertString(doc.length, " ", null)
             val deleteStart = doc.length
-            doc.insertString(doc.length, " 🗑 ", actionButton(UIManager.getColor("Actions.Red") ?: Color(0xE05555)))
+            val deleteIcon = ActionBadgeIcon(ActionBadgeType.DELETE, UIManager.getColor("Actions.Red") ?: Color(0xE05555), (font.size - 3).coerceAtLeast(11))
+            doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, deleteIcon) })
+            doc.insertString(doc.length, " ", null)
             val deleteEnd = doc.length
             doc.insertString(doc.length, "\n", null)
 
@@ -278,8 +380,19 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         if (start.y == end.y) Rectangle(start.x, start.y, end.x - start.x, start.height) else start
     }.getOrNull()
 
+    fun updateCursor(hit: Hit?) {
+        cursor = when (hit) {
+            is Hit.PlayButton, is Hit.RetryButton, is Hit.DeleteButton ->
+                Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            is Hit.Text ->
+                Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)
+            else ->
+                Cursor.getDefaultCursor()
+        }
+    }
+
     fun setHandCursor(hand: Boolean) {
-        cursor = if (hand) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR) else Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)
+        cursor = if (hand) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR) else Cursor.getDefaultCursor()
     }
 
     /**

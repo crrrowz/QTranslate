@@ -49,14 +49,19 @@ class ConversationFeature(
     val player = SegmentPlayer()
 
     @Volatile
-    private var lastPlaybackTime = 0L
+    private var playbackActiveUntil = 0L
+
+    fun markPlayback(durationMillis: Long) {
+        val now = System.currentTimeMillis()
+        playbackActiveUntil = maxOf(playbackActiveUntil, now + durationMillis + PLAYBACK_COOLDOWN_MILLIS)
+    }
 
     private fun isPlaybackActive(): Boolean {
         if (player.playing.value != null) {
-            lastPlaybackTime = System.currentTimeMillis()
+            playbackActiveUntil = maxOf(playbackActiveUntil, System.currentTimeMillis() + PLAYBACK_COOLDOWN_MILLIS)
             return true
         }
-        return (System.currentTimeMillis() - lastPlaybackTime) < 200L
+        return System.currentTimeMillis() < playbackActiveUntil
     }
 
     val recorder = ConversationRecorder(
@@ -125,6 +130,8 @@ class ConversationFeature(
     /** Plays a stretch of [source]'s recording given in session time. False when there is no audio. */
     suspend fun play(session: ConversationSession, source: AudioSource, startMillis: Long, endMillis: Long, tag: Any?): Boolean {
         val stream = session.streams.firstOrNull { it.source == source } ?: return false
+        val estimatedDuration = (endMillis - startMillis).coerceAtLeast(0)
+        markPlayback(estimatedDuration)
         val pcm = withContext(Dispatchers.IO) {
             WavFiles.readRange(
                 repository.audioFile(session.id, source),
@@ -132,8 +139,15 @@ class ConversationFeature(
                 endMillis - stream.offsetMillis
             )
         }
+        if (pcm.isEmpty()) return false
+        val actualDuration = pcm.size * 1000L / (PcmStream.SAMPLE_RATE * 2)
+        markPlayback(actualDuration)
         return player.play(pcm, tag)
     }
 
     fun hasAudio(session: ConversationSession, source: AudioSource): Boolean = repository.hasAudio(session.id, source)
+
+    companion object {
+        const val PLAYBACK_COOLDOWN_MILLIS = 1_500L
+    }
 }

@@ -97,4 +97,31 @@ class TranscriptViewTest {
         assertEquals("second", view.spans[0].segment.text, "Newest segment should be first in newestFirst mode")
         assertEquals("first", view.spans[1].segment.text)
     }
+
+    @Test
+    fun `updateCursor sets HAND_CURSOR for buttons, TEXT_CURSOR for text, and DEFAULT_CURSOR for header`() {
+        val view = TranscriptView(strings())
+        val span = TranscriptView.SegmentSpan(
+            TranscriptSegment(id = "1", source = AudioSource.MICROPHONE, startMillis = 0, endMillis = 1000, text = "test"),
+            0, 2, 2, 10, 10, 12, 12, 14, 15, 19, emptyList()
+        )
+
+        view.updateCursor(TranscriptView.Hit.PlayButton(span))
+        assertEquals(java.awt.Cursor.HAND_CURSOR, view.cursor.type)
+
+        view.updateCursor(TranscriptView.Hit.RetryButton(span))
+        assertEquals(java.awt.Cursor.HAND_CURSOR, view.cursor.type)
+
+        view.updateCursor(TranscriptView.Hit.DeleteButton(span))
+        assertEquals(java.awt.Cursor.HAND_CURSOR, view.cursor.type)
+
+        view.updateCursor(TranscriptView.Hit.Header(span))
+        assertEquals(java.awt.Cursor.DEFAULT_CURSOR, view.cursor.type)
+
+        view.updateCursor(TranscriptView.Hit.Text(span, 16))
+        assertEquals(java.awt.Cursor.TEXT_CURSOR, view.cursor.type)
+
+        view.updateCursor(null)
+        assertEquals(java.awt.Cursor.DEFAULT_CURSOR, view.cursor.type)
+    }
 }

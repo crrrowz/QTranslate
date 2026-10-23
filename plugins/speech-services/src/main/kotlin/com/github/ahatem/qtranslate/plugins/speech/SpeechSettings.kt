@@ -160,9 +160,20 @@ data class SpeechSettings(
     }
 
     @PluginAction(
-        label = "Delete Model",
+        label = "Import Model",
         group = "live",
         order = 46,
+        tooltip = "Imports an existing Vosk model from a local ZIP archive or directory"
+    )
+    fun importModel(): String? {
+        val manager = modelManager ?: return "Model manager not initialized."
+        return manager.importModelInteractive()
+    }
+
+    @PluginAction(
+        label = "Delete Model",
+        group = "live",
+        order = 47,
         tooltip = "Deletes the selected Vosk model from local storage"
     )
     fun deleteSelectedModel(): String? {
@@ -173,7 +184,7 @@ data class SpeechSettings(
     @PluginAction(
         label = "Check Models",
         group = "live",
-        order = 47,
+        order = 48,
         tooltip = "Lists locally downloaded Vosk models"
     )
     fun checkModels(): String? {

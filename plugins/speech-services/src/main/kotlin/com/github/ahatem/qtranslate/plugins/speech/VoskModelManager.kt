@@ -49,15 +49,34 @@ class VoskModelManager(
     val modelsDirectory: File
         get() = File(dataDirectory(), "vosk-models").apply { if (!exists()) mkdirs() }
 
+    val persistentModelsDirectory: File by lazy {
+        val base = System.getenv("APPDATA") ?: System.getProperty("user.home")
+        File(base, "QTranslate/plugins_data/speech-services/vosk-models").apply { if (!exists()) mkdirs() }
+    }
+
+    private fun File.isValidModelDir(): Boolean =
+        isDirectory && (list()?.isNotEmpty() == true)
+
     fun isInstalled(modelName: String): Boolean {
-        val dir = File(modelsDirectory, modelName)
-        return dir.isDirectory && (dir.list()?.isNotEmpty() == true)
+        if (File(modelsDirectory, modelName).isValidModelDir()) return true
+        if (File(persistentModelsDirectory, modelName).isValidModelDir()) return true
+        return false
     }
 
     fun listInstalledModels(): List<File> {
-        val root = modelsDirectory
-        if (!root.exists() || !root.isDirectory) return emptyList()
-        return root.listFiles { file -> file.isDirectory && file.list()?.isNotEmpty() == true }?.toList() ?: emptyList()
+        val localList = if (modelsDirectory.exists() && modelsDirectory.isDirectory) {
+            modelsDirectory.listFiles { file -> file.isValidModelDir() }?.toList() ?: emptyList()
+        } else emptyList()
+
+        val persistentList = if (persistentModelsDirectory.exists() && persistentModelsDirectory.isDirectory) {
+            persistentModelsDirectory.listFiles { file -> file.isValidModelDir() }?.toList() ?: emptyList()
+        } else emptyList()
+
+        // Merge, avoiding duplicates by directory name
+        val map = LinkedHashMap<String, File>()
+        localList.forEach { map[it.name] = it }
+        persistentList.forEach { if (!map.containsKey(it.name)) map[it.name] = it }
+        return map.values.toList()
     }
 
     /**
@@ -72,8 +91,9 @@ class VoskModelManager(
         val lang = if (isAuto) "auto" else clean.substringBefore('-').substringBefore('_').take(2)
 
         if (!preferredModelName.isNullOrBlank()) {
-            val preferredDir = File(modelsDirectory, preferredModelName)
-            if (preferredDir.isDirectory && preferredDir.list()?.isNotEmpty() == true) {
+            val preferredDir = File(modelsDirectory, preferredModelName).takeIf { it.isValidModelDir() }
+                ?: File(persistentModelsDirectory, preferredModelName).takeIf { it.isValidModelDir() }
+            if (preferredDir != null) {
                 val info = MODELS_BY_NAME[preferredModelName]
                 if (info == null || isAuto || info.language == lang) {
                     return preferredDir
@@ -83,22 +103,22 @@ class VoskModelManager(
 
         val installed = listInstalledModels()
         if (isAuto) {
-            // Prioritize English model if installed
-            val enModel = installed.firstOrNull { dir ->
-                val info = MODELS_BY_NAME[dir.name]
-                info?.language == "en" || dir.name.contains("-en-") || dir.name.endsWith("-en")
-            }
-            if (enModel != null) return enModel
-
-            // Fallback to model matching system locale language if installed
+            // Check if an installed model matches the system locale language first
             val systemLang = java.util.Locale.getDefault().language.lowercase()
-            if (systemLang.isNotEmpty() && systemLang != "en") {
+            if (systemLang.isNotEmpty()) {
                 val sysModel = installed.firstOrNull { dir ->
                     val info = MODELS_BY_NAME[dir.name]
                     info?.language == systemLang || dir.name.contains("-$systemLang-") || dir.name.endsWith("-$systemLang")
                 }
                 if (sysModel != null) return sysModel
             }
+
+            // Otherwise prioritize English model if installed
+            val enModel = installed.firstOrNull { dir ->
+                val info = MODELS_BY_NAME[dir.name]
+                info?.language == "en" || dir.name.contains("-en-") || dir.name.endsWith("-en")
+            }
+            if (enModel != null) return enModel
 
             // Otherwise pick the first installed model alphabetically
             return installed.minByOrNull { it.name }
@@ -156,8 +176,81 @@ class VoskModelManager(
     }
 
     fun deleteModel(modelName: String): Boolean {
-        val dir = File(modelsDirectory, modelName)
-        return if (dir.exists()) dir.deleteRecursively() else false
+        val dir1 = File(modelsDirectory, modelName)
+        val dir2 = File(persistentModelsDirectory, modelName)
+        var deleted = false
+        if (dir1.exists()) deleted = dir1.deleteRecursively() || deleted
+        if (dir2.exists()) deleted = dir2.deleteRecursively() || deleted
+        return deleted
+    }
+
+    /**
+     * Imports an existing Vosk model from a local ZIP file or folder into the persistent storage.
+     */
+    fun importModelFromFile(sourceFile: File): Result<File, ServiceError> {
+        if (!sourceFile.exists()) {
+            return Err(ServiceError.ValidationError("File or folder does not exist: ${sourceFile.absolutePath}"))
+        }
+
+        val targetRoot = persistentModelsDirectory
+        return try {
+            if (sourceFile.isDirectory) {
+                // Folder import
+                val targetDir = File(targetRoot, sourceFile.name)
+                sourceFile.copyRecursively(targetDir, overwrite = true)
+                // Also copy to local modelsDirectory for portable parity
+                runCatching { sourceFile.copyRecursively(File(modelsDirectory, sourceFile.name), overwrite = true) }
+                Ok(targetDir)
+            } else if (sourceFile.name.endsWith(".zip", ignoreCase = true)) {
+                // ZIP archive import
+                extractZip(sourceFile, targetRoot)
+                val guessedName = sourceFile.nameWithoutExtension
+                val found = targetRoot.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith(guessedName) }
+                    ?: File(targetRoot, guessedName)
+                if (found.exists()) {
+                    runCatching { found.copyRecursively(File(modelsDirectory, found.name), overwrite = true) }
+                    Ok(found)
+                } else {
+                    Err(ServiceError.ValidationError("Could not locate extracted model folder in ${targetRoot.absolutePath}"))
+                }
+            } else {
+                Err(ServiceError.ValidationError("Please select a .zip archive or an extracted model folder."))
+            }
+        } catch (e: Exception) {
+            Err(ServiceError.UnknownError("Failed to import model: ${e.message}", e))
+        }
+    }
+
+    /** Interactive file chooser dialog to import a model. */
+    fun importModelInteractive(): String {
+        if (GraphicsEnvironment.isHeadless()) {
+            return "Cannot open file chooser in headless environment."
+        }
+
+        var selectedFile: File? = null
+        try {
+            SwingUtilities.invokeAndWait {
+                val chooser = javax.swing.JFileChooser().apply {
+                    dialogTitle = "Select Vosk Model (ZIP or Folder)"
+                    fileSelectionMode = javax.swing.JFileChooser.FILES_AND_DIRECTORIES
+                    fileFilter = javax.swing.filechooser.FileNameExtensionFilter("Vosk Model Archive (*.zip)", "zip")
+                }
+                val parent = Window.getWindows().firstOrNull { it.isFocused }
+                    ?: Window.getWindows().firstOrNull { it.isVisible }
+                val res = chooser.showOpenDialog(parent)
+                if (res == javax.swing.JFileChooser.APPROVE_OPTION) {
+                    selectedFile = chooser.selectedFile
+                }
+            }
+        } catch (e: Exception) {
+            return "Failed to open file chooser: ${e.message}"
+        }
+
+        val file = selectedFile ?: return "Model import cancelled."
+        return importModelFromFile(file).fold(
+            success = { dir -> "Successfully imported model '${dir.name}' into persistent storage." },
+            failure = { error -> "Import failed: ${error.message}" }
+        )
     }
 
     /** Message for the settings "Delete Model" action. */
@@ -307,6 +400,14 @@ class VoskModelManager(
 
             if (!isInstalled(model.name)) {
                 return Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
+            }
+
+            // Sync to persistent user directory so project rebuilds never wipe it
+            runCatching {
+                if (targetDir.exists()) {
+                    val persistentTarget = File(persistentModelsDirectory, targetDir.name)
+                    targetDir.copyRecursively(persistentTarget, overwrite = true)
+                }
             }
 
             Ok(targetDir)

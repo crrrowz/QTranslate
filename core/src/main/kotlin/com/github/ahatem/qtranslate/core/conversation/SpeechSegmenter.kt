@@ -70,6 +70,15 @@ class SpeechSegmenter(
     /** Ends the stream, returning the utterance in progress if it held enough speech. */
     fun flush(): Utterance? = finish()
 
+    /** Discards any utterance currently in progress without emitting it (e.g. during in-app playback). */
+    fun resetUtterance() {
+        current = null
+        voicedFrames = 0
+        silentFrames = 0
+        onsetFrames = 0
+        preRoll.clear()
+    }
+
     private fun processFrame(frame: ByteArray): Utterance? {
         val rms = rms(frame)
         level = (rms / Short.MAX_VALUE).toFloat().coerceIn(0f, 1f)

@@ -501,13 +501,17 @@ class ConversationRecorder(
                     if (flushedForPause) connectLive()
                     flushedForPause = false
                     if (chunk.isEmpty()) continue
-                    val effectiveChunk = if (isPlaybackActive()) ByteArray(chunk.size) else chunk
+                    val playing = isPlaybackActive()
+                    val effectiveChunk = if (playing) ByteArray(chunk.size) else chunk
+                    if (playing) {
+                        segmenter.resetUtterance()
+                    }
                     if (offsetMillis == null) {
                         val offset = recordedMillis()
                         offsetMillis = offset
                         updateSession { it.copy(streams = it.streams + SessionStream(source, device.name, offset)) }
                     }
-                    writer?.write(chunk)
+                    writer?.write(effectiveChunk)
                     val chunkCopy = effectiveChunk.copyOf()
                     synchronized(liveLock) {
                         rollingBuffer.addLast(chunkCopy)
@@ -518,7 +522,9 @@ class ConversationRecorder(
 
                         val session = live
                         if (session != null) {
-                            session.sendAudio(effectiveChunk)
+                            if (!playing) {
+                                session.sendAudio(effectiveChunk)
+                            }
                             samplesSentToLive = samplesWritten
                             // The live recognizer decides where lines end; the voice detector still
                             // knows where speech began, which a late partial cannot tell.
