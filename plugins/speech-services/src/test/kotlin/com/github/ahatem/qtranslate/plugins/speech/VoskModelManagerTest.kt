@@ -100,6 +100,20 @@ class VoskModelManagerTest {
     }
 
     @Test
+    fun `import model from zip file installs model successfully`() {
+        val manager = VoskModelManager({ tempDir })
+        val importZip = File(tempDir, "vosk-model-imported.zip")
+        createZipWithModel(importZip, "vosk-model-imported")
+
+        val result = manager.importModelFromFile(importZip)
+        val dir = result.get()
+        assertNotNull(dir)
+        assertTrue(dir.isDirectory)
+        assertTrue(manager.isInstalled("vosk-model-imported"))
+        assertTrue(manager.deleteModel("vosk-model-imported"))
+    }
+
+    @Test
     fun `resumable download controller supports pause resume and cancel`() {
         val controller = VoskDownloadController()
         assertFalse(controller.isPaused.get())
