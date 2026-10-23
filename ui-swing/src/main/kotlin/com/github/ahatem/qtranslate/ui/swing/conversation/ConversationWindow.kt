@@ -679,7 +679,12 @@ class ConversationWindow(
         stopButton.isEnabled = active
         listOf(refreshDevicesButton, testDevicesButton, newButton)
             .forEach { it.isEnabled = state.phase == RecorderPhase.IDLE && !loadingDevices && !testingDevices }
-        listOf(microphoneCombo, systemCombo, deviceModeButton, appModeButton, myLanguageCombo, callLanguageCombo, keepAudioCheck)
+        listOf(deviceModeButton, appModeButton, keepAudioCheck)
+            .forEach { it.isEnabled = !loadingDevices && !testingDevices }
+        // During active recording, devices are locked to protect the streams, but languages remain freely switchable
+        listOf(microphoneCombo, systemCombo)
+            .forEach { it.isEnabled = state.phase == RecorderPhase.IDLE && !loadingDevices && !testingDevices }
+        listOf(myLanguageCombo, callLanguageCombo, targetCombo)
             .forEach { it.isEnabled = !loadingDevices && !testingDevices }
         sessionsList.isEnabled = !active
         timerLabel.text = formatTimestamp(if (active || state.phase == RecorderPhase.STOPPING) state.elapsedMillis else viewed?.durationMillis ?: 0)
