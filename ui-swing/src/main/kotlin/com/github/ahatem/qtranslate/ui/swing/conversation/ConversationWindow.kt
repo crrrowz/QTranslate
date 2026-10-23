@@ -1,6 +1,7 @@
 package com.github.ahatem.qtranslate.ui.swing.conversation
 
 import com.github.ahatem.qtranslate.api.language.LanguageCode
+import com.github.ahatem.qtranslate.core.conversation.AudioApplication
 import com.github.ahatem.qtranslate.core.conversation.AudioBackend
 import com.github.ahatem.qtranslate.core.conversation.AudioDevice
 import com.github.ahatem.qtranslate.core.conversation.AudioLevels
@@ -34,6 +35,8 @@ import java.awt.Color
 import java.awt.Component
 import java.awt.ComponentOrientation
 import java.awt.Dimension
+import java.awt.FlowLayout
+import java.awt.Insets
 import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -45,6 +48,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import javax.swing.BorderFactory
+import javax.swing.ButtonGroup
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
@@ -61,6 +65,7 @@ import javax.swing.JProgressBar
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTextField
+import javax.swing.JToggleButton
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 import javax.swing.Timer
@@ -95,12 +100,22 @@ class ConversationWindow(
     private val recorder get() = feature.recorder
 
     /** A device picker entry; [device] null is the "None" choice. */
-    private data class DeviceItem(val device: AudioDevice?, val label: String) {
+    private data class DeviceItem(val device: AudioDevice?, val label: String, val app: AudioApplication? = null) {
         override fun toString() = label
     }
 
     private val microphoneCombo = JComboBox<DeviceItem>()
     private val systemCombo = JComboBox<DeviceItem>()
+    private val deviceModeButton = JToggleButton(strings.captureModeDevice)
+    private val appModeButton = JToggleButton(strings.captureModeApp)
+    private val captureModeGroup = ButtonGroup().apply {
+        add(deviceModeButton)
+        add(appModeButton)
+    }
+    private var isAppMode = false
+    private var cachedOutputs = emptyList<AudioDevice>()
+    private var cachedApps = emptyList<AudioApplication>()
+
     private val refreshDevicesButton = JButton("⟳").apply { toolTipText = strings.refreshDevices }
     private val myLanguageCombo = JComboBox<LanguageCode>()
     private val callLanguageCombo = JComboBox<LanguageCode>()
@@ -249,7 +264,24 @@ class ConversationWindow(
             // Row 1: Audio Devices with Test and Refresh buttons
             add(JLabel(strings.microphone))
             add(microphoneCombo, "wmin 100, growx")
-            add(JLabel(strings.callAudio).apply { toolTipText = strings.callAudioTooltip })
+
+            val callHeader = JPanel(FlowLayout(FlowLayout.TRAILING, 4, 0)).apply {
+                isOpaque = false
+                add(JLabel(strings.callAudio).apply { toolTipText = strings.callAudioTooltip })
+                add(deviceModeButton.apply {
+                    putClientProperty("JButton.buttonType", "toolBarButton")
+                    toolTipText = strings.captureModeTooltip
+                    margin = Insets(1, 4, 1, 4)
+                    font = font.deriveFont((font.size2D - 2f).coerceAtLeast(10f))
+                })
+                add(appModeButton.apply {
+                    putClientProperty("JButton.buttonType", "toolBarButton")
+                    toolTipText = strings.captureModeTooltip
+                    margin = Insets(1, 4, 1, 4)
+                    font = font.deriveFont((font.size2D - 2f).coerceAtLeast(10f))
+                })
+            }
+            add(callHeader)
             add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, "wmin 100, growx")
             add(testDevicesButton)
             add(refreshDevicesButton, "wrap")
@@ -372,6 +404,28 @@ class ConversationWindow(
         stopButton.addActionListener { scope.launch { recorder.stop() } }
         refreshDevicesButton.addActionListener { loadDevices() }
         testDevicesButton.addActionListener { testDevices() }
+        deviceModeButton.addActionListener {
+            if (isAppMode) {
+                isAppMode = false
+                deviceModeButton.isSelected = true
+                appModeButton.isSelected = false
+                feature.preferences = feature.preferences.copy(systemAudioMode = "device")
+                populateSystemItems()
+                deviceWarningDismissed = false
+                checkDeviceWarnings()
+            }
+        }
+        appModeButton.addActionListener {
+            if (!isAppMode) {
+                isAppMode = true
+                appModeButton.isSelected = true
+                deviceModeButton.isSelected = false
+                feature.preferences = feature.preferences.copy(systemAudioMode = "app")
+                populateSystemItems()
+                deviceWarningDismissed = false
+                checkDeviceWarnings()
+            }
+        }
         microphoneCombo.addActionListener {
             deviceWarningDismissed = false
             checkDeviceWarnings()
@@ -458,7 +512,8 @@ class ConversationWindow(
 
     private fun startRecording() {
         val microphone = (microphoneCombo.selectedItem as? DeviceItem)?.device
-        val system = (systemCombo.selectedItem as? DeviceItem)?.device
+        val systemItem = systemCombo.selectedItem as? DeviceItem
+        val system = systemItem?.device
         if (microphone == null && system == null) return
         if (!feature.hasSpeechService) {
             val answer = JOptionPane.showConfirmDialog(this, html(strings.noSpeechServiceConfirm), strings.title,
@@ -470,6 +525,8 @@ class ConversationWindow(
         feature.preferences = feature.preferences.copy(
             microphoneId = microphone?.id,
             systemOutputId = system?.id,
+            systemAudioMode = if (isAppMode) "app" else "device",
+            preferredProcessName = systemItem?.app?.processName ?: feature.preferences.preferredProcessName,
             spokenLanguage = myLanguage.tag,
             callLanguage = callLanguage.tag,
             keepAudio = keepAudioCheck.isSelected
@@ -497,7 +554,7 @@ class ConversationWindow(
         }
         recordButton.isEnabled = state.phase != RecorderPhase.STOPPING && !loadingDevices && !testingDevices
         stopButton.isEnabled = active
-        listOf(microphoneCombo, systemCombo, refreshDevicesButton, testDevicesButton, myLanguageCombo, callLanguageCombo, keepAudioCheck, newButton)
+        listOf(microphoneCombo, systemCombo, deviceModeButton, appModeButton, refreshDevicesButton, testDevicesButton, myLanguageCombo, callLanguageCombo, keepAudioCheck, newButton)
             .forEach { it.isEnabled = state.phase == RecorderPhase.IDLE && !loadingDevices && !testingDevices }
         sessionsList.isEnabled = !active
         timerLabel.text = formatTimestamp(if (active || state.phase == RecorderPhase.STOPPING) state.elapsedMillis else viewed?.durationMillis ?: 0)
@@ -548,6 +605,9 @@ class ConversationWindow(
         val preferences = feature.preferences
         privacyBar.isVisible = !preferences.privacyNoticeDismissed
         keepAudioCheck.isSelected = preferences.keepAudio
+        isAppMode = preferences.systemAudioMode == "app"
+        deviceModeButton.isSelected = !isAppMode
+        appModeButton.isSelected = isAppMode
 
         val available = languages().filter { it != LanguageCode.AUTO }
         val renderer = LanguageRenderer()
@@ -573,8 +633,13 @@ class ConversationWindow(
         systemCombo.model = DefaultComboBoxModel(loading)
         render(recorder.state.value)
         scope.launch {
-            // Listing system outputs starts PowerShell and takes a second or two.
-            val (microphones, outputs) = withContext(Dispatchers.IO) { feature.microphones() to feature.systemOutputs() }
+            // Listing system outputs and apps starts PowerShell and takes a second or two.
+            val (microphones, outputs, apps) = withContext(Dispatchers.IO) {
+                Triple(feature.microphones(), feature.systemOutputs(), feature.systemApplications())
+            }
+            cachedOutputs = outputs
+            cachedApps = apps
+
             val preferences = feature.preferences
             val none = DeviceItem(null, strings.none)
 
@@ -588,7 +653,37 @@ class ConversationWindow(
                 ?: micItems.firstOrNull { it.device?.name?.contains("microphone", ignoreCase = true) == true }
                 ?: micItems.getOrNull(1) ?: none
 
-            val systemItems = listOf(none) + outputs.map { DeviceItem(it, it.name) }
+            populateSystemItems()
+
+            loadingDevices = false
+            render(recorder.state.value)
+        }
+    }
+
+    private fun populateSystemItems() {
+        val none = DeviceItem(null, strings.none)
+        val preferences = feature.preferences
+
+        if (isAppMode) {
+            val appItems = if (cachedApps.isEmpty()) {
+                listOf(none, DeviceItem(null, "(${strings.noActiveApps})"))
+            } else {
+                listOf(none) + cachedApps.map { app ->
+                    DeviceItem(device = app.device, label = app.displayName, app = app)
+                }
+            }
+            systemCombo.model = DefaultComboBoxModel(appItems.toTypedArray())
+
+            // Try to match preferred process name first
+            val preferredProc = preferences.preferredProcessName
+            val selected = preferredProc?.let { name ->
+                appItems.firstOrNull { it.app?.processName.equals(name, ignoreCase = true) }
+            } ?: appItems.firstOrNull { it.app?.processName?.contains("discord", ignoreCase = true) == true }
+              ?: appItems.firstOrNull { it.app != null } ?: none
+
+            systemCombo.selectedItem = selected
+        } else {
+            val systemItems = listOf(none) + cachedOutputs.map { DeviceItem(it, it.name) }
             systemCombo.model = DefaultComboBoxModel(systemItems.toTypedArray())
             val systemDevices = systemItems.mapNotNull { it.device }
             val preferredSys = DeviceCheckHeuristics.pickDefaultCallOutput(systemDevices)
@@ -596,9 +691,6 @@ class ConversationWindow(
                 ?: preferredSys?.let { dev -> systemItems.firstOrNull { it.device?.id == dev.id } }
                 ?: systemItems.firstOrNull { it.device?.name?.contains("chat", ignoreCase = true) == true }
                 ?: systemItems.getOrNull(1) ?: none
-
-            loadingDevices = false
-            render(recorder.state.value)
         }
     }
 
@@ -773,9 +865,17 @@ class ConversationWindow(
 
     private fun onTranscriptHover(e: MouseEvent) {
         val hit = transcript.hitTest(e.point)
-        val isClickable = hit is TranscriptView.Hit.PlayButton || (hit is TranscriptView.Hit.Text && hit.span.segment.failed)
+        val isClickable = hit is TranscriptView.Hit.PlayButton ||
+            hit is TranscriptView.Hit.RetryButton ||
+            hit is TranscriptView.Hit.DeleteButton ||
+            (hit is TranscriptView.Hit.Text && hit.span.segment.failed)
         transcript.setHandCursor(isClickable)
-        transcript.toolTipText = if (hit is TranscriptView.Hit.PlayButton) "Play audio" else null
+        transcript.toolTipText = when (hit) {
+            is TranscriptView.Hit.PlayButton -> "Play audio"
+            is TranscriptView.Hit.RetryButton -> "Re-transcribe segment"
+            is TranscriptView.Hit.DeleteButton -> "Delete message"
+            else -> null
+        }
         // A selection owns the card until it is cleared.
         if (transcript.selectionStart != transcript.selectionEnd) return
 
@@ -796,6 +896,8 @@ class ConversationWindow(
         if (e.clickCount != 1 || !SwingUtilities.isLeftMouseButton(e)) return
         when (val hit = transcript.hitTest(e.point)) {
             is TranscriptView.Hit.PlayButton -> playRange(hit.span.segment, hit.span.segment.startMillis, hit.span.segment.endMillis)
+            is TranscriptView.Hit.RetryButton -> retry(hit.span.segment)
+            is TranscriptView.Hit.DeleteButton -> deleteSingleSegment(hit.span.segment)
             is TranscriptView.Hit.Header -> Unit // Clicking speaker label or timestamp does not trigger playback
             is TranscriptView.Hit.Text -> if (hit.span.segment.failed) retry(hit.span.segment)
             null -> Unit
@@ -1013,6 +1115,17 @@ class ConversationWindow(
         scope.launch {
             val updated = recorder.retry(session, segment)
             if (updated != null && !recorder.state.value.isActive) {
+                viewed = updated
+                transcript.render(updated)
+            }
+        }
+    }
+
+    private fun deleteSingleSegment(segment: TranscriptSegment) {
+        val session = displayedSession() ?: return
+        scope.launch {
+            val updated = recorder.deleteSegment(session, segment.id)
+            if (!recorder.state.value.isActive) {
                 viewed = updated
                 transcript.render(updated)
             }

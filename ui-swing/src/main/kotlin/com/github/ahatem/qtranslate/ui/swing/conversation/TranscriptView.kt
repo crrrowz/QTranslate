@@ -37,6 +37,10 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val playEnd: Int,
         val headerStart: Int,
         val headerEnd: Int,
+        val retryStart: Int,
+        val retryEnd: Int,
+        val deleteStart: Int,
+        val deleteEnd: Int,
         val textStart: Int,
         val textEnd: Int,
         /** Recognised words with their character ranges, for replaying a single word. */
@@ -47,6 +51,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val span: SegmentSpan
 
         data class PlayButton(override val span: SegmentSpan) : Hit
+        data class RetryButton(override val span: SegmentSpan) : Hit
+        data class DeleteButton(override val span: SegmentSpan) : Hit
         data class Header(override val span: SegmentSpan) : Hit
         data class Text(override val span: SegmentSpan, val offset: Int) : Hit
     }
@@ -125,6 +131,17 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             val speaker = if (segment.source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
             doc.insertString(doc.length, " ${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
             val headerEnd = doc.length
+
+            // Action buttons on the opposite side of the header row
+            doc.insertString(doc.length, "    ", null)
+            val retryStart = doc.length
+            doc.insertString(doc.length, " 🔄 ", actionButton(UIManager.getColor("Actions.Blue") ?: Color(0x389FD6)))
+            val retryEnd = doc.length
+
+            doc.insertString(doc.length, " ", null)
+            val deleteStart = doc.length
+            doc.insertString(doc.length, " 🗑 ", actionButton(UIManager.getColor("Actions.Red") ?: Color(0xE05555)))
+            val deleteEnd = doc.length
             doc.insertString(doc.length, "\n", null)
 
             val textStart = doc.length
@@ -142,7 +159,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             alignParagraph(doc, playStart, textEnd - playStart, text)
 
             built += SegmentSpan(
-                segment, playStart, playEnd, headerStart, headerEnd, textStart, textEnd,
+                segment, playStart, playEnd, headerStart, headerEnd,
+                retryStart, retryEnd, deleteStart, deleteEnd, textStart, textEnd,
                 if (segment.pending || segment.failed) emptyList() else locateWords(segment, textStart)
             )
         }
@@ -227,6 +245,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val span = spans.firstOrNull { offset in it.playStart until it.textEnd } ?: return null
         return when {
             offset in span.playStart until span.playEnd -> Hit.PlayButton(span)
+            offset in span.retryStart until span.retryEnd -> Hit.RetryButton(span)
+            offset in span.deleteStart until span.deleteEnd -> Hit.DeleteButton(span)
             offset < span.headerEnd -> Hit.Header(span)
             else -> Hit.Text(span, offset)
         }
@@ -307,6 +327,12 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         StyleConstants.setBold(this, true)
         StyleConstants.setFontSize(this, (font.size - 2).coerceAtLeast(11))
         StyleConstants.setForeground(this, sourceColor(source))
+    }
+
+    private fun actionButton(color: Color) = SimpleAttributeSet().apply {
+        StyleConstants.setBold(this, true)
+        StyleConstants.setFontSize(this, (font.size - 3).coerceAtLeast(10))
+        StyleConstants.setForeground(this, color)
     }
 
     private fun header(source: AudioSource) = SimpleAttributeSet().apply {
