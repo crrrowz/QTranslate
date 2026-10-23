@@ -48,6 +48,33 @@ class WasapiLoopbackBackend(
         }.getOrDefault(emptyList())
     }
 
+    /** Lists running applications currently registered with active audio sessions. */
+    fun activeApplications(): List<AudioApplication> {
+        val executable = powershell ?: return emptyList()
+        return runCatching {
+            val process = ProcessBuilder(command(executable, "list-apps")).redirectErrorStream(false).start()
+            process.outputStream.close()
+            val lines = process.inputStream.bufferedReader(Charsets.UTF_8).readLines()
+            if (!process.waitFor(LIST_TIMEOUT_SECONDS, TimeUnit.SECONDS)) process.destroyForcibly()
+            lines.mapNotNull { line ->
+                val parts = line.split('\t')
+                if (parts.size < 5) return@mapNotNull null
+                val pid = parts[0].trim().toIntOrNull() ?: return@mapNotNull null
+                val procName = parts[1].trim()
+                val windowTitle = parts[2].trim()
+                val devId = parts[3].trim()
+                val devName = parts[4].trim()
+                if (devId.isEmpty() || procName.isEmpty()) null
+                else AudioApplication(
+                    pid = pid,
+                    processName = procName,
+                    windowTitle = windowTitle,
+                    device = AudioDevice(id = devId, name = devName.ifEmpty { devId })
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
     override fun open(device: AudioDevice): PcmStream {
         val executable = powershell ?: throw AudioDeviceUnavailableException(device)
         val process = try {
@@ -119,7 +146,7 @@ class WasapiLoopbackBackend(
     private companion object {
         const val SCRIPT_RESOURCE = "/conversation/wasapi-loopback.ps1"
         /** Part of the extracted file's name, so an older copy left in temp is never reused. */
-        const val SCRIPT_VERSION = 1
+        const val SCRIPT_VERSION = 2
         const val LIST_TIMEOUT_SECONDS = 20L
 
         fun defaultPowerShell(): String? {

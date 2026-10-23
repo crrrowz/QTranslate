@@ -11,7 +11,7 @@
   keep the stream's timeline aligned with the microphone's.
 #>
 param(
-    [Parameter(Mandatory = $true)][ValidateSet('list', 'capture')][string]$Command,
+    [Parameter(Mandatory = $true)][ValidateSet('list', 'list-apps', 'capture')][string]$Command,
     [string]$DeviceId = ''
 )
 
@@ -89,6 +89,42 @@ interface IAudioCaptureClient {
     int GetNextPacketSize(out uint frames);
 }
 
+[ComImport, Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioSessionManager2 {
+    int GetAudioSessionControl(IntPtr sessionId, int streamFlags, out IntPtr sessionControl);
+    int GetSimpleAudioVolume(IntPtr sessionId, int streamFlags, out IntPtr audioVolume);
+    int GetSessionEnumerator(out IAudioSessionEnumerator sessionEnum);
+}
+
+[ComImport, Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioSessionEnumerator {
+    int GetCount(out int count);
+    int GetSession(int index, out IAudioSessionControl session);
+}
+
+[ComImport, Guid("F4B1A599-7266-4319-A8CA-E70ACB11E8CD"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioSessionControl {
+    int GetState(out int state);
+    int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string displayName);
+}
+
+[ComImport, Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IAudioSessionControl2 {
+    int GetState(out int state);
+    int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string displayName);
+    int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string displayName, ref Guid eventContext);
+    int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string iconPath);
+    int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string iconPath, ref Guid eventContext);
+    int GetGroupingParam(out Guid groupingParam);
+    int SetGroupingParam(ref Guid groupingParam, ref Guid eventContext);
+    int RegisterAudioSessionNotification(IntPtr newNotifications);
+    int UnregisterAudioSessionNotification(IntPtr newNotifications);
+    int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string sessionIdentifier);
+    int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string sessionInstanceIdentifier);
+    int GetProcessId(out uint processId);
+    int IsSystemSoundsSession();
+}
+
 public static class Recorder {
     const int RENDER = 0, CONSOLE = 0, ACTIVE = 1, CLSCTX_ALL = 23;
     const int SHARED = 0, LOOPBACK = 0x00020000, SILENT = 0x2;
@@ -129,6 +165,65 @@ public static class Recorder {
             string id;
             device.GetId(out id);
             if (id != defaultId) result.Add(id + "\t" + FriendlyName(device));
+        }
+        return result;
+    }
+
+    public static List<string> ListApps() {
+        var result = new List<string>();
+        var enumerator = Enumerator();
+        IMMDeviceCollection devices;
+        if (enumerator.EnumAudioEndpoints(RENDER, ACTIVE, out devices) != 0) return result;
+        int devCount;
+        devices.GetCount(out devCount);
+
+        var seenKeys = new HashSet<string>();
+        var mgrGuid = typeof(IAudioSessionManager2).GUID;
+
+        for (int d = 0; d < devCount; d++) {
+            IMMDevice dev;
+            if (devices.Item(d, out dev) != 0) continue;
+            string devId;
+            dev.GetId(out devId);
+            string devName = FriendlyName(dev);
+
+            object mgrObj;
+            if (dev.Activate(ref mgrGuid, CLSCTX_ALL, IntPtr.Zero, out mgrObj) != 0 || mgrObj == null) continue;
+            var mgr = (IAudioSessionManager2)mgrObj;
+
+            IAudioSessionEnumerator sessionEnum;
+            if (mgr.GetSessionEnumerator(out sessionEnum) != 0 || sessionEnum == null) continue;
+
+            int sessionCount;
+            sessionEnum.GetCount(out sessionCount);
+            for (int s = 0; s < sessionCount; s++) {
+                IAudioSessionControl ctrl;
+                if (sessionEnum.GetSession(s, out ctrl) != 0 || ctrl == null) continue;
+                var ctrl2 = ctrl as IAudioSessionControl2;
+                if (ctrl2 == null) continue;
+
+                uint pid;
+                if (ctrl2.GetProcessId(out pid) != 0 || pid == 0) continue;
+
+                string pairKey = pid + ":" + devId;
+                if (!seenKeys.Add(pairKey)) continue;
+
+                string procName = "";
+                string windowTitle = "";
+                try {
+                    var proc = Process.GetProcessById((int)pid);
+                    procName = proc.ProcessName;
+                    windowTitle = proc.MainWindowTitle ?? "";
+                } catch {
+                    continue; // Process already exited or inaccessible
+                }
+
+                if (string.IsNullOrEmpty(procName)) continue;
+                if (string.Equals(procName, "audiodg", StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Format: <pid>\t<procName>\t<windowTitle>\t<deviceId>\t<deviceName>
+                result.Add(pid + "\t" + procName + "\t" + windowTitle + "\t" + devId + "\t" + devName);
+            }
         }
         return result;
     }
@@ -237,6 +332,8 @@ public static class Recorder {
 try {
     if ($Command -eq 'list') {
         [QTranslate.Loopback.Recorder]::List() | ForEach-Object { [Console]::Out.WriteLine($_) }
+    } elseif ($Command -eq 'list-apps') {
+        [QTranslate.Loopback.Recorder]::ListApps() | ForEach-Object { [Console]::Out.WriteLine($_) }
     } else {
         [QTranslate.Loopback.Recorder]::Capture($DeviceId)
     }

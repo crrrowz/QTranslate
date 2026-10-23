@@ -12,6 +12,8 @@ import java.io.File
 data class ConversationPreferences(
     val microphoneId: String? = null,
     val systemOutputId: String? = null,
+    val systemAudioMode: String = "device",
+    val preferredProcessName: String? = null,
     val spokenLanguage: String = "auto",
     val callLanguage: String = "auto",
     val targetLanguage: String? = null,

@@ -26,6 +26,29 @@ data class AudioDevice(val id: String, val name: String) {
 }
 
 /**
+ * An application producing audio that can be selected for recording.
+ *
+ * @param pid The operating system process ID.
+ * @param processName The executable process name (e.g. "Discord", "chrome").
+ * @param windowTitle The main window title if available (e.g. "Discord | #general").
+ * @param device The target audio output device this application is routed to.
+ */
+data class AudioApplication(
+    val pid: Int,
+    val processName: String,
+    val windowTitle: String,
+    val device: AudioDevice
+) {
+    val displayName: String
+        get() {
+            val titlePart = if (windowTitle.isNotBlank()) " - $windowTitle" else ""
+            return "$processName$titlePart (${device.name})"
+        }
+
+    override fun toString(): String = displayName
+}
+
+/**
  * Where recorded audio comes from.
  *
  * Kept behind an interface so the conversation logic never touches `javax.sound` directly and

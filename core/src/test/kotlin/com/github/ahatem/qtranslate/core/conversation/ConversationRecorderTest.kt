@@ -338,6 +338,29 @@ class ConversationRecorderTest {
     }
 
     @Test
+    fun `deleteSegment removes segment from session and persistence`() = runBlocking {
+        val recorder = recorder(ScriptedDevice(), ScriptedDevice()) { Ok(SpeechRecognitionResponse("line")) }
+        val session = ConversationSession(
+            id = "s-1",
+            title = "Test",
+            createdAt = 1000L,
+            spokenLanguage = "en",
+            callLanguage = "en",
+            segments = listOf(
+                TranscriptSegment(id = "seg-1", source = AudioSource.MICROPHONE, startMillis = 0L, endMillis = 1000L, text = "first"),
+                TranscriptSegment(id = "seg-2", source = AudioSource.MICROPHONE, startMillis = 1000L, endMillis = 2000L, text = "second")
+            )
+        )
+        repository.save(session)
+        val updated = recorder.deleteSegment(session, "seg-1")
+        assertEquals(1, updated.segments.size)
+        assertEquals("seg-2", updated.segments.single().id)
+        val reloaded = repository.load("s-1")
+        assertEquals(1, reloaded?.segments?.size)
+        assertEquals("seg-2", reloaded?.segments?.single()?.id)
+    }
+
+    @Test
     fun `shutdown saves pending clips as failed instead of dropping them`() = runBlocking {
         val mic = ScriptedDevice()
         val recorder = recorder(mic, ScriptedDevice()) { delay(60_000); Ok(SpeechRecognitionResponse("late")) }

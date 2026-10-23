@@ -104,6 +104,10 @@ data class ConversationSession(
         val index = others.indexOfFirst { it.startMillis > segment.startMillis }.let { if (it < 0) others.size else it }
         return copy(segments = others.subList(0, index) + segment + others.subList(index, others.size))
     }
+
+    /** Removes a segment by id. */
+    fun withoutSegment(segmentId: String): ConversationSession =
+        copy(segments = segments.filterNot { it.id == segmentId })
 }
 
 /** A search hit: the session and the segments in it that matched. */

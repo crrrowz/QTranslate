@@ -272,6 +272,19 @@ class ConversationRecorder(
     }
 
     /**
+     * Deletes a single segment from [session] and updates persistence.
+     */
+    suspend fun deleteSegment(session: ConversationSession, segmentId: String): ConversationSession {
+        val updated = session.withoutSegment(segmentId)
+        if (_state.value.session?.id == session.id) {
+            updateSession { it.withoutSegment(segmentId) }
+        } else {
+            withContext(Dispatchers.IO) { runCatching { repository.save(updated) } }
+        }
+        return updated
+    }
+
+    /**
      * Retries every failed segment of [session], one after another so a provider's rate limit is
      * not hit all at once. Stops early if the speech service is still missing.
      */

@@ -104,6 +104,11 @@ class ConversationFeature(
         if (systemBackend.isSupported) systemBackend.inputDevices()
         else microphoneBackend.inputDevices().filter { it.looksLikeSystemAudio }
 
+    /** Applications producing audio on Windows that can be selected directly. */
+    fun systemApplications(): List<AudioApplication> =
+        if (systemBackend.isSupported) systemBackend.activeApplications()
+        else emptyList()
+
     /** Dictionary meanings of [word], bilingual when the dictionary supports it. */
     suspend fun meanings(word: String, source: LanguageCode, target: LanguageCode): Result<List<DictionaryEntry>, ServiceError> {
         val dictionary = activeServiceManager.getActiveService<Dictionary>(ServiceRole.DICTIONARY)
