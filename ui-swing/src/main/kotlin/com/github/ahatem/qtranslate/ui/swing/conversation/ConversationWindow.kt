@@ -239,6 +239,7 @@ class ConversationWindow(
     // the card so sweeping across text does not flash a card per word.
     private var hoverRange: IntRange? = null
     private var hoverSpan: TranscriptView.SegmentSpan? = null
+    private var hoverCard = false
     private var popupHovered = false
     private var popupJob: Job? = null
     private var popupContent: HoverTranslationPopup.Content? = null
@@ -596,6 +597,7 @@ class ConversationWindow(
             }
             override fun mouseMoved(e: MouseEvent) = onTranscriptHover(e)
             override fun mouseExited(e: MouseEvent) {
+                hoverCard = false
                 showTimer.stop()
                 hideTimer.restart()
                 checkAndFlushIfIdle()
@@ -746,7 +748,9 @@ class ConversationWindow(
                         startMillis = line.startMillis,
                         endMillis = line.startMillis,
                         text = line.text,
-                        draft = true
+                        words = line.confirmedWords,
+                        draft = true,
+                        confirmedText = line.confirmedText
                     )
                 }
             }
@@ -756,11 +760,7 @@ class ConversationWindow(
                 }
             }
 
-            val isUserInteracting = popup.isVisible || popupHovered ||
-                (transcript.selectionStart != transcript.selectionEnd) ||
-                (hoverRange != null && transcript.mousePosition != null)
-
-            if (isUserInteracting) {
+            if (isUserInteracting()) {
                 if (bufferedSessionToRender != sessionToRender) {
                     bufferedSessionToRender = sessionToRender
                     pendingUpdatesCount++
@@ -1090,6 +1090,7 @@ class ConversationWindow(
 
     private fun onTranscriptHover(e: MouseEvent) {
         val hit = transcript.hitTest(e.point)
+        hoverCard = hit != null
         transcript.updateCursor(hit)
         transcript.toolTipText = when (hit) {
             is TranscriptView.Hit.PlayButton -> strings.actionPlayAudio
@@ -1104,13 +1105,13 @@ class ConversationWindow(
         val range = text?.takeIf { !it.span.segment.pending && !it.span.segment.failed }
             ?.let { transcript.wordRangeAt(it.span, it.offset) }
         if (range == hoverRange) {
-            if (range != null) hideTimer.stop()
+            if (range != null) hideTimer.stop() else checkAndFlushIfIdle()
             return
         }
         hoverRange = range
         hoverSpan = text?.span
         showTimer.stop()
-        if (range == null) hideTimer.restart() else { hideTimer.stop(); showTimer.restart() }
+        if (range == null) { hideTimer.restart(); checkAndFlushIfIdle() } else { hideTimer.stop(); showTimer.restart() }
     }
 
     private fun onTranscriptClick(e: MouseEvent) {
@@ -1257,11 +1258,13 @@ class ConversationWindow(
         checkAndFlushIfIdle()
     }
 
-    private fun checkAndFlushIfIdle() {
-        val isUserInteracting = popup.isVisible || popupHovered ||
+    private fun isUserInteracting(): Boolean =
+        popup.isVisible || popupHovered ||
             (transcript.selectionStart != transcript.selectionEnd) ||
-            (hoverRange != null && transcript.mousePosition != null)
-        if (!isUserInteracting && bufferedSessionToRender != null) {
+            ((hoverRange != null || hoverCard) && transcript.mousePosition != null)
+
+    private fun checkAndFlushIfIdle() {
+        if (!isUserInteracting() && bufferedSessionToRender != null) {
             flushBufferedUpdates()
         }
     }
