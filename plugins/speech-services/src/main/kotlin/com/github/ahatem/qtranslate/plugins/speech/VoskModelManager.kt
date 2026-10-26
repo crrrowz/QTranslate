@@ -52,10 +52,10 @@ class VoskModelManager(
 
     val persistentModelsDirectory: File by lazy {
         if (persistentDirectoryProvider != null) {
-            persistentDirectoryProvider.invoke().apply { if (!exists()) mkdirs() }
+            persistentDirectoryProvider.invoke()
         } else {
             val base = System.getenv("APPDATA") ?: System.getProperty("user.home")
-            File(base, "QTranslate/plugins_data/speech-services/vosk-models").apply { if (!exists()) mkdirs() }
+            File(base, "QTranslate/plugins_data/speech-services/vosk-models")
         }
     }
 
@@ -172,13 +172,6 @@ class VoskModelManager(
                 return@withContext Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
             }
 
-            runCatching {
-                if (targetDir.exists()) {
-                    val persistentTarget = File(persistentModelsDirectory, targetDir.name)
-                    targetDir.copyRecursively(persistentTarget, overwrite = true)
-                }
-            }
-
             Ok(targetDir)
         } catch (e: Exception) {
             tempZip.delete()
@@ -204,14 +197,12 @@ class VoskModelManager(
             return Err(ServiceError.ValidationError("File or folder does not exist: ${sourceFile.absolutePath}"))
         }
 
-        val targetRoot = persistentModelsDirectory
+        val targetRoot = modelsDirectory
         return try {
             if (sourceFile.isDirectory) {
                 // Folder import
                 val targetDir = File(targetRoot, sourceFile.name)
                 sourceFile.copyRecursively(targetDir, overwrite = true)
-                // Also copy to local modelsDirectory for portable parity
-                runCatching { sourceFile.copyRecursively(File(modelsDirectory, sourceFile.name), overwrite = true) }
                 Ok(targetDir)
             } else if (sourceFile.name.endsWith(".zip", ignoreCase = true)) {
                 // ZIP archive import
@@ -220,7 +211,6 @@ class VoskModelManager(
                 val found = targetRoot.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith(guessedName) }
                     ?: File(targetRoot, guessedName)
                 if (found.exists()) {
-                    runCatching { found.copyRecursively(File(modelsDirectory, found.name), overwrite = true) }
                     Ok(found)
                 } else {
                     Err(ServiceError.ValidationError("Could not locate extracted model folder in ${targetRoot.absolutePath}"))
@@ -412,14 +402,6 @@ class VoskModelManager(
 
             if (!isInstalled(model.name)) {
                 return Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
-            }
-
-            // Sync to persistent user directory so project rebuilds never wipe it
-            runCatching {
-                if (targetDir.exists()) {
-                    val persistentTarget = File(persistentModelsDirectory, targetDir.name)
-                    targetDir.copyRecursively(persistentTarget, overwrite = true)
-                }
             }
 
             Ok(targetDir)

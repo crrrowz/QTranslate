@@ -73,8 +73,10 @@ class VoskModelManagerTest {
             url = "https://example.com/fake.zip"
         )
 
+        val isolatedPersistentDir = File(tempDir, "persistent").apply { mkdirs() }
         val manager = VoskModelManager(
             dataDirectory = { tempDir },
+            persistentDirectoryProvider = { isolatedPersistentDir },
             downloader = { _, targetZip, onProgress ->
                 createZipWithModel(targetZip, fakeModel.name)
                 onProgress?.invoke(targetZip.length(), targetZip.length())
@@ -90,6 +92,8 @@ class VoskModelManagerTest {
         assertTrue(extractedDir.isDirectory)
         assertTrue(File(extractedDir, "am/final.mdl").isFile)
         assertTrue(manager.isInstalled(fakeModel.name))
+        assertEquals(manager.modelsDirectory.absolutePath, extractedDir.parentFile.absolutePath, "Model should be saved in modelsDirectory")
+        assertFalse(File(isolatedPersistentDir, fakeModel.name).exists(), "Model should NOT be copied to persistent directory")
 
         // Check status action
         val status = manager.statusAction()
@@ -101,8 +105,9 @@ class VoskModelManagerTest {
     }
 
     @Test
-    fun `import model from zip file installs model successfully`() {
-        val manager = VoskModelManager({ tempDir })
+    fun `import model from zip file installs model successfully into modelsDirectory`() {
+        val isolatedPersistentDir = File(tempDir, "persistent").apply { mkdirs() }
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { isolatedPersistentDir })
         val importZip = File(tempDir, "vosk-model-imported.zip")
         createZipWithModel(importZip, "vosk-model-imported")
 
@@ -110,8 +115,23 @@ class VoskModelManagerTest {
         val dir = result.get()
         assertNotNull(dir)
         assertTrue(dir.isDirectory)
+        assertEquals(manager.modelsDirectory.absolutePath, dir.parentFile.absolutePath, "Import should extract into modelsDirectory")
+        assertFalse(File(isolatedPersistentDir, "vosk-model-imported").exists(), "Import should NOT copy to persistent directory")
         assertTrue(manager.isInstalled("vosk-model-imported"))
         assertTrue(manager.deleteModel("vosk-model-imported"))
+    }
+
+    @Test
+    fun `persistent directory acts as read fallback for existing models`() {
+        val isolatedPersistentDir = File(tempDir, "persistent").apply { mkdirs() }
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { isolatedPersistentDir })
+
+        // Place a model only in the persistent directory
+        val legacyModelDir = File(isolatedPersistentDir, "vosk-model-small-en-us-0.15").apply { mkdirs() }
+        File(legacyModelDir, "model.conf").writeText("sample_rate=16000")
+
+        assertTrue(manager.isInstalled("vosk-model-small-en-us-0.15"), "Should detect model in persistent fallback directory")
+        assertEquals(legacyModelDir.absolutePath, manager.findModelForLanguage("en")?.absolutePath, "Should find model in persistent fallback directory")
     }
 
     @Test
