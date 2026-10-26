@@ -16,7 +16,7 @@ class OpenAiRealtimeTest {
         val ready = parseOpenAiRealtimeMessage(readyJson)
         assertEquals(OpenAiParsedMessage.Ready, ready)
 
-        val deltaJson = """{"type":"response.audio_transcript.delta","delta":" hello"}"""
+        val deltaJson = """{"type":"conversation.item.input_audio_transcription.delta","delta":" hello"}"""
         val delta = parseOpenAiRealtimeMessage(deltaJson)
         assertTrue(delta is OpenAiParsedMessage.PartialDelta)
         assertEquals(" hello", delta.delta)

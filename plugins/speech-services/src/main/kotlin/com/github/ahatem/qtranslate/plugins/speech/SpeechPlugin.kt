@@ -51,6 +51,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             model = context.settings.getString(KEY_MODEL).orEmpty(),
             liveEngine = if (resolvedMode == MODE_LOCAL && rawLiveEngine == LIVE_OFF) LIVE_VOSK_BUILTIN else rawLiveEngine,
             voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.DEFAULT_MODEL_NAME,
+            liveModel = context.settings.getString(KEY_LIVE_MODEL).orEmpty(),
             liveApiKey = context.secrets.get(KEY_LIVE_API_KEY).orEmpty()
         ).apply {
             this.modelManager = this@SpeechPlugin.modelManager
@@ -81,6 +82,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             model = settings.model.trim(),
             liveEngine = if (settings.liveEngine in listOf(LIVE_VOSK_BUILTIN, LIVE_DEEPGRAM, LIVE_OPENAI)) settings.liveEngine else LIVE_OFF,
             voskBuiltinModel = settings.voskBuiltinModel.trim().ifEmpty { VoskModelManager.DEFAULT_MODEL_NAME },
+            liveModel = settings.liveModel.trim(),
             liveApiKey = settings.liveApiKey.trim()
         ).apply {
             this.modelManager = this@SpeechPlugin.modelManager
@@ -94,6 +96,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.settings.put(KEY_MODEL, cleaned.model)
         context.settings.put(KEY_LIVE_ENGINE, cleaned.liveEngine)
         context.settings.put(KEY_VOSK_BUILTIN_MODEL, cleaned.voskBuiltinModel)
+        context.settings.put(KEY_LIVE_MODEL, cleaned.liveModel)
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
         context.secrets.put(KEY_LIVE_API_KEY, cleaned.liveApiKey)
         this.settings = cleaned
@@ -121,6 +124,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         const val KEY_MODEL = "model"
         const val KEY_LIVE_ENGINE = "liveEngine"
         const val KEY_VOSK_BUILTIN_MODEL = "voskBuiltinModel"
+        const val KEY_LIVE_MODEL = "liveModel"
         const val KEY_LIVE_API_KEY = "liveApiKey"
 
         fun migrateSpeechMode(savedMode: String?, liveEngine: String, provider: String): String {

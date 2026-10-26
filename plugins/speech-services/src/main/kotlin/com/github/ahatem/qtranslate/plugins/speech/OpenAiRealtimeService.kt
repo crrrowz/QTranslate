@@ -51,7 +51,7 @@ class OpenAiRealtimeService(
         if (key.isBlank()) {
             return Err(ServiceError.ConfigurationError("OpenAI Realtime requires an API key. Set it in Settings > Plugins > Speech Recognition."))
         }
-        val model = current.model.trim().ifEmpty { "gpt-4o-realtime-preview" }
+        val model = current.liveModel.trim().ifEmpty { "gpt-4o-realtime-preview" }
         return OpenAiRealtimeSession.open(key, model)
     }
 
@@ -61,7 +61,7 @@ class OpenAiRealtimeService(
         if (key.isBlank()) {
             return Err(ServiceError.ConfigurationError("OpenAI Realtime requires an API key. Set it in Settings > Plugins > Speech Recognition."))
         }
-        val model = current.model.trim().ifEmpty { "gpt-4o-realtime-preview" }
+        val model = current.liveModel.trim().ifEmpty { "gpt-4o-realtime-preview" }
         return OpenAiRealtimeSession.ping(key, model)
     }
 }
@@ -69,10 +69,13 @@ class OpenAiRealtimeService(
 class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI Realtime") {
 
     private val currentPartial = StringBuilder()
+    private val resampler = LinearPcmResampler(16_000, 24_000)
 
     override fun sendAudio(pcm: ByteArray) {
         if (ended || pcm.isEmpty()) return
-        val b64 = Base64.getEncoder().encodeToString(pcm)
+        val resampled = resampler.process(pcm)
+        if (resampled.isEmpty()) return
+        val b64 = Base64.getEncoder().encodeToString(resampled)
         enqueue { it.sendText("""{"type":"input_audio_buffer.append","audio":"$b64"}""", true) }
     }
 
@@ -106,8 +109,8 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
         private val buffer = StringBuilder()
 
         override fun onOpen(webSocket: WebSocket) {
-            // Configure session for input audio transcription
-            val config = """{"type":"session.update","session":{"modalities":["text"],"input_audio_format":"pcm16","turn_detection":{"type":"server_vad","threshold":0.5,"prefix_padding_ms":300,"silence_duration_ms":500},"input_audio_transcription":{"model":"whisper-1"}}}"""
+            // Configure session for input audio transcription only (no assistant turn response generation)
+            val config = """{"type":"session.update","session":{"modalities":["text"],"input_audio_format":"pcm16","turn_detection":{"type":"server_vad","threshold":0.5,"prefix_padding_ms":300,"silence_duration_ms":500,"create_response":false},"input_audio_transcription":{"model":"whisper-1"}}}"""
             enqueue { it.sendText(config, true) }
             webSocket.request(1)
         }
@@ -140,7 +143,8 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
     }
 
     private suspend fun connect(apiKey: String, model: String): Result<Unit, ServiceError> {
-        val uri = URI("wss://api.openai.com/v1/realtime?model=$model")
+        val encodedModel = java.net.URLEncoder.encode(model, "UTF-8")
+        val uri = URI("wss://api.openai.com/v1/realtime?model=$encodedModel")
         return try {
             socket = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
                 .newWebSocketBuilder()
@@ -148,7 +152,8 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
                 .header("OpenAI-Beta", "realtime=v1")
                 .connectTimeout(Duration.ofSeconds(5))
                 .buildAsync(uri, listener).await()
-            withTimeoutOrNull(10_000L) { ready.await() } ?: Ok(Unit)
+            withTimeoutOrNull(10_000L) { ready.await() }
+                ?: Err(ServiceError.TimeoutError("OpenAI Realtime session timed out waiting for ready event."))
         } catch (e: Exception) {
             Err(ServiceError.NetworkError("Could not reach OpenAI Realtime: ${e.cause?.message ?: e.message}", e))
         }
@@ -187,7 +192,7 @@ internal fun parseOpenAiRealtimeMessage(text: String): OpenAiParsedMessage {
     val type = json["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
     return when (type) {
         "session.created", "session.updated" -> OpenAiParsedMessage.Ready
-        "response.audio_transcript.delta" -> {
+        "conversation.item.input_audio_transcription.delta" -> {
             val delta = json["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
             if (delta.isNotEmpty()) OpenAiParsedMessage.PartialDelta(delta) else OpenAiParsedMessage.Ignored
         }

@@ -135,6 +135,16 @@ data class SpeechSettings(
     var voskBuiltinModel: String = VoskModelManager.DEFAULT_MODEL_NAME,
 
     @field:Setting(
+        label = "Live Model",
+        description = "Model for OpenAI Realtime (default: gpt-4o-realtime-preview) or Deepgram live (default: nova-3).",
+        type = SettingType.TEXT,
+        group = "live",
+        showIf = "liveEngine=$LIVE_DEEPGRAM,$LIVE_OPENAI",
+        order = 60
+    )
+    var liveModel: String = "",
+
+    @field:Setting(
         label = "Live API Key",
         description = "API key for Deepgram live or OpenAI Realtime. If left blank, uses the API Key from above.",
         type = SettingType.PASSWORD,
