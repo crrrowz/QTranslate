@@ -387,7 +387,7 @@ class ConversationRecorderTest {
     fun `language detected by accurate provider updates live recognition language in auto mode`() = runBlocking {
         val mic = ScriptedDevice()
         val openedLiveLanguages = java.util.Collections.synchronizedList(mutableListOf<String>())
-        var currentLive: ScriptedLive? = null
+        val currentLive = java.util.concurrent.atomic.AtomicReference<ScriptedLive>()
 
         val recorder = recorder(
             mic = mic,
@@ -395,7 +395,7 @@ class ConversationRecorderTest {
             openLive = { lang ->
                 openedLiveLanguages.add(lang.tag)
                 val live = ScriptedLive()
-                currentLive = live
+                currentLive.set(live)
                 Ok(live)
             },
             recognize = { _ ->
@@ -404,12 +404,12 @@ class ConversationRecorderTest {
         )
 
         recorder.start(options().copy(systemOutput = null))
-        waitUntil { openedLiveLanguages.isNotEmpty() }
+        waitUntil { openedLiveLanguages.isNotEmpty() && currentLive.get() != null }
         assertEquals("auto", openedLiveLanguages.first())
 
-        awaitLive(mic, currentLive!!)
+        awaitLive(mic, currentLive.get()!!)
         mic.push(tone(1_500))
-        currentLive!!.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("marhaban"))
+        currentLive.get()!!.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("marhaban"))
 
         waitUntil { recorder.state.value.session?.segments?.any { it.text == "مرحبا" } == true }
         waitUntil { openedLiveLanguages.contains("ar") }
@@ -587,5 +587,43 @@ class ConversationRecorderTest {
         // Second part (during mute) should contain all zeroed samples for privacy
         val secondHalf = pcm.copyOfRange(pcm.size / 2, pcm.size)
         assertTrue(secondHalf.all { it == 0.toByte() }, "Mute period should write silence to disk")
+    }
+
+    @Test
+    fun `live session receives zeroed chunks during playback and mute to avoid clock drift`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+        var playing = false
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { Ok(live) },
+            isPlaybackActive = { playing },
+            recognize = { Ok(SpeechRecognitionResponse(text = "ok")) }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        waitUntil { recorder.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+        awaitLive(mic, live)
+
+        val initialReceived = live.received.get()
+
+        // 1. Send tone while playback is active
+        playing = true
+        mic.push(tone(500))
+        waitUntil { live.received.get() >= initialReceived + 500 * 32 }
+
+        val afterPlayback = live.received.get()
+        assertTrue(afterPlayback > initialReceived, "Live session should receive audio bytes during playback")
+
+        // 2. Send tone while muted
+        playing = false
+        recorder.isMicrophoneMuted = true
+        mic.push(tone(500))
+        waitUntil { live.received.get() >= afterPlayback + 500 * 32 }
+
+        assertTrue(live.received.get() > afterPlayback, "Live session should receive audio bytes during mute")
+
+        recorder.stop()
     }
 }

@@ -549,9 +549,7 @@ class ConversationRecorder(
 
                         val session = live
                         if (session != null) {
-                            if (!playing && !isMuted) {
-                                session.sendAudio(effectiveChunk)
-                            }
+                            session.sendAudio(effectiveChunk)
                             samplesSentToLive = samplesWritten
                             // The live recognizer decides where lines end; the voice detector still
                             // knows where speech began, which a late partial cannot tell.
