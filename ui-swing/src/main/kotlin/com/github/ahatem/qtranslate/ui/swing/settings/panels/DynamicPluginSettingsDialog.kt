@@ -313,25 +313,71 @@ class DynamicPluginSettingsDialog(
         return strip
     }
 
-    private fun invokeAction(action: PluginActionSchema, sourceButton: JButton) {
-        val instance = settingsInstance ?: return
+    private fun createWorkingCopy(instance: PluginSettings.Configurable): PluginSettings.Configurable {
+        var copy = runCatching {
+            val ctor = instance::class.java.getDeclaredConstructor().apply { isAccessible = true }
+            ctor.newInstance()
+        }.getOrNull()
 
-        // Sync current UI component values into settingsInstance fields before invoking action
+        if (copy == null) {
+            copy = runCatching {
+                val copyDefault = instance::class.java.methods.firstOrNull { it.name == "copy\$default" }?.apply { isAccessible = true }
+                if (copyDefault != null) {
+                    val paramCount = copyDefault.parameterCount
+                    val args = arrayOfNulls<Any>(paramCount)
+                    args[0] = instance
+                    args[paramCount - 2] = -1
+                    copyDefault.invoke(null, *args) as? PluginSettings.Configurable
+                } else null
+            }.getOrNull()
+        }
+
+        val target = copy ?: return instance
+
+        // Copy all fields (including transient like modelManager) from instance to target
+        var clazz: Class<*>? = instance::class.java
+        while (clazz != null && clazz != Any::class.java) {
+            for (field in clazz.declaredFields) {
+                if (java.lang.reflect.Modifier.isStatic(field.modifiers)) continue
+                runCatching {
+                    field.isAccessible = true
+                    field.set(target, field.get(instance))
+                }
+            }
+            clazz = clazz.superclass
+        }
+
+        // Apply on-screen component values to target
         components.forEach { (propName, comp) ->
             runCatching {
-                val field = instance::class.java.getDeclaredField(propName)
-                field.isAccessible = true
-                field.set(instance, comp.getValue())
+                var c: Class<*>? = target::class.java
+                while (c != null && c != Any::class.java) {
+                    try {
+                        val field = c.getDeclaredField(propName)
+                        field.isAccessible = true
+                        field.set(target, comp.getValue())
+                        break
+                    } catch (e: NoSuchFieldException) {
+                        c = c.superclass
+                    }
+                }
             }
         }
+
+        return target
+    }
+
+    private fun invokeAction(action: PluginActionSchema, sourceButton: JButton) {
+        val instance = settingsInstance ?: return
+        val target = createWorkingCopy(instance)
 
         sourceButton.isEnabled = false
         object : SwingWorker<String?, Unit>() {
             override fun doInBackground(): String? = runCatching {
-                val method = instance::class.java.getDeclaredMethod(action.methodName).apply {
+                val method = target::class.java.getDeclaredMethod(action.methodName).apply {
                     isAccessible = true
                 }
-                method.invoke(instance) as? String
+                method.invoke(target) as? String
             }.getOrElse { e ->
                 "Error: ${e.cause?.message ?: e.message}"
             }
@@ -637,6 +683,7 @@ class DynamicPluginSettingsDialog(
 
         // Per-action button visibility based on action.showIf and dynamic predicate
         val instance = settingsInstance
+        val actionInstance = if (instance != null) createWorkingCopy(instance) else null
         actionButtons.forEach { (action, btn) ->
             val rule = action.showIf
             val ruleVisible = if (rule != null) {
@@ -648,13 +695,13 @@ class DynamicPluginSettingsDialog(
                 }
             } else true
 
-            val predicateVisible = if (instance != null) {
+            val predicateVisible = if (actionInstance != null) {
                 val predicateMethod = runCatching {
-                    instance::class.java.getDeclaredMethod(action.methodName + "Visible")
+                    actionInstance::class.java.getDeclaredMethod(action.methodName + "Visible")
                 }.getOrNull()
                 if (predicateMethod != null) {
                     predicateMethod.isAccessible = true
-                    runCatching { predicateMethod.invoke(instance) as? Boolean }.getOrNull() ?: true
+                    runCatching { predicateMethod.invoke(actionInstance) as? Boolean }.getOrNull() ?: true
                 } else true
             } else true
 
