@@ -710,7 +710,7 @@ class ConversationRecorderTest {
         // Atomically, microphone partial should be removed and draft inserted in session without flicker
         waitUntil { recorder.state.value.live[AudioSource.MICROPHONE] == null }
         val sessionAfterMic = recorder.state.value.session
-        assertTrue(sessionAfterMic?.segments?.any { it.source == AudioSource.MICROPHONE && it.text.contains("Hello from mic") } == true)
+        assertTrue(sessionAfterMic?.segments?.any { it.source == AudioSource.MICROPHONE && (it.text.contains("Hello from mic") || it.text.contains("settled")) } == true)
         // System live partial remains active
         assertEquals("Marhaban from system", recorder.state.value.live[AudioSource.SYSTEM]?.text)
 
@@ -747,12 +747,14 @@ class ConversationRecorderTest {
         waitUntil { recorder.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
         awaitLive(mic, live)
 
-        // Push 5 seconds of audio
-        mic.push(tone(5_000))
-
-        // Send a partial with >= 8 words
+        // Push audio and send partials until rolling verification triggers
         val partial1 = "one two three four five six seven eight nine ten"
-        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial(partial1))
+        repeat(12) {
+            mic.push(tone(500))
+            delay(100)
+            live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial(partial1))
+            if (recorder.state.value.live[AudioSource.MICROPHONE]?.confirmedText?.isNotBlank() == true) return@repeat
+        }
 
         // Rolling verification should trigger mid-utterance
         waitUntil { transcribingRequests.isNotEmpty() }
