@@ -182,33 +182,33 @@ class ConversationWindow(
         isVisible = false
     }
     private val micMuteButton = JButton(FlatSVGIcon(Icons.MIC, 15, 15)).apply {
-        toolTipText = "Mute / Unmute Microphone"
+        toolTipText = strings.micUnmutedTooltip
         putClientProperty("JButton.buttonType", "toolBarButton")
         margin = Insets(2, 6, 2, 6)
         addActionListener {
             recorder.isMicrophoneMuted = !recorder.isMicrophoneMuted
             val muted = recorder.isMicrophoneMuted
-            toolTipText = if (muted) "Microphone is MUTED (click to unmute)" else "Mute microphone"
+            toolTipText = if (muted) strings.micMutedTooltip else strings.micUnmutedTooltip
             (icon as? FlatSVGIcon)?.colorFilter = if (muted) FlatSVGIcon.ColorFilter { Color(0xE05555) } else null
             repaint()
         }
     }
     private val callMuteButton = JButton(FlatSVGIcon(Icons.SPEAK, 15, 15)).apply {
-        toolTipText = "Mute / Unmute Call Audio"
+        toolTipText = strings.callUnmutedTooltip
         putClientProperty("JButton.buttonType", "toolBarButton")
         margin = Insets(2, 6, 2, 6)
         addActionListener {
             recorder.isSystemMuted = !recorder.isSystemMuted
             val muted = recorder.isSystemMuted
-            toolTipText = if (muted) "Call audio is MUTED (click to unmute)" else "Mute call audio"
+            toolTipText = if (muted) strings.callMutedTooltip else strings.callUnmutedTooltip
             (icon as? FlatSVGIcon)?.colorFilter = if (muted) FlatSVGIcon.ColorFilter { Color(0xE05555) } else null
             repaint()
         }
     }
     private val transcriptScroll = JScrollPane(transcript)
-    private val orderButton = JButton("⇅ Newest at top").apply {
+    private val orderButton = JButton(strings.orderNewestAtTop).apply {
         putClientProperty("JButton.buttonType", "toolBarButton")
-        toolTipText = "Toggle message order (newest at top or oldest first)"
+        toolTipText = strings.orderTooltip
     }
     private val popup = HoverTranslationPopup(this, strings)
 
@@ -532,7 +532,7 @@ class ConversationWindow(
         retryFailedButton.addActionListener { retryAllFailed() }
         orderButton.addActionListener {
             transcript.newestFirst = !transcript.newestFirst
-            orderButton.text = if (transcript.newestFirst) "⇅ Newest at top" else "⇅ Oldest at top"
+            orderButton.text = if (transcript.newestFirst) strings.orderNewestAtTop else strings.orderOldestAtTop
         }
         newButton.addActionListener {
             if (!recorder.state.value.isActive) {
@@ -1045,9 +1045,9 @@ class ConversationWindow(
         val hit = transcript.hitTest(e.point)
         transcript.updateCursor(hit)
         transcript.toolTipText = when (hit) {
-            is TranscriptView.Hit.PlayButton -> "Play audio"
-            is TranscriptView.Hit.RetryButton -> "Re-transcribe segment"
-            is TranscriptView.Hit.DeleteButton -> "Delete message"
+            is TranscriptView.Hit.PlayButton -> strings.actionPlayAudio
+            is TranscriptView.Hit.RetryButton -> strings.actionRetrySegment
+            is TranscriptView.Hit.DeleteButton -> strings.actionDeleteMessage
             else -> null
         }
         // A selection owns the card until it is cleared.
