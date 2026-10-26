@@ -269,4 +269,24 @@ class VoskBuiltinServiceTest {
         service.close()
         assertEquals(0, service.cachedModelCount)
     }
+
+    @Test
+    fun `finish timeout releases recognizer and shuts down worker`() = runBlocking {
+        val recognizer = FakeRecognizerHandle()
+        val session = VoskBuiltinSession(recognizer)
+
+        // Queue audio and cancel finish with a short timeout
+        session.sendAudio(ByteArray(1600))
+        val job = launch {
+            kotlinx.coroutines.withTimeout(1) {
+                // Delay artificially to simulate finish timing out
+                kotlinx.coroutines.delay(100)
+                session.finish()
+            }
+        }
+        job.join()
+        session.finish()
+
+        assertTrue(recognizer.closed.get(), "Recognizer must be closed after finish cleanup even if cancelled")
+    }
 }

@@ -14,6 +14,7 @@ import com.github.michaelbull.result.Result
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -302,15 +303,23 @@ class VoskBuiltinSession(
         if (ended) return
         ended = true
         audioQueue.close()
-        processingJob.join()
+        try {
+            processingJob.join()
+        } finally {
+            withContext(NonCancellable) {
+                // Cancel worker in case join was interrupted/timed out, and wait for it to stop
+                processingJob.cancel()
+                processingJob.join()
 
-        // Flush final result
-        val finalJson = runCatching { recognizer.getFinalResult() }.getOrNull()
-        if (!finalJson.isNullOrBlank()) {
-            emitResult(finalJson)
+                // Flush final result
+                val finalJson = runCatching { recognizer.getFinalResult() }.getOrNull()
+                if (!finalJson.isNullOrBlank()) {
+                    emitResult(finalJson)
+                }
+
+                cleanup()
+            }
         }
-
-        cleanup()
     }
 
     override fun cancel() {
