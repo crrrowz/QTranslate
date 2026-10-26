@@ -81,6 +81,7 @@ class ConversationRecorderTest {
         mic: ScriptedDevice,
         system: ScriptedDevice,
         openLive: OpenLive = { null },
+        isPlaybackActive: () -> Boolean = { false },
         recognize: Recognize
     ) = ConversationRecorder(
         scope = scope,
@@ -89,7 +90,8 @@ class ConversationRecorderTest {
         systemBackend = ScriptedBackend(mapOf("out" to system)),
         recognize = recognize,
         logger = logger,
-        openLive = openLive
+        openLive = openLive,
+        isPlaybackActive = isPlaybackActive
     )
 
     /**
@@ -541,5 +543,49 @@ class ConversationRecorderTest {
         assertEquals(2, sessions.size, "Live session should reconnect when spoken language changes")
 
         recorder.stop()
+    }
+
+    @Test
+    fun `playback preserves original audio on disk while channel mute writes silence`() = runBlocking {
+        val mic = ScriptedDevice()
+        var playing = false
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            isPlaybackActive = { playing },
+            recognize = { Ok(SpeechRecognitionResponse(text = "ok")) }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        waitUntil { recorder.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+
+        // 1. Playback active: original audio must be written to WAV, but not transcribed
+        playing = true
+        val loudTone = tone(1_000)
+        mic.push(loudTone)
+        delay(200)
+
+        // 2. Microphone muted: silence must be written to WAV
+        playing = false
+        recorder.isMicrophoneMuted = true
+        mic.push(loudTone)
+        delay(200)
+
+        recorder.stop()
+
+        val saved = repository.list().single()
+        val wavFile = repository.audioFile(saved.id, AudioSource.MICROPHONE)
+        assertTrue(wavFile.exists(), "Audio file should exist")
+        val bytes = wavFile.readBytes()
+        // Skip 44-byte WAV header
+        val pcm = bytes.copyOfRange(44, bytes.size)
+
+        // First part (during playback) should contain non-zero audio samples from loudTone
+        val firstHalf = pcm.copyOfRange(0, pcm.size / 2)
+        assertTrue(firstHalf.any { it != 0.toByte() }, "Playback period should preserve non-zero audio on disk")
+
+        // Second part (during mute) should contain all zeroed samples for privacy
+        val secondHalf = pcm.copyOfRange(pcm.size / 2, pcm.size)
+        assertTrue(secondHalf.all { it == 0.toByte() }, "Mute period should write silence to disk")
     }
 }
