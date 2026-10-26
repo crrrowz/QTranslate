@@ -414,6 +414,8 @@ class ConversationRecorder(
         _state.update { it.copy(liveStatus = overall) }
     }
 
+    private class BufferEntry(val pcm: ByteArray, val startSample: Long)
+
     private inner class StreamRecorder(
         val source: AudioSource,
         val device: AudioDevice,
@@ -445,7 +447,7 @@ class ConversationRecorder(
         var liveStatus = LiveRecognitionStatus.OFF
             private set
         private val liveLock = Any()
-        private val rollingBuffer = java.util.ArrayDeque<ByteArray>()
+        private val rollingBuffer = java.util.ArrayDeque<BufferEntry>()
         private var rollingBufferBytes = 0
         @Volatile
         private var samplesSentToLive = 0L
@@ -548,7 +550,10 @@ class ConversationRecorder(
                     // otherwise wait mid-sentence) and reopened on resume.
                     if (paused) {
                         if (!flushedForPause) {
-                            segmenter.flush()?.let(::announce)
+                            synchronized(liveLock) {
+                                flushUnsentBufferToSegmenter()
+                                segmenter.flush()?.let(::announce)
+                            }
                             closeLive()
                         }
                         flushedForPause = true
@@ -573,10 +578,23 @@ class ConversationRecorder(
                     writer?.write(toWrite)
                     val chunkCopy = effectiveChunk.copyOf()
                     synchronized(liveLock) {
-                        rollingBuffer.addLast(chunkCopy)
+                        val chunkStartSample = samplesWritten - chunkCopy.size / 2
+                        rollingBuffer.addLast(BufferEntry(chunkCopy, chunkStartSample))
                         rollingBufferBytes += chunkCopy.size
                         while (rollingBufferBytes > ROLLING_BUFFER_MAX_BYTES && rollingBuffer.isNotEmpty()) {
-                            rollingBufferBytes -= rollingBuffer.removeFirst().size
+                            val trimmed = rollingBuffer.removeFirst()
+                            rollingBufferBytes -= trimmed.pcm.size
+                            val trimmedEndSample = trimmed.startSample + trimmed.pcm.size / 2
+                            if (trimmedEndSample > samplesSentToLive) {
+                                val unsentPcm = if (trimmed.startSample >= samplesSentToLive) {
+                                    trimmed.pcm
+                                } else {
+                                    val skipSamples = (samplesSentToLive - trimmed.startSample).toInt()
+                                    trimmed.pcm.copyOfRange(skipSamples * 2, trimmed.pcm.size)
+                                }
+                                segmenter.accept(unsentPcm).forEach(::announce)
+                                samplesSentToLive = trimmedEndSample
+                            }
                         }
 
                         val session = live
@@ -591,6 +609,7 @@ class ConversationRecorder(
                             }
                         } else if (liveUnavailable) {
                             segmenter.accept(effectiveChunk).forEach(::announce)
+                            samplesSentToLive = samplesWritten
                         }
                     }
                 }
@@ -605,8 +624,16 @@ class ConversationRecorder(
                 }
             } finally {
                 liveConnecting?.cancel()
-                // The last words: the live recognizer settles them, or the segmenter cuts them if live was unavailable.
-                if (live != null) closeLive() else if (liveUnavailable) segmenter.flush()?.let(::announce)
+                val sessionToClose = synchronized(liveLock) {
+                    if (live != null) {
+                        live
+                    } else {
+                        flushUnsentBufferToSegmenter()
+                        segmenter.flush()?.let(::announce)
+                        null
+                    }
+                }
+                if (sessionToClose != null) closeLive()
                 utterances.close()
                 runCatching { pcm?.close() }
                 runCatching { writer?.close() }
@@ -631,19 +658,37 @@ class ConversationRecorder(
             }
         }
 
+        private fun flushUnsentBufferToSegmenter() {
+            while (rollingBuffer.isNotEmpty()) {
+                val entry = rollingBuffer.removeFirst()
+                val entryEndSample = entry.startSample + entry.pcm.size / 2
+                if (entryEndSample > samplesSentToLive) {
+                    val pcmToAccept = if (entry.startSample >= samplesSentToLive) {
+                        entry.pcm
+                    } else {
+                        val skipSamples = (samplesSentToLive - entry.startSample).toInt()
+                        entry.pcm.copyOfRange(skipSamples * 2, entry.pcm.size)
+                    }
+                    segmenter.accept(pcmToAccept).forEach(::announce)
+                    samplesSentToLive = entryEndSample
+                }
+            }
+            rollingBufferBytes = 0
+        }
+
         private fun extractLastBytes(bytesNeeded: Int): List<ByteArray> {
             if (bytesNeeded <= 0 || rollingBuffer.isEmpty()) return emptyList()
             val list = rollingBuffer.toList()
             var accumulated = 0
             var startIndex = list.size
             for (i in list.indices.reversed()) {
-                accumulated += list[i].size
+                accumulated += list[i].pcm.size
                 startIndex = i
                 if (accumulated >= bytesNeeded) break
             }
             val result = mutableListOf<ByteArray>()
             for (i in startIndex until list.size) {
-                val chunk = list[i]
+                val chunk = list[i].pcm
                 if (i == startIndex && accumulated > bytesNeeded) {
                     val skip = accumulated - bytesNeeded
                     if (skip < chunk.size) {
@@ -670,6 +715,10 @@ class ConversationRecorder(
                     liveUnavailable = true
                     liveStatus = LiveRecognitionStatus.OFF
                     updateLiveStatus()
+                    synchronized(liveLock) {
+                        flushUnsentBufferToSegmenter()
+                        segmenter.flush()?.let(::announce)
+                    }
                     return@launch
                 }
                 result.fold(
@@ -678,13 +727,13 @@ class ConversationRecorder(
                             session.cancel()
                             return@fold
                         }
-                        // What the segmenter was in the middle of is finished the old way.
-                        segmenter.flush()?.let(::announce)
-                        liveFailures = 0
-                        liveStatus = LiveRecognitionStatus.CONNECTED
-                        updateLiveStatus()
-
                         val actualGapSamples = synchronized(liveLock) {
+                            // What the segmenter was in the middle of is finished the old way.
+                            segmenter.flush()?.let(::announce)
+                            liveFailures = 0
+                            liveStatus = LiveRecognitionStatus.CONNECTED
+                            updateLiveStatus()
+
                             val gapSamples = (samplesWritten - samplesSentToLive).coerceAtLeast(0)
                             var replayed = 0L
                             if (gapSamples > 0) {
@@ -696,6 +745,7 @@ class ConversationRecorder(
                                 samplesSentToLive = samplesWritten
                                 replayed = (gapBytes / 2).toLong()
                             }
+                            segmenter.reset(samplesWritten)
                             live = session
                             replayed
                         }
@@ -711,10 +761,8 @@ class ConversationRecorder(
                             liveStatus = LiveRecognitionStatus.OFF
                             updateLiveStatus()
                             synchronized(liveLock) {
-                                while (rollingBuffer.isNotEmpty()) {
-                                    segmenter.accept(rollingBuffer.removeFirst()).forEach(::announce)
-                                }
-                                rollingBufferBytes = 0
+                                flushUnsentBufferToSegmenter()
+                                segmenter.flush()?.let(::announce)
                             }
                         } else {
                             liveFailed(error.message)
@@ -1039,10 +1087,8 @@ class ConversationRecorder(
                 liveStatus = LiveRecognitionStatus.OFF
                 updateLiveStatus()
                 synchronized(liveLock) {
-                    while (rollingBuffer.isNotEmpty()) {
-                        segmenter.accept(rollingBuffer.removeFirst()).forEach(::announce)
-                    }
-                    rollingBufferBytes = 0
+                    flushUnsentBufferToSegmenter()
+                    segmenter.flush()?.let(::announce)
                 }
                 return
             }

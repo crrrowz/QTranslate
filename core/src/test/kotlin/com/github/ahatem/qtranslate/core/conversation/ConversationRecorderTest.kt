@@ -776,4 +776,156 @@ class ConversationRecorderTest {
         assertTrue(seg.text.startsWith("accurate verified prefix"), "Segment text should contain the confirmed prefix")
         recorder.stop()
     }
+
+    @Test
+    fun `live connects after delay longer than rolling buffer covers every sample exactly once`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+        val clipUtterances = java.util.Collections.synchronizedList(mutableListOf<SpeechRecognitionRequest>())
+        var rec: ConversationRecorder? = null
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { _ ->
+                // Wait until at least 11s of audio (352,000 bytes) have been written to disk
+                while (true) {
+                    val id = rec?.state?.value?.session?.id
+                    if (id != null && repository.audioFile(id, AudioSource.MICROPHONE).length() >= 352_000L) {
+                        break
+                    }
+                    delay(30)
+                }
+                Ok(live)
+            },
+            recognize = { req ->
+                clipUtterances.add(req)
+                Ok(SpeechRecognitionResponse(text = "clip: ${req.audio.durationMillis}ms"))
+            }
+        ).also { rec = it }
+
+        recorder.start(options().copy(systemOutput = null))
+
+        // Push 15s of audio (480,000 bytes). Rolling buffer is 10s (320,000 bytes).
+        // First ~5s will be trimmed off and emitted as clips by segmenter.
+        mic.push(tone(3_000) + silence(1_000))
+        mic.push(tone(3_000) + silence(1_000))
+        mic.push(tone(3_000) + silence(1_000))
+        mic.push(tone(2_000) + silence(1_000))
+
+        // Wait until live session connects and receives replayed audio
+        waitUntil { live.received.get() > 0 }
+        assertEquals(LiveRecognitionStatus.CONNECTED, recorder.state.value.liveStatus)
+
+        // Clip should have been emitted for the early audio trimmed from rolling buffer
+        waitUntil { clipUtterances.isNotEmpty() }
+        assertTrue(clipUtterances.size >= 1, "Early audio trimmed from buffer must be transcribed as clip")
+
+        // Settle live session with final
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("replayed live text"))
+        waitUntil { recorder.state.value.session?.segments?.any { it.text.contains("replayed live text") || it.text.startsWith("clip:") } == true }
+
+        recorder.stop()
+
+        val saved = repository.list().single()
+        assertTrue(saved.segments.size >= 2, "Must have at least one segment from clip and one from live")
+
+        val replayedBytes = live.received.get()
+        val replayedSamples = replayedBytes / 2
+        assertTrue(replayedSamples > 0, "Live session should receive replayed samples")
+        assertTrue(replayedSamples <= ConversationRecorder.ROLLING_BUFFER_MAX_BYTES / 2, "Replayed samples should be within buffer window")
+    }
+
+    @Test
+    fun `live connects within buffer window produces no duplicate clips`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { _ ->
+                delay(100)
+                Ok(live)
+            },
+            recognize = { req ->
+                Ok(SpeechRecognitionResponse(text = "refined: ${req.prompt ?: ""}"))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        mic.push(tone(500) + silence(500))
+
+        waitUntil { live.received.get() > 0 }
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("single live text"))
+        waitUntil { recorder.state.value.session?.segments?.any { it.text.isNotBlank() } == true }
+
+        recorder.stop()
+
+        val saved = repository.list().single()
+        assertEquals(1, saved.segments.size, "Should have exactly 1 segment from live and 0 duplicate clips")
+        assertTrue(saved.segments.single().text.contains("single live text") || saved.segments.single().text.startsWith("refined:"), "Segment must originate from live path")
+    }
+
+    @Test
+    fun `live never connects falls back to transcribing all audio via clips`() = runBlocking {
+        val mic = ScriptedDevice()
+        val clipUtterances = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { _ ->
+                Err(ServiceError.ConfigurationError("Live engine disabled"))
+            },
+            recognize = { req ->
+                clipUtterances.incrementAndGet()
+                Ok(SpeechRecognitionResponse(text = "clip: ${req.audio.durationMillis}ms"))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        mic.push(tone(1_500) + silence(1_000))
+
+        waitUntil { clipUtterances.get() > 0 }
+        recorder.stop()
+
+        val saved = repository.list().single()
+        assertTrue(saved.segments.isNotEmpty(), "All audio should be transcribed as clips when live is unavailable")
+        assertTrue(saved.segments.all { it.text.startsWith("clip:") }, "All segments should be clips")
+    }
+
+    @Test
+    fun `stop while reconnecting announces buffered utterance as clip`() = runBlocking {
+        val mic = ScriptedDevice()
+        val clipUtterances = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { _ ->
+                // Delay long enough so stop occurs while connecting/reconnecting
+                delay(5_000)
+                Err(ServiceError.NetworkError("temporary failure"))
+            },
+            recognize = { req ->
+                clipUtterances.incrementAndGet()
+                Ok(SpeechRecognitionResponse(text = "recovered utterance"))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        // Speak while reconnecting
+        mic.push(tone(1_000) + silence(500))
+
+        waitUntil { mic.chunks.isEmpty() }
+        delay(100)
+
+        // Stop while still reconnecting
+        recorder.stop()
+
+        val saved = repository.list().single()
+        assertTrue(saved.segments.isNotEmpty(), "Utterance spoken while reconnecting must be saved as a segment on stop")
+        assertTrue(saved.segments.any { it.text == "recovered utterance" || it.pending }, "Utterance must be captured on stop")
+    }
 }

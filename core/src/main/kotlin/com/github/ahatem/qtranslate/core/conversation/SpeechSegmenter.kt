@@ -33,7 +33,8 @@ class SpeechSegmenter(
     private val frameBytes = frameSamples * 2
 
     private var pending = ByteArray(0)
-    private var position = 0L
+    var position: Long = 0L
+        private set
 
     private var noiseFloor = INITIAL_NOISE_FLOOR
     private val preRoll = ArrayDeque<ByteArray>()
@@ -69,6 +70,16 @@ class SpeechSegmenter(
 
     /** Ends the stream, returning the utterance in progress if it held enough speech. */
     fun flush(): Utterance? = finish()
+
+    fun reset(newPosition: Long = 0L) {
+        current = null
+        voicedFrames = 0
+        silentFrames = 0
+        onsetFrames = 0
+        preRoll.clear()
+        pending = ByteArray(0)
+        position = newPosition
+    }
 
     /** Discards any utterance currently in progress without emitting it (e.g. during in-app playback). */
     fun resetUtterance() {
