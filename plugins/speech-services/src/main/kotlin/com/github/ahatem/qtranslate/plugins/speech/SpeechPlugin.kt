@@ -15,6 +15,8 @@ import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
@@ -31,6 +33,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
     private var services: List<Service> = emptyList()
     private lateinit var modelManager: VoskModelManager
     private var builtinService: VoskBuiltinService? = null
+    private var pluginScope: CoroutineScope? = null
 
     override suspend fun initialize(context: PluginContext): Result<Unit, ServiceError> {
         this.context = context
@@ -67,7 +70,8 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             SpeechRecognitionService(SpeechClient(context, http) { settings }, builtin) { settings },
             VoskLiveService({ settings }, builtin, deepgramLive, openAiRealtime)
         )
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO).also { pluginScope = it }
+        scope.launch {
             builtin.preloadModel(settings.voskBuiltinModel)
         }
         return Ok(Unit)
@@ -90,6 +94,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         // A missing key is fine to save (the user may add it later); an unusable URL is not.
         cleaned.urlError()?.let { return Err(ServiceError.ValidationError(it.message)) }
 
+        val oldModel = this.settings.voskBuiltinModel
         context.settings.put(KEY_MODE, cleaned.mode)
         context.settings.put(KEY_PROVIDER, cleaned.provider)
         context.settings.put(KEY_BASE_URL, cleaned.baseUrl)
@@ -100,15 +105,25 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         context.secrets.put(KEY_API_KEY, cleaned.apiKey)
         context.secrets.put(KEY_LIVE_API_KEY, cleaned.liveApiKey)
         this.settings = cleaned
+
+        if (cleaned.voskBuiltinModel != oldModel) {
+            pluginScope?.launch {
+                builtinService?.preloadModel(cleaned.voskBuiltinModel)
+            }
+        }
         return Ok(Unit)
     }
 
     override suspend fun onDisable() {
+        pluginScope?.cancel()
+        pluginScope = null
         builtinService?.close()
         services = emptyList()
     }
 
     override suspend fun shutdown() {
+        pluginScope?.cancel()
+        pluginScope = null
         builtinService?.close()
         services = emptyList()
     }

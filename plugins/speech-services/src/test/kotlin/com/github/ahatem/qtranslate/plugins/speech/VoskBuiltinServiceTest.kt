@@ -232,4 +232,41 @@ class VoskBuiltinServiceTest {
         val arabic = "السلام عليكم ورحمة الله"
         assertEquals("السلام عليكم ورحمة الله", formatVoskText(arabic, "ar"))
     }
+
+    @Test
+    fun `model cache caps at 2 models and keys by model name`() {
+        val manager = VoskModelManager({ tempDir })
+        // Create 3 model directories
+        val m1 = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs(); File(this, "README").writeText("1") }
+        val m2 = File(manager.modelsDirectory, "vosk-model-small-de-0.15").apply { mkdirs(); File(this, "README").writeText("2") }
+        val m3 = File(manager.modelsDirectory, "vosk-model-small-fr-0.22").apply { mkdirs(); File(this, "README").writeText("3") }
+
+        val createdModels = mutableMapOf<String, FakeModelHandle>()
+        val service = VoskBuiltinService(
+            modelManager = manager,
+            settings = { SpeechSettings() },
+            modelFactory = { dir ->
+                FakeModelHandle().also { createdModels[dir.name] = it }
+            }
+        )
+
+        // Preload model 1
+        service.preloadModel("vosk-model-small-en-us-0.15")
+        assertEquals(1, service.cachedModelCount)
+        assertTrue(service.isModelCached("vosk-model-small-en-us-0.15"))
+
+        // Preload model 2
+        service.preloadModel("vosk-model-small-de-0.15")
+        assertEquals(2, service.cachedModelCount)
+        assertTrue(service.isModelCached("vosk-model-small-de-0.15"))
+
+        // Preload model 3 -> should evict model 1 (keeping at most 2)
+        service.preloadModel("vosk-model-small-fr-0.22")
+        assertEquals(2, service.cachedModelCount, "Cache should cap at 2 models")
+        assertTrue(service.isModelCached("vosk-model-small-fr-0.22"))
+        assertTrue(createdModels["vosk-model-small-en-us-0.15"]?.closed?.get() == true, "Evicted model should be closed")
+
+        service.close()
+        assertEquals(0, service.cachedModelCount)
+    }
 }

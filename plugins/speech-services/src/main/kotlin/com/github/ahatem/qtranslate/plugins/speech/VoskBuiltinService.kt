@@ -104,25 +104,28 @@ class VoskBuiltinService(
             else SupportedLanguages.Specific(setOf(LanguageCode.ENGLISH))
         }
 
-    private val modelCache = ConcurrentHashMap<String, VoskModelHandle>()
+    private val modelLock = Any()
+    private val modelCache = LinkedHashMap<String, VoskModelHandle>()
 
-    private fun getOrLoadModel(path: String, modelDir: File): VoskModelHandle {
-        val cached = modelCache[path]
-        if (cached != null) return cached
-        synchronized(modelCache) {
-            val existing = modelCache[path]
-            if (existing != null) return existing
-            // Keep at most 2 models loaded concurrently to bound RAM footprint
-            if (modelCache.size >= 2) {
-                val toEvict = modelCache.keys.filter { it != path }
-                toEvict.forEach { key ->
-                    modelCache.remove(key)?.let { runCatching { it.close() } }
-                }
-            }
-            val loaded = modelFactory(modelDir)
-            modelCache[path] = loaded
-            return loaded
+    internal val cachedModelCount: Int get() = synchronized(modelLock) { modelCache.size }
+    internal fun isModelCached(name: String): Boolean = synchronized(modelLock) { modelCache.containsKey(name) }
+
+    private fun getOrLoadModelLocked(modelName: String, modelDir: File): VoskModelHandle {
+        val existing = modelCache[modelName]
+        if (existing != null) {
+            // Re-insert to mark as most recently used in LRU order
+            modelCache.remove(modelName)
+            modelCache[modelName] = existing
+            return existing
         }
+        // Keep at most 2 models loaded concurrently to bound RAM footprint
+        while (modelCache.size >= 2) {
+            val toEvict = modelCache.keys.firstOrNull { it != modelName } ?: break
+            modelCache.remove(toEvict)?.let { runCatching { it.close() } }
+        }
+        val loaded = modelFactory(modelDir)
+        modelCache[modelName] = loaded
+        return loaded
     }
 
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
@@ -138,16 +141,13 @@ class VoskBuiltinService(
                 )
             )
 
-        val modelHandle = try {
-            withContext(Dispatchers.IO) {
-                getOrLoadModel(modelDir.absolutePath, modelDir)
-            }
-        } catch (t: Throwable) {
-            return Err(ServiceError.ServiceUnavailableError("Failed to load Vosk model at ${modelDir.name}: ${t.message}", t))
-        }
-
         val recognizer = try {
-            modelHandle.createRecognizer(SAMPLE_RATE)
+            withContext(Dispatchers.IO) {
+                synchronized(modelLock) {
+                    val modelHandle = getOrLoadModelLocked(modelDir.name, modelDir)
+                    modelHandle.createRecognizer(SAMPLE_RATE)
+                }
+            }
         } catch (t: Throwable) {
             return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t))
         }
@@ -172,16 +172,13 @@ class VoskBuiltinService(
                 )
             )
 
-        val modelHandle = try {
-            withContext(Dispatchers.IO) {
-                getOrLoadModel(modelDir.absolutePath, modelDir)
-            }
-        } catch (t: Throwable) {
-            return Err(ServiceError.ServiceUnavailableError("Failed to load Vosk model at ${modelDir.name}: ${t.message}", t))
-        }
-
         val recognizer = try {
-            modelHandle.createRecognizer(SAMPLE_RATE)
+            withContext(Dispatchers.IO) {
+                synchronized(modelLock) {
+                    val modelHandle = getOrLoadModelLocked(modelDir.name, modelDir)
+                    modelHandle.createRecognizer(SAMPLE_RATE)
+                }
+            }
         } catch (t: Throwable) {
             return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t))
         }
@@ -207,14 +204,13 @@ class VoskBuiltinService(
     }
 
     fun preloadModel(modelName: String) {
-        val model = VoskModelManager.MODELS_BY_NAME[modelName] ?: return
-        val dir = File(modelManager.modelsDirectory, model.name)
-        if (dir.isDirectory && (dir.list()?.isNotEmpty() == true)) {
+        val info = VoskModelManager.MODELS_BY_NAME[modelName]
+        val lang = info?.language ?: "en"
+        val modelDir = modelManager.findModelForLanguage(lang, modelName)
+        if (modelDir != null && modelDir.isDirectory && modelDir.list()?.isNotEmpty() == true) {
             try {
-                if (!modelCache.containsKey(dir.absolutePath)) {
-                    modelCache.computeIfAbsent(dir.absolutePath) {
-                        modelFactory(dir)
-                    }
+                synchronized(modelLock) {
+                    getOrLoadModelLocked(modelDir.name, modelDir)
                 }
             } catch (_: Throwable) {
                 // Ignore background preload failures
@@ -238,8 +234,10 @@ class VoskBuiltinService(
     }
 
     fun close() {
-        modelCache.values.forEach { runCatching { it.close() } }
-        modelCache.clear()
+        synchronized(modelLock) {
+            modelCache.values.forEach { runCatching { it.close() } }
+            modelCache.clear()
+        }
     }
 
     companion object {
