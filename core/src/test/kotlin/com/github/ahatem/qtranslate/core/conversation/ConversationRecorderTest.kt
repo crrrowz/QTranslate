@@ -508,4 +508,38 @@ class ConversationRecorderTest {
         assertTrue(ConversationRecorder.isEchoPair(micSegment, sysEchoSegment))
         kotlin.test.assertFalse(ConversationRecorder.isEchoPair(sysDifferentSegment, micSegment))
     }
+
+    @Test
+    fun `updating stream language to the same language does not reconnect live session`() = runBlocking {
+        val mic = ScriptedDevice()
+        val sessions = java.util.Collections.synchronizedList(mutableListOf<ScriptedLive>())
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { _ ->
+                val live = ScriptedLive()
+                sessions.add(live)
+                Ok(live)
+            },
+            recognize = { Ok(SpeechRecognitionResponse(text = "test")) }
+        )
+
+        recorder.start(options().copy(systemOutput = null, microphoneLanguage = com.github.ahatem.qtranslate.api.language.LanguageCode("en")))
+        waitUntil { sessions.isNotEmpty() }
+        val session1 = sessions.single()
+        awaitLive(mic, session1)
+
+        // Requesting the exact same language must return early without creating a second live session
+        recorder.updateSpokenLanguage(com.github.ahatem.qtranslate.api.language.LanguageCode("en"))
+        delay(200)
+        assertEquals(1, sessions.size, "Live session should not reconnect when spoken language does not change")
+
+        // Changing to a different language should reconnect
+        recorder.updateSpokenLanguage(com.github.ahatem.qtranslate.api.language.LanguageCode("fr"))
+        waitUntil { sessions.size == 2 }
+        assertEquals(2, sessions.size, "Live session should reconnect when spoken language changes")
+
+        recorder.stop()
+    }
 }

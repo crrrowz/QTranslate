@@ -139,6 +139,8 @@ class ConversationWindow(
     private val speechLabel = JLabel()
     private val speechSettingsButton = JButton(strings.speechSettings)
 
+    private var fillingLanguages = false
+
     private val testDevicesButton = JButton(strings.testDevices)
     private val deviceWarningText = wrappingText("")
     private val deviceWarningBar = banner(deviceWarningText, UIManager.getColor("Actions.Yellow")) {
@@ -501,7 +503,9 @@ class ConversationWindow(
             checkDeviceWarnings()
         }
         myLanguageCombo.addActionListener {
+            if (fillingLanguages) return@addActionListener
             (myLanguageCombo.selectedItem as? LanguageCode)?.let { lang ->
+                if (feature.preferences.spokenLanguage == lang.tag) return@let
                 feature.preferences = feature.preferences.copy(spokenLanguage = lang.tag)
                 if (recorder.state.value.isActive) {
                     recorder.updateSpokenLanguage(lang)
@@ -509,7 +513,9 @@ class ConversationWindow(
             }
         }
         callLanguageCombo.addActionListener {
+            if (fillingLanguages) return@addActionListener
             (callLanguageCombo.selectedItem as? LanguageCode)?.let { lang ->
+                if (feature.preferences.callLanguage == lang.tag) return@let
                 feature.preferences = feature.preferences.copy(callLanguage = lang.tag)
                 if (recorder.state.value.isActive) {
                     recorder.updateCallLanguage(lang)
@@ -770,13 +776,18 @@ class ConversationWindow(
             this.renderer = renderer
             selectedItem = LanguageCode(tag).takeIf { it == LanguageCode.AUTO || it in spokenAvailable } ?: LanguageCode.AUTO
         }
-        myLanguageCombo.fill(preferences.spokenLanguage)
-        callLanguageCombo.fill(preferences.callLanguage)
+        fillingLanguages = true
+        try {
+            myLanguageCombo.fill(preferences.spokenLanguage)
+            callLanguageCombo.fill(preferences.callLanguage)
+            targetCombo.model = DefaultComboBoxModel(translationAvailable.toTypedArray())
+            targetCombo.renderer = renderer
+            targetCombo.selectedItem = preferences.targetLanguage?.let(::LanguageCode)?.takeIf { it in translationAvailable }
+                ?: defaultTarget().takeIf { it in translationAvailable } ?: translationAvailable.firstOrNull()
+        } finally {
+            fillingLanguages = false
+        }
         renderSpeechStatus()
-        targetCombo.model = DefaultComboBoxModel(translationAvailable.toTypedArray())
-        targetCombo.renderer = renderer
-        targetCombo.selectedItem = preferences.targetLanguage?.let(::LanguageCode)?.takeIf { it in translationAvailable }
-            ?: defaultTarget().takeIf { it in translationAvailable } ?: translationAvailable.firstOrNull()
     }
 
     private fun loadDevices() {

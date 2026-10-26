@@ -156,8 +156,8 @@ class ConversationRecorder(
         paused = false
 
         streams = listOfNotNull(
-            options.microphone?.let { StreamRecorder(AudioSource.MICROPHONE, it, microphoneBackend, session.id) },
-            options.systemOutput?.let { StreamRecorder(AudioSource.SYSTEM, it, systemBackend, session.id) }
+            options.microphone?.let { StreamRecorder(AudioSource.MICROPHONE, it, microphoneBackend, session.id, options.microphoneLanguage) },
+            options.systemOutput?.let { StreamRecorder(AudioSource.SYSTEM, it, systemBackend, session.id, options.systemLanguage) }
         )
         _state.value = RecorderState(
             phase = RecorderPhase.RECORDING,
@@ -288,12 +288,14 @@ class ConversationRecorder(
     var isSystemMuted: Boolean = false
 
     fun updateSpokenLanguage(language: LanguageCode) {
+        if (options?.microphoneLanguage == language) return
         options = options?.copy(microphoneLanguage = language)
         scope.launch { updateSession { it.copy(spokenLanguage = language.tag) } }
         streams.firstOrNull { it.source == AudioSource.MICROPHONE }?.switchLiveLanguage(language)
     }
 
     fun updateCallLanguage(language: LanguageCode) {
+        if (options?.systemLanguage == language) return
         options = options?.copy(systemLanguage = language)
         scope.launch { updateSession { it.copy(callLanguage = language.tag) } }
         streams.firstOrNull { it.source == AudioSource.SYSTEM }?.switchLiveLanguage(language)
@@ -394,8 +396,12 @@ class ConversationRecorder(
         val source: AudioSource,
         val device: AudioDevice,
         private val backend: AudioBackend,
-        private val sessionId: String
+        private val sessionId: String,
+        initialLanguage: LanguageCode = LanguageCode.AUTO
     ) {
+        @Volatile
+        var currentLanguage: LanguageCode = initialLanguage
+            private set
         private val segmenter = SpeechSegmenter()
         private val utterances = Channel<Pair<TranscriptSegment, ByteArray>>(Channel.UNLIMITED)
         private var writer: WavFileWriter? = null
@@ -625,7 +631,7 @@ class ConversationRecorder(
             liveStatus = LiveRecognitionStatus.RECONNECTING
             updateLiveStatus()
             liveConnecting = scope.launch {
-                val configured = _state.value.session?.languageOf(source) ?: "auto"
+                val configured = currentLanguage.tag
                 val languageTag = if (configured == "auto") (detectedLanguage ?: "auto") else configured
                 val language = LanguageCode(languageTag)
                 val result = openLive(language)
@@ -703,6 +709,8 @@ class ConversationRecorder(
         }
 
         fun switchLiveLanguage(language: LanguageCode) {
+            if (currentLanguage == language && (live != null || liveConnecting?.isActive == true)) return
+            currentLanguage = language
             scope.launch {
                 closeLive()
                 liveUnavailable = false
