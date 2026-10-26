@@ -55,7 +55,12 @@ sealed interface RecorderNotice {
 }
 
 /** What the live recognizer currently thinks is being said, not yet settled into a segment. */
-data class LiveLine(val startMillis: Long, val text: String)
+data class LiveLine(
+    val startMillis: Long,
+    val text: String,
+    val confirmedText: String = "",
+    val confirmedWords: List<TranscriptWord> = emptyList()
+)
 
 enum class LiveRecognitionStatus {
     OFF,
@@ -331,11 +336,16 @@ class ConversationRecorder(
 
     private suspend fun updateSession(transform: (ConversationSession) -> ConversationSession) {
         sessionLock.withLock {
-            val current = _state.value.session ?: return
-            val updated = transform(current)
-            _state.update { it.copy(session = updated) }
+            var updated: ConversationSession? = null
+            _state.update { s ->
+                val current = s.session ?: return@update s
+                val u = transform(current)
+                updated = u
+                s.copy(session = u)
+            }
+            val session = updated ?: return
             withContext(Dispatchers.IO) {
-                runCatching { repository.save(updated) }.onFailure { e ->
+                runCatching { repository.save(session) }.onFailure { e ->
                     logger.error("Could not save conversation transcript", e)
                     _state.update { it.copy(notice = RecorderNotice.SaveFailed(e.message ?: e.toString())) }
                 }
@@ -344,6 +354,11 @@ class ConversationRecorder(
     }
 
     private fun applySegment(current: ConversationSession, segment: TranscriptSegment): ConversationSession {
+        val existing = current.segments.firstOrNull { it.id == segment.id }
+        if (existing != null && existing.endMillis > segment.endMillis) {
+            return current
+        }
+
         // If it's on the SYSTEM stream and duplicates recent speech on the MICROPHONE stream, drop it
         if (segment.source == AudioSource.SYSTEM && segment.text.isNotBlank()) {
             if (isEcho(segment, current.segments)) {
@@ -722,8 +737,13 @@ class ConversationRecorder(
                 is LiveSpeechEvent.Partial -> {
                     if (event.text.isBlank()) return
                     val startSample = utteranceStartSample
+                        ?: listOfNotNull(voicedStartSample).minOrNull()
                         ?: (samplesWritten - LEAD_SAMPLES).coerceAtLeast(lastFinalSample).also { utteranceStartSample = it }
-                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(startSample), event.text))) }
+                    if (utteranceStartSample == null) {
+                        utteranceStartSample = startSample
+                    }
+                    val lockedStart = utteranceStartSample!!
+                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(lockedStart), event.text))) }
                 }
                 is LiveSpeechEvent.Final -> settle(event)
                 is LiveSpeechEvent.Failed -> {
@@ -744,13 +764,15 @@ class ConversationRecorder(
         /** Turns a live final into a segment, and hands its audio to the accurate recognizer. */
         private fun settle(event: LiveSpeechEvent.Final) {
             val endSample = samplesWritten
-            var startSample = listOfNotNull(voicedStartSample, utteranceStartSample).minOrNull()
+            val startSample = utteranceStartSample ?: listOfNotNull(voicedStartSample).minOrNull()
                 ?.coerceIn(lastFinalSample, endSample) ?: lastFinalSample
             utteranceStartSample = null
             voicedStartSample = null
             lastFinalSample = endSample
-            clearLiveLine()
-            if (event.text.isBlank()) return
+            if (event.text.isBlank()) {
+                clearLiveLine()
+                return
+            }
 
             val words = event.words.map { word ->
                 TranscriptWord(
@@ -759,29 +781,63 @@ class ConversationRecorder(
                     endMillis = toSessionMillis(liveStartSample) + word.endMillis
                 )
             }
-            words.firstOrNull()?.let { first ->
-                startSample = ((first.startMillis - (offsetMillis ?: 0)) * PcmStream.SAMPLE_RATE / 1000 - LEAD_SAMPLES / 2)
-                    .coerceIn(0, endSample)
-            }
+            val startMillis = toSessionMillis(startSample)
+            val endMillis = toSessionMillis(endSample)
             val draft = TranscriptSegment(
                 id = UUID.randomUUID().toString(),
                 source = source,
-                startMillis = toSessionMillis(startSample),
-                endMillis = toSessionMillis(endSample),
+                startMillis = startMillis,
+                endMillis = endMillis,
                 text = event.text,
                 words = words,
                 draft = true
             )
-            scope.launch { updateSession { applySegment(it, draft) } }
+
+            val currentSession = _state.value.session
+            val candidate = currentSession?.findCoalesceCandidate(source, startMillis, endMillis, currentLanguage.tag)
+
+            val segmentToApply: TranscriptSegment
+            val combinedAudioStartSample: Long
+            if (candidate != null) {
+                segmentToApply = coalesceSegments(candidate, draft)
+                combinedAudioStartSample = ((candidate.startMillis - (offsetMillis ?: 0)) * PcmStream.SAMPLE_RATE / 1000)
+                    .coerceIn(0, endSample)
+            } else {
+                segmentToApply = draft
+                combinedAudioStartSample = startSample
+            }
+
+            var sessionToSave: ConversationSession? = null
+            _state.update { current ->
+                val s = current.session ?: return@update current.copy(live = current.live - source)
+                val updated = applySegment(s, segmentToApply)
+                sessionToSave = updated
+                current.copy(
+                    live = current.live - source,
+                    session = updated
+                )
+            }
+
+            sessionToSave?.let { session ->
+                scope.launch(Dispatchers.IO) {
+                    sessionLock.withLock {
+                        runCatching { repository.save(session) }.onFailure { e ->
+                            logger.error("Could not save conversation transcript", e)
+                            _state.update { it.copy(notice = RecorderNotice.SaveFailed(e.message ?: e.toString())) }
+                        }
+                    }
+                }
+            }
+
             val audio = WavFiles.readRange(
                 repository.audioFile(sessionId, source),
-                startSample * 1000 / PcmStream.SAMPLE_RATE,
+                combinedAudioStartSample * 1000 / PcmStream.SAMPLE_RATE,
                 endSample * 1000 / PcmStream.SAMPLE_RATE
             )
             if (audio.isEmpty()) {
-                scope.launch { updateSession { applySegment(it, draft.copy(draft = false)) } }
+                scope.launch { updateSession { applySegment(it, segmentToApply.copy(draft = false)) } }
             } else {
-                utterances.trySend(draft to audio)
+                utterances.trySend(segmentToApply to audio)
             }
         }
 

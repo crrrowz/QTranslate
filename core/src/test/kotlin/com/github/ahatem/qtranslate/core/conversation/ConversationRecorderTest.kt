@@ -668,4 +668,62 @@ class ConversationRecorderTest {
         assertEquals(1, saved.segments.size, "Should have exactly 1 segment from live rather than duplicate from clip")
         assertTrue(saved.segments.single().text.startsWith("accurate:"), "Segment should be transcribed")
     }
+
+    @Test
+    fun `simultaneous microphone and system speech maintains atomic settle and timeline ordering`() = runBlocking {
+        val mic = ScriptedDevice()
+        val sys = ScriptedDevice()
+        val micLive = ScriptedLive()
+        val sysLive = ScriptedLive()
+
+        val recorder = recorder(
+            mic = mic,
+            system = sys,
+            openLive = { lang ->
+                if (lang.tag == "en") Ok(micLive) else Ok(sysLive)
+            },
+            recognize = { req ->
+                Ok(SpeechRecognitionResponse(text = "settled: ${req.prompt ?: ""}".trim()))
+            }
+        )
+
+        recorder.start(options().copy(
+            microphoneLanguage = com.github.ahatem.qtranslate.api.language.LanguageCode("en"),
+            systemLanguage = com.github.ahatem.qtranslate.api.language.LanguageCode("ar")
+        ))
+
+        waitUntil { recorder.state.value.streams.values.all { it.state == StreamState.LIVE } }
+        awaitLive(mic, micLive)
+        awaitLive(sys, sysLive)
+
+        // Both speakers produce partials simultaneously
+        micLive.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial("Hello from mic"))
+        sysLive.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial("Marhaban from system"))
+
+        waitUntil { recorder.state.value.live.size == 2 }
+        assertEquals("Hello from mic", recorder.state.value.live[AudioSource.MICROPHONE]?.text)
+        assertEquals("Marhaban from system", recorder.state.value.live[AudioSource.SYSTEM]?.text)
+
+        // Microphone settles first
+        micLive.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("Hello from mic"))
+
+        // Atomically, microphone partial should be removed and draft inserted in session without flicker
+        waitUntil { recorder.state.value.live[AudioSource.MICROPHONE] == null }
+        val sessionAfterMic = recorder.state.value.session
+        assertTrue(sessionAfterMic?.segments?.any { it.source == AudioSource.MICROPHONE && it.text.contains("Hello from mic") } == true)
+        // System live partial remains active
+        assertEquals("Marhaban from system", recorder.state.value.live[AudioSource.SYSTEM]?.text)
+
+        // System settles second
+        sysLive.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("Marhaban from system"))
+        waitUntil { recorder.state.value.live.isEmpty() }
+
+        waitUntil { recorder.state.value.session?.segments?.size == 2 }
+        val finalSegments = recorder.state.value.session!!.segments
+        // Deterministic ordering: both started around the same time, AudioSource.MICROPHONE.ordinal < SYSTEM.ordinal
+        assertEquals(AudioSource.MICROPHONE, finalSegments[0].source)
+        assertEquals(AudioSource.SYSTEM, finalSegments[1].source)
+
+        recorder.stop()
+    }
 }

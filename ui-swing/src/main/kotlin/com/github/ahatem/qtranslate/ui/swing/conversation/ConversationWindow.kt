@@ -716,14 +716,16 @@ class ConversationWindow(
                         id = "live-${source.name.lowercase()}",
                         source = source,
                         startMillis = line.startMillis,
-                        endMillis = maxOf(line.startMillis, state.elapsedMillis),
+                        endMillis = line.startMillis,
                         text = line.text,
                         draft = true
                     )
                 }
             }
             val sessionToRender = if (liveSegments.isEmpty()) state.session else {
-                state.session?.let { s -> s.copy(segments = s.segments + liveSegments) }
+                state.session?.let { s ->
+                    liveSegments.fold(s) { acc, liveSeg -> acc.withSegment(liveSeg) }
+                }
             }
             transcript.render(sessionToRender)
         }

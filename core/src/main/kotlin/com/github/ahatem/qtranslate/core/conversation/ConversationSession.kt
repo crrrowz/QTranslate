@@ -68,8 +68,13 @@ data class TranscriptSegment(
     val words: List<TranscriptWord> = emptyList(),
     val pending: Boolean = false,
     val failed: Boolean = false,
-    val draft: Boolean = false
+    val draft: Boolean = false,
+    val confirmedText: String = "",
+    val confirmedWords: List<TranscriptWord> = emptyList()
 )
+
+const val COALESCE_PAUSE_THRESHOLD_MILLIS = 2_000L
+const val COALESCE_MAX_DURATION_MILLIS = 15_000L
 
 /**
  * A recorded conversation and its transcript.
@@ -101,7 +106,15 @@ data class ConversationSession(
     /** Segments in timeline order, which is the order they were spoken. */
     fun withSegment(segment: TranscriptSegment): ConversationSession {
         val others = segments.filterNot { it.id == segment.id }
-        val index = others.indexOfFirst { it.startMillis > segment.startMillis }.let { if (it < 0) others.size else it }
+        val index = others.indexOfFirst {
+            if (it.startMillis != segment.startMillis) {
+                it.startMillis > segment.startMillis
+            } else if (it.source != segment.source) {
+                it.source.ordinal > segment.source.ordinal
+            } else {
+                it.id > segment.id
+            }
+        }.let { if (it < 0) others.size else it }
         return copy(segments = others.subList(0, index) + segment + others.subList(index, others.size))
     }
 
@@ -115,3 +128,68 @@ data class SessionSearchHit(
     val session: ConversationSession,
     val segments: List<TranscriptSegment>
 )
+
+/**
+ * Checks whether [candidate] can be coalesced with a new segment for [source].
+ *
+ * Rules:
+ * - Same [source]
+ * - Candidate is not failed
+ * - Gap between candidate.endMillis and newStartMillis is <= 2_000 ms (and >= -500 ms)
+ * - Combined duration <= 15_000 ms
+ * - Language matches (or either is null/blank)
+ * - No finalized segment from the other speaker occurred after candidate.startMillis
+ */
+fun ConversationSession.canCoalesce(
+    candidate: TranscriptSegment,
+    source: AudioSource,
+    startMillis: Long,
+    endMillis: Long,
+    language: String? = null
+): Boolean {
+    if (candidate.source != source || candidate.failed) return false
+    val gap = startMillis - candidate.endMillis
+    if (gap !in -500..COALESCE_PAUSE_THRESHOLD_MILLIS) return false
+    val combinedDuration = maxOf(candidate.endMillis, endMillis) - candidate.startMillis
+    if (combinedDuration > COALESCE_MAX_DURATION_MILLIS) return false
+    if (!candidate.language.isNullOrBlank() && !language.isNullOrBlank() && candidate.language != language) return false
+    val otherFinalizedInBetween = segments.any {
+        it.source != source && it.startMillis >= candidate.startMillis && !it.draft && !it.pending
+    }
+    if (otherFinalizedInBetween) return false
+    return true
+}
+
+fun ConversationSession.findCoalesceCandidate(
+    source: AudioSource,
+    startMillis: Long,
+    endMillis: Long,
+    language: String? = null
+): TranscriptSegment? {
+    val candidate = segments.lastOrNull { it.source == source } ?: return null
+    return if (canCoalesce(candidate, source, startMillis, endMillis, language)) candidate else null
+}
+
+fun coalesceSegments(first: TranscriptSegment, second: TranscriptSegment): TranscriptSegment {
+    val combinedText = when {
+        first.text.isBlank() -> second.text
+        second.text.isBlank() -> first.text
+        else -> "${first.text.trimEnd()} ${second.text.trimStart()}"
+    }
+    val normalizedSecondWords = second.words.map { word ->
+        if (word.startMillis < second.startMillis) {
+            word.copy(
+                startMillis = word.startMillis + second.startMillis,
+                endMillis = word.endMillis + second.startMillis
+            )
+        } else word
+    }
+    return first.copy(
+        endMillis = maxOf(first.endMillis, second.endMillis),
+        text = combinedText,
+        words = first.words + normalizedSecondWords,
+        draft = first.draft || second.draft,
+        pending = false,
+        failed = false
+    )
+}
