@@ -726,4 +726,52 @@ class ConversationRecorderTest {
 
         recorder.stop()
     }
+
+    @Test
+    fun `continuous live speech triggers rolling audio verification and stitches confirmed prefix on final`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+        val transcribingRequests = java.util.Collections.synchronizedList(mutableListOf<SpeechRecognitionRequest>())
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { Ok(live) },
+            recognize = { req ->
+                transcribingRequests.add(req)
+                Ok(SpeechRecognitionResponse(text = "accurate verified prefix"))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        waitUntil { recorder.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+        awaitLive(mic, live)
+
+        // Push 5 seconds of audio
+        mic.push(tone(5_000))
+
+        // Send a partial with >= 8 words
+        val partial1 = "one two three four five six seven eight nine ten"
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial(partial1))
+
+        // Rolling verification should trigger mid-utterance
+        waitUntil { transcribingRequests.isNotEmpty() }
+        waitUntil { recorder.state.value.live[AudioSource.MICROPHONE]?.confirmedText?.isNotBlank() == true }
+
+        val liveLine = recorder.state.value.live[AudioSource.MICROPHONE]!!
+        assertEquals("accurate verified prefix", liveLine.confirmedText)
+
+        // Now send final with tail words
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final(
+            text = "one two three four five six seven eight nine ten and the tail words"
+        ))
+
+        // Should settle and stitch confirmed prefix with tail
+        waitUntil { recorder.state.value.live.isEmpty() }
+        waitUntil { recorder.state.value.session?.segments?.any { it.text.contains("accurate verified prefix") } == true }
+
+        val seg = recorder.state.value.session!!.segments.single()
+        assertTrue(seg.text.startsWith("accurate verified prefix"), "Segment text should contain the confirmed prefix")
+        recorder.stop()
+    }
 }
