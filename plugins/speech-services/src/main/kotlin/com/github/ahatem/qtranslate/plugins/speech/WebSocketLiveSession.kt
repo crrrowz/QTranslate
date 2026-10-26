@@ -50,7 +50,7 @@ abstract class WebSocketLiveSession(
         }
     }
 
-    protected fun end(failure: ServiceError?) {
+    protected open fun end(failure: ServiceError?) {
         if (ended) return
         ended = true
         failure?.let { channel.trySend(LiveSpeechEvent.Failed(it)) }

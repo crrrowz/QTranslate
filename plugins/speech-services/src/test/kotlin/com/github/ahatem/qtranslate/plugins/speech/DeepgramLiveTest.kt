@@ -5,6 +5,7 @@ import com.github.michaelbull.result.getError
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -78,5 +79,17 @@ class DeepgramLiveTest {
         val validateErr = service.validate().getError()
         assertNotNull(validateErr)
         assertTrue(validateErr.message.contains("API key"))
+    }
+
+    @Test
+    fun `query builder includes model and multi for auto language`() {
+        val autoQuery = buildDeepgramQuery("auto", "nova-3")
+        assertTrue(autoQuery.contains("model=nova-3"))
+        assertTrue(autoQuery.contains("language=multi"))
+        assertFalse(autoQuery.contains("detect_language=true"))
+
+        val explicitQuery = buildDeepgramQuery("ar", "nova-2-general")
+        assertTrue(explicitQuery.contains("model=nova-2-general"))
+        assertTrue(explicitQuery.contains("language=ar"))
     }
 }

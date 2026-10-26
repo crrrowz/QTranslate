@@ -13,10 +13,16 @@ import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
 import com.github.michaelbull.result.getError
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.future.await
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -56,7 +62,8 @@ class DeepgramLiveService(
             return Err(ServiceError.ConfigurationError("Deepgram live requires an API key. Set it in Settings > Plugins > Speech Recognition."))
         }
         val lang = SpeechClient.primaryTag(language)
-        return DeepgramLiveSession.open(key, lang)
+        val model = current.liveModel.trim().ifEmpty { "nova-3" }
+        return DeepgramLiveSession.open(key, lang, model)
     }
 
     override suspend fun validate(): Result<Unit, ServiceError> {
@@ -65,11 +72,26 @@ class DeepgramLiveService(
         if (key.isBlank()) {
             return Err(ServiceError.ConfigurationError("Deepgram live requires an API key. Set it in Settings > Plugins > Speech Recognition."))
         }
-        return DeepgramLiveSession.ping(key)
+        val model = current.liveModel.trim().ifEmpty { "nova-3" }
+        return DeepgramLiveSession.ping(key, model)
+    }
+}
+
+internal fun buildDeepgramQuery(lang: String?, model: String): String = buildString {
+    append("encoding=linear16&sample_rate=16000&channels=1&interim_results=true&smart_format=true")
+    val encodedModel = java.net.URLEncoder.encode(model, "UTF-8")
+    append("&model=").append(encodedModel)
+    if (!lang.isNullOrBlank() && lang != "auto") {
+        append("&language=").append(lang)
+    } else {
+        append("&language=multi")
     }
 }
 
 class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram") {
+
+    private val sessionScope = CoroutineScope(Dispatchers.IO)
+    private var keepAliveJob: Job? = null
 
     override fun sendAudio(pcm: ByteArray) {
         if (ended || pcm.isEmpty()) return
@@ -78,9 +100,23 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
 
     override suspend fun finish() {
         if (ended) return
+        keepAliveJob?.cancel()
+        keepAliveJob = null
         // Deepgram ends stream with an empty binary frame or CloseStream message
         enqueue { it.sendText("""{"type":"CloseStream"}""", true) }
         closeSocket()
+    }
+
+    override fun cancel() {
+        keepAliveJob?.cancel()
+        keepAliveJob = null
+        super.cancel()
+    }
+
+    override fun end(failure: ServiceError?) {
+        keepAliveJob?.cancel()
+        keepAliveJob = null
+        super.end(failure)
     }
 
     private fun handleMessage(text: String) {
@@ -98,6 +134,13 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
 
         override fun onOpen(webSocket: WebSocket) {
             ready.complete(Ok(Unit))
+            keepAliveJob = sessionScope.launch {
+                while (isActive && !ended) {
+                    delay(5_000)
+                    if (ended || !isActive) break
+                    enqueue { it.sendText("""{"type":"KeepAlive"}""", true) }
+                }
+            }
             webSocket.request(1)
         }
 
@@ -128,15 +171,8 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
         }
     }
 
-    private suspend fun connect(apiKey: String, lang: String?): Result<Unit, ServiceError> {
-        val query = buildString {
-            append("encoding=linear16&sample_rate=16000&channels=1&interim_results=true&smart_format=true")
-            if (!lang.isNullOrBlank() && lang != "auto") {
-                append("&language=").append(lang)
-            } else {
-                append("&detect_language=true")
-            }
-        }
+    private suspend fun connect(apiKey: String, lang: String?, model: String): Result<Unit, ServiceError> {
+        val query = buildDeepgramQuery(lang, model)
         val uri = URI("wss://api.deepgram.com/v1/listen?$query")
         return try {
             socket = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
@@ -151,15 +187,15 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
     }
 
     companion object {
-        suspend fun open(apiKey: String, lang: String?): Result<LiveSpeechSession, ServiceError> {
+        suspend fun open(apiKey: String, lang: String?, model: String): Result<LiveSpeechSession, ServiceError> {
             val session = DeepgramLiveSession()
-            session.connect(apiKey, lang).getError()?.let { return Err(it) }
+            session.connect(apiKey, lang, model).getError()?.let { return Err(it) }
             return Ok(session)
         }
 
-        suspend fun ping(apiKey: String): Result<Unit, ServiceError> {
+        suspend fun ping(apiKey: String, model: String): Result<Unit, ServiceError> {
             val session = DeepgramLiveSession()
-            val connectResult = session.connect(apiKey, "en")
+            val connectResult = session.connect(apiKey, "en", model)
             session.cancel()
             return connectResult
         }
