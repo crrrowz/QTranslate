@@ -557,7 +557,7 @@ class ConversationRecorder(
                             if (voicedStartSample == null) {
                                 voicedStartSample = completed.firstOrNull()?.startSample ?: segmenter.activeStartSample
                             }
-                        } else {
+                        } else if (liveUnavailable) {
                             segmenter.accept(effectiveChunk).forEach(::announce)
                         }
                     }
@@ -573,8 +573,8 @@ class ConversationRecorder(
                 }
             } finally {
                 liveConnecting?.cancel()
-                // The last words: the live recognizer settles them, or the segmenter cuts them.
-                if (live != null) closeLive() else segmenter.flush()?.let(::announce)
+                // The last words: the live recognizer settles them, or the segmenter cuts them if live was unavailable.
+                if (live != null) closeLive() else if (liveUnavailable) segmenter.flush()?.let(::announce)
                 utterances.close()
                 runCatching { pcm?.close() }
                 runCatching { writer?.close() }

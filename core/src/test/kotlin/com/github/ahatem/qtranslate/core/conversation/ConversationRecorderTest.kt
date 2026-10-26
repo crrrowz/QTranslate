@@ -626,4 +626,46 @@ class ConversationRecorderTest {
 
         recorder.stop()
     }
+
+    @Test
+    fun `audio spoken while live service connects late is not duplicated by clip segmenter`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+        val clipUtterances = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { _ ->
+                // Simulate slow connection
+                delay(300)
+                Ok(live)
+            },
+            recognize = { req ->
+                clipUtterances.incrementAndGet()
+                Ok(SpeechRecognitionResponse(text = "accurate: ${req.audio.durationMillis}ms"))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        // Push speech while live is still connecting (during the 300ms delay)
+        mic.push(tone(200) + silence(100))
+
+        // Wait until live session finishes connecting and starts receiving replayed audio
+        waitUntil { live.received.get() > 0 }
+        assertEquals(LiveRecognitionStatus.CONNECTED, recorder.state.value.liveStatus)
+
+        // Live produces the final transcription
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("live speech text"))
+
+        // Wait until transcription is settled
+        waitUntil { recorder.state.value.session?.segments?.any { it.text.isNotBlank() } == true }
+
+        recorder.stop()
+
+        val saved = repository.list().single()
+        // There should be exactly 1 segment (from live), not a duplicate segment from pre-connect clip
+        assertEquals(1, saved.segments.size, "Should have exactly 1 segment from live rather than duplicate from clip")
+        assertTrue(saved.segments.single().text.startsWith("accurate:"), "Segment should be transcribed")
+    }
 }
