@@ -124,4 +124,27 @@ class TranscriptViewTest {
         view.updateCursor(null)
         assertEquals(java.awt.Cursor.DEFAULT_CURSOR, view.cursor.type)
     }
+
+    @Test
+    fun `render renders confirmed prefix in normal style and live text in draft style`() {
+        val view = TranscriptView(strings())
+        view.newestFirst = false
+
+        val seg = TranscriptSegment(
+            id = "live-mic",
+            source = AudioSource.MICROPHONE,
+            startMillis = 1000,
+            endMillis = 5000,
+            text = "Hello world how are you",
+            confirmedText = "Hello world",
+            draft = true
+        )
+
+        val session = ConversationSession(id = "s", title = "T", createdAt = 0, segments = listOf(seg))
+        view.render(session)
+
+        val doc = view.styledDocument
+        val docText = doc.getText(0, doc.length)
+        assertTrue(docText.contains("Hello world how are you"))
+    }
 }

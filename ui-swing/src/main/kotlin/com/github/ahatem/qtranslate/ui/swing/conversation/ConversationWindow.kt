@@ -36,6 +36,7 @@ import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
 import java.awt.ComponentOrientation
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Insets
@@ -210,7 +211,24 @@ class ConversationWindow(
         putClientProperty("JButton.buttonType", "toolBarButton")
         toolTipText = strings.orderTooltip
     }
+    private val pausePill = JButton().apply {
+        isFocusable = false
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        putClientProperty("JButton.buttonType", "roundRect")
+        putClientProperty("FlatLaf.styleClass", "small")
+        foreground = UIManager.getColor("Actions.Blue") ?: Color(0x389FD6)
+        addActionListener { flushBufferedUpdates() }
+    }
+    private val pausePillBar = JPanel(FlowLayout(FlowLayout.CENTER, 0, 4)).apply {
+        isOpaque = false
+        isVisible = false
+        add(pausePill)
+    }
     private val popup = HoverTranslationPopup(this, strings)
+
+    /** Buffered session to render when updates are frozen during user interaction. */
+    private var bufferedSessionToRender: ConversationSession? = null
+    private var pendingUpdatesCount: Int = 0
 
     /** The saved session on screen when nothing is recording. */
     private var viewed: ConversationSession? = null
@@ -371,9 +389,13 @@ class ConversationWindow(
             add(noticeBar)
         }
         add(top, BorderLayout.NORTH)
+        val transcriptContainer = JPanel(BorderLayout()).apply {
+            add(pausePillBar, BorderLayout.NORTH)
+            add(transcriptScroll, BorderLayout.CENTER)
+        }
         transcriptScroll.border = BorderFactory.createMatteBorder(1, 0, 1, 0, UIManager.getColor("Component.borderColor"))
         transcriptScroll.verticalScrollBar.unitIncrement = 16
-        add(transcriptScroll, BorderLayout.CENTER)
+        add(transcriptContainer, BorderLayout.CENTER)
         add(JPanel(BorderLayout()).apply {
             add(JLabel(strings.interactionHint).apply {
                 foreground = UIManager.getColor("Label.disabledForeground")
@@ -576,6 +598,7 @@ class ConversationWindow(
             override fun mouseExited(e: MouseEvent) {
                 showTimer.stop()
                 hideTimer.restart()
+                checkAndFlushIfIdle()
             }
             override fun mouseClicked(e: MouseEvent) = onTranscriptClick(e)
             override fun mouseReleased(e: MouseEvent) {
@@ -594,11 +617,16 @@ class ConversationWindow(
         }
         transcript.addMouseListener(mouse)
         transcript.addMouseMotionListener(mouse)
-        transcriptScroll.viewport.addChangeListener { if (popup.isVisible) hideCard() }
+        transcriptScroll.viewport.addChangeListener {
+            if (popup.isVisible && !transcript.isProgrammaticScroll) {
+                hideCard()
+            }
+        }
 
         popup.onHoverChanged = { inside ->
             popupHovered = inside
             if (inside) hideTimer.stop() else hideTimer.restart()
+            checkAndFlushIfIdle()
         }
     }
 
@@ -724,10 +752,27 @@ class ConversationWindow(
             }
             val sessionToRender = if (liveSegments.isEmpty()) state.session else {
                 state.session?.let { s ->
-                    liveSegments.fold(s) { acc, liveSeg -> acc.withSegment(liveSeg) }
+                    liveSegments.fold<TranscriptSegment, ConversationSession>(s) { acc, liveSeg -> acc.withSegment(liveSeg) }
                 }
             }
-            transcript.render(sessionToRender)
+
+            val isUserInteracting = popup.isVisible || popupHovered ||
+                (transcript.selectionStart != transcript.selectionEnd) ||
+                (hoverRange != null && transcript.mousePosition != null)
+
+            if (isUserInteracting) {
+                if (bufferedSessionToRender != sessionToRender) {
+                    bufferedSessionToRender = sessionToRender
+                    pendingUpdatesCount++
+                    pausePill.text = strings.updatesPaused(pendingUpdatesCount)
+                    pausePillBar.isVisible = true
+                }
+            } else {
+                bufferedSessionToRender = null
+                pendingUpdatesCount = 0
+                pausePillBar.isVisible = false
+                transcript.render(sessionToRender)
+            }
         }
         renderSpeechStatus()
         checkDeviceWarnings()
@@ -1209,6 +1254,24 @@ class ConversationWindow(
         popupContent = null
         popupHovered = false
         hoverRange = null
+        checkAndFlushIfIdle()
+    }
+
+    private fun checkAndFlushIfIdle() {
+        val isUserInteracting = popup.isVisible || popupHovered ||
+            (transcript.selectionStart != transcript.selectionEnd) ||
+            (hoverRange != null && transcript.mousePosition != null)
+        if (!isUserInteracting && bufferedSessionToRender != null) {
+            flushBufferedUpdates()
+        }
+    }
+
+    private fun flushBufferedUpdates() {
+        val session = bufferedSessionToRender ?: return
+        bufferedSessionToRender = null
+        pendingUpdatesCount = 0
+        pausePillBar.isVisible = false
+        transcript.render(session)
     }
 
     private fun playRange(segment: TranscriptSegment, startMillis: Long, endMillis: Long) {

@@ -67,6 +67,9 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     var spans: List<SegmentSpan> = emptyList()
         private set
 
+    /** True while TranscriptView is adjusting scroll position programmatically (to prevent dismissing popups). */
+    var isProgrammaticScroll: Boolean = false
+
     /** Newest messages appear at the top by default so users see incoming speech without scrolling. */
     var newestFirst: Boolean = true
         set(value) {
@@ -77,7 +80,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             }
         }
 
-    private var currentSession: ConversationSession? = null
+    var currentSession: ConversationSession? = null
+        private set
     private var renderedKey: Any? = null
 
     inner class TranscriptCaret : DefaultCaret() {
@@ -149,9 +153,36 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         if (key == renderedKey) return
         renderedKey = key
 
-        val scrollBar = (parent?.parent as? JScrollPane)?.verticalScrollBar
+        val scrollPane = (parent?.parent as? JScrollPane)
+        val viewport = scrollPane?.viewport
+        val scrollBar = scrollPane?.verticalScrollBar
+        val viewRect = viewport?.viewRect
+
         val wasAtTop = scrollBar == null || scrollBar.value <= 24
         val wasAtBottom = scrollBar == null || scrollBar.value + scrollBar.visibleAmount >= scrollBar.maximum - 24
+
+        // Viewport scroll anchor
+        val anchorSpan = if (viewRect != null && spans.isNotEmpty()) {
+            spans.firstOrNull { span ->
+                val bounds = runCatching { modelToView2D(span.playStart) }.getOrNull()
+                bounds != null && (bounds.y + 10) >= viewRect.y
+            } ?: spans.firstOrNull()
+        } else null
+
+        val anchorSegmentId = anchorSpan?.segment?.id
+        val anchorYOffset = if (anchorSpan != null && viewRect != null) {
+            val b = runCatching { modelToView2D(anchorSpan.playStart) }.getOrNull()
+            if (b != null) b.y - viewRect.y else 0.0
+        } else 0.0
+
+        // Selection preservation
+        val selStart = selectionStart
+        val selEnd = selectionEnd
+        val hasSelection = selStart != selEnd
+        val selSpan = if (hasSelection) spans.firstOrNull { it.textStart <= selStart && selStart <= it.textEnd } else null
+        val selSegmentId = selSpan?.segment?.id
+        val selRelStart = if (selSpan != null) selStart - selSpan.textStart else null
+        val selRelEnd = if (selSpan != null) selEnd - selSpan.textStart else null
 
         val doc = styledDocument
         doc.remove(0, doc.length)
@@ -209,21 +240,41 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             doc.insertString(doc.length, "\n", null)
 
             val textStart = doc.length
-            val (text, style) = when {
-                segment.pending -> strings.transcribing to muted(italic = true)
-                segment.failed -> strings.failedRetry to link()
-                // Live text awaiting the accurate recognizer: shown in speaker color, italicized.
-                segment.draft -> segment.text to body().apply {
-                    StyleConstants.setItalic(this, true)
-                    StyleConstants.setForeground(this, sourceColor(segment.source))
+            when {
+                segment.pending -> {
+                    doc.insertString(doc.length, strings.transcribing, muted(italic = true))
                 }
-                else -> segment.text to body()
+                segment.failed -> {
+                    doc.insertString(doc.length, strings.failedRetry, link())
+                }
+                segment.draft -> {
+                    val confirmed = segment.confirmedText
+                    val liveTail = when {
+                        confirmed.isBlank() -> segment.text
+                        segment.text.startsWith(confirmed, ignoreCase = true) -> segment.text.substring(confirmed.length).trimStart()
+                        else -> segment.text
+                    }
+                    if (confirmed.isNotBlank()) {
+                        doc.insertString(doc.length, confirmed, body())
+                        if (liveTail.isNotBlank()) {
+                            doc.insertString(doc.length, " ", null)
+                        }
+                    }
+                    if (liveTail.isNotBlank()) {
+                        doc.insertString(doc.length, liveTail, body().apply {
+                            StyleConstants.setItalic(this, true)
+                            StyleConstants.setForeground(this, sourceColor(segment.source))
+                        })
+                    }
+                }
+                else -> {
+                    doc.insertString(doc.length, segment.text, body())
+                }
             }
-            doc.insertString(doc.length, text, style)
             val textEnd = doc.length
             // Header and text together: a paragraph inserted after an Arabic line would otherwise
             // inherit its right alignment, header included.
-            alignParagraph(doc, playStart, textEnd - playStart, text)
+            alignParagraph(doc, playStart, textEnd - playStart, segment.text)
 
             built += SegmentSpan(
                 segment, playStart, playEnd, headerStart, headerEnd,
@@ -234,10 +285,38 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         spans = built
 
         SwingUtilities.invokeLater {
-            if (newestFirst && wasAtTop) {
-                scrollBar?.value = 0
-            } else if (!newestFirst && wasAtBottom) {
-                scrollBar?.value = scrollBar.maximum
+            isProgrammaticScroll = true
+            try {
+                if (newestFirst && wasAtTop) {
+                    scrollBar?.value = 0
+                } else if (!newestFirst && wasAtBottom) {
+                    scrollBar?.value = scrollBar.maximum
+                } else if (anchorSegmentId != null && viewRect != null) {
+                    val newSpan = built.firstOrNull { it.segment.id == anchorSegmentId }
+                    if (newSpan != null) {
+                        val newBounds = runCatching { modelToView2D(newSpan.playStart) }.getOrNull()
+                        if (newBounds != null) {
+                            val targetY = (newBounds.y - anchorYOffset).toInt().coerceIn(0, scrollBar?.maximum ?: 0)
+                            scrollBar?.value = targetY
+                        }
+                    }
+                }
+            } finally {
+                SwingUtilities.invokeLater {
+                    isProgrammaticScroll = false
+                }
+            }
+
+            // Restore selection if applicable
+            if (selSegmentId != null && selRelStart != null && selRelEnd != null) {
+                val newSpan = built.firstOrNull { it.segment.id == selSegmentId }
+                if (newSpan != null) {
+                    val restoredStart = (newSpan.textStart + selRelStart).coerceIn(newSpan.textStart, newSpan.textEnd)
+                    val restoredEnd = (newSpan.textStart + selRelEnd).coerceIn(newSpan.textStart, newSpan.textEnd)
+                    if (restoredStart != restoredEnd) {
+                        select(restoredStart, restoredEnd)
+                    }
+                }
             }
         }
     }

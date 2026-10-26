@@ -865,3 +865,4 @@ order_tooltip = "تبديل ترتيب الرسائل (الأحدث أولاً �
 action_play_audio = "تشغيل الصوت"
 action_retry_segment = "إعادة تفريغ المقطع"
 action_delete_message = "حذف الرسالة"
+updates_paused = "⏸ تم إيقاف التحديث مؤقتاً للترجمة · %d جديد"
