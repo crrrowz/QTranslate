@@ -40,8 +40,8 @@ class DeepgramLiveTest {
                   {
                     "transcript": "good morning everyone",
                     "words": [
-                      {"word": "good", "start": 0.1, "end": 0.4},
-                      {"word": "morning", "start": 0.5, "end": 0.9},
+                      {"word": "good", "start": 0.1, "end": 0.4, "confidence": 0.98},
+                      {"word": "morning", "start": 0.5, "end": 0.9, "confidence": 0.42},
                       {"word": "everyone", "start": 1.0, "end": 1.4}
                     ]
                   }
@@ -56,6 +56,9 @@ class DeepgramLiveTest {
         assertEquals("good", finalResult.words[0].text)
         assertEquals(100L, finalResult.words[0].startMillis)
         assertEquals(400L, finalResult.words[0].endMillis)
+        assertEquals(0.98, finalResult.words[0].confidence)
+        assertEquals(0.42, finalResult.words[1].confidence)
+        assertEquals(null, finalResult.words[2].confidence)
         assertEquals(1400L, finalResult.words[2].endMillis)
     }
 

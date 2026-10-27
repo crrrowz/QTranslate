@@ -238,7 +238,8 @@ internal fun parseDeepgramMessage(text: String): DeepgramParsedMessage {
             val w = wordObj["word"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             val start = wordObj["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
             val end = wordObj["end"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
-            RecognizedWord(w, (start * 1000).toLong(), (end * 1000).toLong())
+            val conf = wordObj["confidence"]?.jsonPrimitive?.doubleOrNull
+            RecognizedWord(w, (start * 1000).toLong(), (end * 1000).toLong(), conf)
         }
     }.getOrNull().orEmpty()
 

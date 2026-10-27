@@ -345,7 +345,11 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
                         doc.setCharacterAttributes(range.first, len, muted(italic = false), false)
                     }
                     VerificationState.LIVE -> {
-                        doc.setCharacterAttributes(range.first, len, muted(italic = true), false)
+                        val attr = muted(italic = true)
+                        if (isLowConfidenceLiveWord(word)) {
+                            StyleConstants.setUnderline(attr, true)
+                        }
+                        doc.setCharacterAttributes(range.first, len, attr, false)
                     }
                     VerificationState.VERIFIED -> {
                         doc.setCharacterAttributes(range.first, len, body(), false)
@@ -743,6 +747,13 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
     companion object {
         const val CORRECTION_HIGHLIGHT_MS = 3_000L
+        const val LOW_CONFIDENCE_THRESHOLD = 0.6
+
+        /** True when [word] is in LIVE state and has a reported recognizer confidence below [LOW_CONFIDENCE_THRESHOLD]. */
+        fun isLowConfidenceLiveWord(word: TranscriptWord): Boolean =
+            word.verificationState == VerificationState.LIVE &&
+                word.confidence != null &&
+                word.confidence!! < LOW_CONFIDENCE_THRESHOLD
 
         /** One colour per source, from the theme's action palette so it suits light and dark. */
         fun sourceColor(source: AudioSource): Color = when (source) {

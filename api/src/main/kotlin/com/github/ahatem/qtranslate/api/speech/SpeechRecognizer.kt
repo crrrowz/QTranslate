@@ -66,12 +66,16 @@ public data class SpeechRecognitionResponse(
  *
  * @param startMillis Offset from the start of the clip.
  * @param endMillis   Offset from the start of the clip; never before [startMillis].
+ * @param confidence  Optional recognizer confidence score in `0.0..1.0`, when reported.
  */
 public data class RecognizedWord(
     val text: String,
     val startMillis: Long,
-    val endMillis: Long
-)
+    val endMillis: Long,
+    val confidence: Double? = null
+) {
+    public constructor(text: String, startMillis: Long, endMillis: Long) : this(text, startMillis, endMillis, null)
+}
 
 /**
  * A complete recorded clip.

@@ -59,7 +59,8 @@ data class TranscriptWord(
     val text: String,
     val startMillis: Long,
     val endMillis: Long,
-    val verificationState: VerificationState = VerificationState.LIVE
+    val verificationState: VerificationState = VerificationState.LIVE,
+    val confidence: Double? = null
 )
 
 /**

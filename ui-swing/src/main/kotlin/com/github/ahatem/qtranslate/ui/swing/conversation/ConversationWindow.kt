@@ -760,7 +760,7 @@ class ConversationWindow(
                         startMillis = line.startMillis,
                         endMillis = line.startMillis,
                         text = line.text,
-                        words = line.confirmedWords,
+                        words = line.confirmedWords + line.liveWords,
                         draft = true,
                         confirmedText = line.confirmedText,
                         verificationState = line.verificationState,

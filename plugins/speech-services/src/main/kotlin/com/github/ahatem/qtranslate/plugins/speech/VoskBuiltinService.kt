@@ -404,7 +404,8 @@ internal fun parseVoskJson(text: String): VoskParsedResult {
                 val wordObj = item.jsonObject
                 val start = wordObj["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
                 val end = wordObj["end"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
-                RecognizedWord(fixMojibake(wordObj.string("word")), (start * 1000).toLong(), (end * 1000).toLong())
+                val conf = wordObj["conf"]?.jsonPrimitive?.doubleOrNull
+                RecognizedWord(fixMojibake(wordObj.string("word")), (start * 1000).toLong(), (end * 1000).toLong(), conf)
             }
         }.getOrNull().orEmpty()
         return if (partial.isNotEmpty()) VoskParsedResult.Partial(partial, words) else VoskParsedResult.Empty
@@ -418,7 +419,8 @@ internal fun parseVoskJson(text: String): VoskParsedResult {
                 val wordObj = item.jsonObject
                 val start = wordObj["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
                 val end = wordObj["end"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
-                RecognizedWord(fixMojibake(wordObj.string("word")), (start * 1000).toLong(), (end * 1000).toLong())
+                val conf = wordObj["conf"]?.jsonPrimitive?.doubleOrNull
+                RecognizedWord(fixMojibake(wordObj.string("word")), (start * 1000).toLong(), (end * 1000).toLong(), conf)
             }
         }.getOrDefault(emptyList())
         return if (finalText.isNotEmpty()) VoskParsedResult.Final(finalText, words) else VoskParsedResult.Empty

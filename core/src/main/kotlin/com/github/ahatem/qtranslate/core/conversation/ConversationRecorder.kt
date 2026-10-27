@@ -61,7 +61,8 @@ data class LiveLine(
     val confirmedText: String = "",
     val confirmedWords: List<TranscriptWord> = emptyList(),
     val verificationState: VerificationState = VerificationState.LIVE,
-    val agreement: Double? = null
+    val agreement: Double? = null,
+    val liveWords: List<TranscriptWord> = emptyList()
 ) {
     val liveText: String
         get() = when {
@@ -867,6 +868,15 @@ class ConversationRecorder(
 
                     val allWords = event.text.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
                     val unverifiedWordCount = (allWords.size - totalWordsConfirmed).coerceAtLeast(0)
+                    val timedWords = event.words.map { w ->
+                        TranscriptWord(
+                            text = w.text,
+                            startMillis = toSessionMillis(liveStartSample) + w.startMillis,
+                            endMillis = toSessionMillis(liveStartSample) + w.endMillis,
+                            verificationState = VerificationState.LIVE,
+                            confidence = w.confidence
+                        )
+                    }
 
                     val shouldVerify = (unverifiedMillis >= ROLLING_VERIFICATION_MIN_MILLIS && unverifiedWordCount >= ROLLING_VERIFICATION_MIN_WORDS) ||
                         (unverifiedMillis >= ROLLING_VERIFICATION_MAX_MILLIS && unverifiedWordCount > 0)
@@ -874,13 +884,6 @@ class ConversationRecorder(
                     if (shouldVerify && (verificationJob == null || verificationJob?.isActive == false)) {
                         val sliceStartMillis = toSessionMillis(checkpointStart)
                         val currentEndMillis = toSessionMillis(currentSamples)
-                        val timedWords = event.words.map { w ->
-                            TranscriptWord(
-                                text = w.text,
-                                startMillis = toSessionMillis(liveStartSample) + w.startMillis,
-                                endMillis = toSessionMillis(liveStartSample) + w.endMillis
-                            )
-                        }
                         val wordCut = if (timedWords.isNotEmpty()) {
                             VerificationSlicer.chooseWordBoundaryCut(timedWords, sliceStartMillis, currentEndMillis)
                         } else null
@@ -991,7 +994,8 @@ class ConversationRecorder(
 
                     val liveTail = if (allWords.size > totalWordsConfirmed) allWords.drop(totalWordsConfirmed).joinToString(" ") else ""
                     val fullText = if (confirmedText.isBlank()) event.text else if (liveTail.isBlank()) confirmedText else "$confirmedText $liveTail"
-                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(lockedStart), fullText, confirmedText, confirmedWords, liveVerificationState, liveAgreement))) }
+                    val unconfirmedLiveWords = if (timedWords.size > totalWordsConfirmed) timedWords.drop(totalWordsConfirmed) else emptyList()
+                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(lockedStart), fullText, confirmedText, confirmedWords, liveVerificationState, liveAgreement, unconfirmedLiveWords))) }
                 }
                 is LiveSpeechEvent.Final -> settle(event)
                 is LiveSpeechEvent.Failed -> {
@@ -1035,7 +1039,8 @@ class ConversationRecorder(
                 TranscriptWord(
                     text = word.text,
                     startMillis = toSessionMillis(liveStartSample) + word.startMillis,
-                    endMillis = toSessionMillis(liveStartSample) + word.endMillis
+                    endMillis = toSessionMillis(liveStartSample) + word.endMillis,
+                    confidence = word.confidence
                 )
             }
             val startMillis = toSessionMillis(startSample)

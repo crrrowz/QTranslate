@@ -76,7 +76,8 @@ class SegmentTranscriber(
             TranscriptWord(
                 text = word.text,
                 startMillis = startMillis + word.startMillis,
-                endMillis = (startMillis + word.endMillis).coerceAtMost(endMillis)
+                endMillis = (startMillis + word.endMillis).coerceAtMost(endMillis),
+                confidence = word.confidence
             )
         },
         pending = false,

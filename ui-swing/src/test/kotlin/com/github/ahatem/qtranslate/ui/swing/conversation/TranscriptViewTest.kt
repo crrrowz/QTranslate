@@ -277,4 +277,40 @@ class TranscriptViewTest {
             view.tooltipForHit(TranscriptView.Hit.Text(spanU, spanU.textStart + 1))
         )
     }
+
+    @Test
+    fun `low confidence words below 0_6 in LIVE state are underlined while high confidence or verified words are not`() {
+        val highConfLive = TranscriptWord("clear", 0L, 400L, VerificationState.LIVE, confidence = 0.85)
+        val lowConfLive = TranscriptWord("mumbled", 500L, 900L, VerificationState.LIVE, confidence = 0.45)
+        val lowConfVerified = TranscriptWord("checked", 1000L, 1400L, VerificationState.VERIFIED, confidence = 0.45)
+
+        assertFalse(TranscriptView.isLowConfidenceLiveWord(highConfLive))
+        assertTrue(TranscriptView.isLowConfidenceLiveWord(lowConfLive))
+        assertFalse(TranscriptView.isLowConfidenceLiveWord(lowConfVerified))
+
+        val view = TranscriptView(strings())
+        view.newestFirst = false
+        val seg = TranscriptSegment(
+            id = "live-mic",
+            source = AudioSource.MICROPHONE,
+            startMillis = 0L,
+            endMillis = 1500L,
+            text = "clear mumbled checked",
+            words = listOf(highConfLive, lowConfLive, lowConfVerified),
+            draft = true,
+            verificationState = VerificationState.LIVE
+        )
+        val session = ConversationSession(id = "s", title = "T", createdAt = 0L, segments = listOf(seg))
+        view.render(session)
+
+        val span = view.spans.single()
+        val doc = view.styledDocument
+        val clearAttrs = doc.getCharacterElement(span.words[0].first.first).attributes
+        val mumbledAttrs = doc.getCharacterElement(span.words[1].first.first).attributes
+        val checkedAttrs = doc.getCharacterElement(span.words[2].first.first).attributes
+
+        assertFalse(StyleConstants.isUnderline(clearAttrs), "High-confidence LIVE word must not be underlined")
+        assertTrue(StyleConstants.isUnderline(mumbledAttrs), "Low-confidence LIVE word (< 0.6) must be underlined")
+        assertFalse(StyleConstants.isUnderline(checkedAttrs), "VERIFIED word must not have low-confidence underline")
+    }
 }

@@ -289,4 +289,21 @@ class VoskBuiltinServiceTest {
 
         assertTrue(recognizer.closed.get(), "Recognizer must be closed after finish cleanup even if cancelled")
     }
+
+    @Test
+    fun `parseVoskJson extracts word confidence from partial_result and result`() {
+        val partialRaw = """{"partial":"hello maybe","partial_result":[{"conf":0.95,"start":0.1,"end":0.4,"word":"hello"},{"conf":0.45,"start":0.5,"end":0.9,"word":"maybe"}]}"""
+        val partial = parseVoskJson(partialRaw)
+        assertTrue(partial is VoskParsedResult.Partial)
+        assertEquals(2, partial.words.size)
+        assertEquals(0.95, partial.words[0].confidence)
+        assertEquals(0.45, partial.words[1].confidence)
+
+        val finalRaw = """{"text":"hello maybe","result":[{"conf":0.91,"start":0.1,"end":0.4,"word":"hello"},{"conf":0.52,"start":0.5,"end":0.9,"word":"maybe"}]}"""
+        val finalRes = parseVoskJson(finalRaw)
+        assertTrue(finalRes is VoskParsedResult.Final)
+        assertEquals(2, finalRes.words.size)
+        assertEquals(0.91, finalRes.words[0].confidence)
+        assertEquals(0.52, finalRes.words[1].confidence)
+    }
 }
