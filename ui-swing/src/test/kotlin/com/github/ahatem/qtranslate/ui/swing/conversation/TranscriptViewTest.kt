@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test
 import java.awt.Point
 import java.nio.file.Files
 import javax.swing.JScrollPane
+import javax.swing.SwingUtilities
 import javax.swing.text.StyleConstants
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -36,7 +37,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `hit test distinguishes play button, retry button, delete button and text`() {
+    fun `hit test distinguishes play button, retry button, delete button and text`() = SwingUtilities.invokeAndWait {
         val view = TranscriptView(strings())
         view.newestFirst = false
         view.setSize(600, 400)
@@ -90,7 +91,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `render newestFirst places latest segment at the top`() {
+    fun `render newestFirst places latest segment at the top`() = SwingUtilities.invokeAndWait {
         val view = TranscriptView(strings())
         view.newestFirst = true
 
@@ -106,7 +107,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `updateCursor sets HAND_CURSOR for buttons, TEXT_CURSOR for text, and DEFAULT_CURSOR for header`() {
+    fun `updateCursor sets HAND_CURSOR for buttons, TEXT_CURSOR for text, and DEFAULT_CURSOR for header`() = SwingUtilities.invokeAndWait {
         val view = TranscriptView(strings())
         val span = TranscriptView.SegmentSpan(
             TranscriptSegment(id = "1", source = AudioSource.MICROPHONE, startMillis = 0, endMillis = 1000, text = "test"),
@@ -133,7 +134,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `render renders confirmed prefix in normal style and live text in draft style`() {
+    fun `render renders confirmed prefix in normal style and live text in draft style`() = SwingUtilities.invokeAndWait {
         val view = TranscriptView(strings())
         view.newestFirst = false
 
@@ -156,7 +157,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `inserting a card above anchored card under pointer keeps anchored card on-screen Y unchanged`() {
+    fun `inserting a card above anchored card under pointer keeps anchored card on-screen Y unchanged`() = SwingUtilities.invokeAndWait {
         val view = TranscriptView(strings())
         view.newestFirst = true
         val scrollPane = JScrollPane(view)
@@ -204,7 +205,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `render displays verification state styles, accuracy badge tooltip, and fades corrected highlight after 3s`() {
+    fun `render displays verification state styles, accuracy badge tooltip, and fades corrected highlight after 3s`() = SwingUtilities.invokeAndWait {
         val s = strings()
         val view = TranscriptView(s)
         var now = 10_000L
@@ -280,7 +281,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `low confidence words below 0_6 in LIVE state are underlined while high confidence or verified words are not`() {
+    fun `low confidence words below 0_6 in LIVE state are underlined while high confidence or verified words are not`() = SwingUtilities.invokeAndWait {
         val highConfLive = TranscriptWord("clear", 0L, 400L, VerificationState.LIVE, confidence = 0.85)
         val lowConfLive = TranscriptWord("mumbled", 500L, 900L, VerificationState.LIVE, confidence = 0.45)
         val lowConfVerified = TranscriptWord("checked", 1000L, 1400L, VerificationState.VERIFIED, confidence = 0.45)
@@ -316,7 +317,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `LiveSlotsPanel maintains two permanent speaker slots with bounded height and clears slot on settle`() {
+    fun `LiveSlotsPanel maintains two permanent speaker slots with bounded height and clears slot on settle`() = SwingUtilities.invokeAndWait {
         val panel = LiveSlotsPanel(strings())
         panel.setSize(600, 120)
 
@@ -364,7 +365,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `chat layout aligns Me and Them on opposite sides and flips sides in RTL`() {
+    fun `chat layout aligns Me and Them on opposite sides and flips sides in RTL`() = SwingUtilities.invokeAndWait {
         val ltrMic = TranscriptView.cardHorizontalBounds(AudioSource.MICROPHONE, 600, chatLayout = true, rtl = false)
         val ltrSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = true, rtl = false)
         assertEquals(10, ltrMic.first, "In LTR chat layout, MICROPHONE card starts on the left")
@@ -382,7 +383,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `50 partial events within 1s cause at most 5 full renders while settles flush immediately`() {
+    fun `50 partial events within 1s cause at most 5 full renders while settles flush immediately`() = SwingUtilities.invokeAndWait {
         val view = TranscriptView(strings())
         var now = 1_000L
         view.clock = { now }
@@ -444,7 +445,7 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `incremental single-card update shifts subsequent span offsets and keeps hit testing accurate`() {
+    fun `incremental single-card update shifts subsequent span offsets and keeps hit testing accurate`() = SwingUtilities.invokeAndWait {
         val view = TranscriptView(strings())
         var now = 5_000L
         view.clock = { now }
