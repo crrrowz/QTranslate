@@ -80,18 +80,74 @@ class OpenAiRealtimeSession private constructor(
     private val currentPartial = StringBuilder()
     private val resampler = LinearPcmResampler(16_000, 24_000)
 
+    // Client-side VAD state for turn commits (gpt-live-transcribe has no server VAD)
+    private var uncommittedAudioBytes: Long = 0L
+    private var speechDetectedInCurrentTurn: Boolean = false
+    private var consecutiveSilentSamples: Long = 0L
+    private var currentTurnSamples: Long = 0L
+
     override fun sendAudio(pcm: ByteArray) {
         if (ended || pcm.isEmpty()) return
         val resampled = resampler.process(pcm)
         if (resampled.isEmpty()) return
+
         val b64 = Base64.getEncoder().encodeToString(resampled)
         enqueue { it.sendText("""{"type":"input_audio_buffer.append","audio":"$b64"}""", true) }
+        uncommittedAudioBytes += resampled.size
+
+        // Track energy on the input 16-bit PCM (resampled 24 kHz audio, mono 16-bit LE)
+        val numSamples = resampled.size / 2
+        val rms = calculateRms(resampled)
+        val isSpeech = rms >= MIN_SPEECH_RMS
+
+        currentTurnSamples += numSamples
+        if (isSpeech) {
+            speechDetectedInCurrentTurn = true
+            consecutiveSilentSamples = 0L
+        } else if (speechDetectedInCurrentTurn) {
+            consecutiveSilentSamples += numSamples
+        }
+
+        val silenceDurationMs = (consecutiveSilentSamples * 1000L) / RESAMPLED_SAMPLE_RATE
+        val turnDurationMs = (currentTurnSamples * 1000L) / RESAMPLED_SAMPLE_RATE
+
+        val shouldCommitSilence = speechDetectedInCurrentTurn && silenceDurationMs >= SILENCE_THRESHOLD_MS
+        val shouldCommitMaxDuration = speechDetectedInCurrentTurn && turnDurationMs >= MAX_TURN_DURATION_MS
+
+        if ((shouldCommitSilence || shouldCommitMaxDuration) && uncommittedAudioBytes > 0) {
+            commitTurn()
+        }
+    }
+
+    private fun commitTurn() {
+        if (uncommittedAudioBytes > 0) {
+            enqueue { it.sendText("""{"type":"input_audio_buffer.commit"}""", true) }
+            uncommittedAudioBytes = 0L
+        }
+        speechDetectedInCurrentTurn = false
+        consecutiveSilentSamples = 0L
+        currentTurnSamples = 0L
     }
 
     override suspend fun finish() {
         if (ended) return
-        enqueue { it.sendText("""{"type":"input_audio_buffer.commit"}""", true) }
+        if (uncommittedAudioBytes > 0) {
+            enqueue { it.sendText("""{"type":"input_audio_buffer.commit"}""", true) }
+            uncommittedAudioBytes = 0L
+        }
         closeSocket()
+    }
+
+    private fun calculateRms(pcm: ByteArray): Double {
+        var sum = 0.0
+        var i = 0
+        while (i + 1 < pcm.size) {
+            val sample = ((pcm[i].toInt() and 0xFF) or (pcm[i + 1].toInt() shl 8)).toShort().toDouble()
+            sum += sample * sample
+            i += 2
+        }
+        val samples = (pcm.size / 2).coerceAtLeast(1)
+        return kotlin.math.sqrt(sum / samples)
     }
 
     private fun handleMessage(text: String) {
@@ -179,6 +235,18 @@ class OpenAiRealtimeSession private constructor(
 
     companion object {
         const val ENDPOINT = "wss://api.openai.com/v1/realtime?intent=transcription"
+
+        /** Sample rate of resampled PCM audio sent to OpenAI (24 kHz). */
+        const val RESAMPLED_SAMPLE_RATE = 24_000
+
+        /** Silence duration following speech required to commit an input turn (~600 ms). */
+        const val SILENCE_THRESHOLD_MS = 600L
+
+        /** Maximum duration of an ongoing speech turn before committing (~15 s). */
+        const val MAX_TURN_DURATION_MS = 15_000L
+
+        /** Minimum RMS threshold to distinguish voiced speech from background silence (~-50 dBFS). */
+        const val MIN_SPEECH_RMS = 250.0
 
         suspend fun open(
             apiKey: String,
