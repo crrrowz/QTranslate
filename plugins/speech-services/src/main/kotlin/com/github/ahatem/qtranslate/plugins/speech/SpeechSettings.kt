@@ -136,7 +136,7 @@ data class SpeechSettings(
 
     @field:Setting(
         label = "Live Model",
-        description = "Model for OpenAI Realtime (default: gpt-4o-realtime-preview) or Deepgram live (default: nova-3).",
+        description = "Streaming transcription model for OpenAI Realtime (default: gpt-live-transcribe) or Deepgram live (default: nova-3).",
         type = SettingType.TEXT,
         group = "live",
         showIf = "liveEngine=$LIVE_DEEPGRAM,$LIVE_OPENAI",

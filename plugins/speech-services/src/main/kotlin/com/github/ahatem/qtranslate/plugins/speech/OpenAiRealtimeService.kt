@@ -30,9 +30,10 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
 /**
- * Realtime live speech transcription via OpenAI's Realtime WebSocket API (gpt-4o-realtime-preview).
+ * Realtime live speech transcription via OpenAI's Realtime WebSocket API (gpt-live-transcribe).
  *
- * Sends base64-encoded 16 kHz mono PCM frames in input_audio_buffer.append events and receives
+ * Connects to wss://api.openai.com/v1/realtime?intent=transcription with a transcription session
+ * type, sending 24 kHz mono PCM frames in input_audio_buffer.append events and receiving
  * interim and settled transcriptions.
  */
 class OpenAiRealtimeService(
@@ -51,8 +52,9 @@ class OpenAiRealtimeService(
         if (key.isBlank()) {
             return Err(ServiceError.ConfigurationError("OpenAI Realtime requires an API key. Set it in Settings > Plugins > Speech Recognition."))
         }
-        val model = current.liveModel.trim().ifEmpty { "gpt-4o-realtime-preview" }
-        return OpenAiRealtimeSession.open(key, model)
+        val model = current.liveModel.trim().ifEmpty { DEFAULT_MODEL }
+        val langTag = SpeechClient.primaryTag(language)
+        return OpenAiRealtimeSession.open(key, model, languageTag = langTag)
     }
 
     override suspend fun validate(): Result<Unit, ServiceError> {
@@ -61,12 +63,19 @@ class OpenAiRealtimeService(
         if (key.isBlank()) {
             return Err(ServiceError.ConfigurationError("OpenAI Realtime requires an API key. Set it in Settings > Plugins > Speech Recognition."))
         }
-        val model = current.liveModel.trim().ifEmpty { "gpt-4o-realtime-preview" }
+        val model = current.liveModel.trim().ifEmpty { DEFAULT_MODEL }
         return OpenAiRealtimeSession.ping(key, model)
+    }
+
+    companion object {
+        const val DEFAULT_MODEL = "gpt-live-transcribe"
     }
 }
 
-class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI Realtime") {
+class OpenAiRealtimeSession private constructor(
+    private val model: String,
+    private val languageTag: String? = null
+) : WebSocketLiveSession("OpenAI Realtime") {
 
     private val currentPartial = StringBuilder()
     private val resampler = LinearPcmResampler(16_000, 24_000)
@@ -105,13 +114,23 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
         }
     }
 
+    internal fun buildSessionUpdateConfig(): String {
+        val transcriptionProps = mutableListOf<String>()
+        transcriptionProps.add(""""model":${openAiJson.encodeToString(kotlinx.serialization.serializer(), model)}""")
+        if (!languageTag.isNullOrBlank()) {
+            transcriptionProps.add(""""languages":[${openAiJson.encodeToString(kotlinx.serialization.serializer(), languageTag)}]""")
+        }
+        val transcriptionJson = transcriptionProps.joinToString(",")
+        return """{"type":"session.update","session":{"type":"transcription","audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"transcription":{$transcriptionJson},"turn_detection":null}}}}"""
+    }
+
     private val listener = object : WebSocket.Listener {
         private val buffer = StringBuilder()
 
         override fun onOpen(webSocket: WebSocket) {
             socket = webSocket
-            // Configure session for input audio transcription only (no assistant turn response generation)
-            val config = """{"type":"session.update","session":{"modalities":["text"],"input_audio_format":"pcm16","turn_detection":{"type":"server_vad","threshold":0.5,"prefix_padding_ms":300,"silence_duration_ms":500,"create_response":false},"input_audio_transcription":{"model":"whisper-1"}}}"""
+            // Configure dedicated transcription session (GA interface, no assistant turn response generation)
+            val config = buildSessionUpdateConfig()
             enqueue { it.sendText(config, true) }
             webSocket.request(1)
         }
@@ -143,14 +162,12 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
         }
     }
 
-    private suspend fun connect(apiKey: String, model: String, endpoint: String): Result<Unit, ServiceError> {
-        val encodedModel = java.net.URLEncoder.encode(model, "UTF-8")
-        val uri = URI("$endpoint?model=$encodedModel")
+    private suspend fun connect(apiKey: String, endpoint: String): Result<Unit, ServiceError> {
+        val uri = URI(endpoint)
         return try {
             socket = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
                 .newWebSocketBuilder()
                 .header("Authorization", "Bearer $apiKey")
-                .header("OpenAI-Beta", "realtime=v1")
                 .connectTimeout(Duration.ofSeconds(5))
                 .buildAsync(uri, listener).await()
             withTimeoutOrNull(10_000L) { ready.await() }
@@ -161,17 +178,26 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
     }
 
     companion object {
-        private const val ENDPOINT = "wss://api.openai.com/v1/realtime"
+        const val ENDPOINT = "wss://api.openai.com/v1/realtime?intent=transcription"
 
-        suspend fun open(apiKey: String, model: String, endpoint: String = ENDPOINT): Result<LiveSpeechSession, ServiceError> {
-            val session = OpenAiRealtimeSession()
-            session.connect(apiKey, model, endpoint).getError()?.let { return Err(it) }
+        suspend fun open(
+            apiKey: String,
+            model: String = OpenAiRealtimeService.DEFAULT_MODEL,
+            endpoint: String = ENDPOINT,
+            languageTag: String? = null
+        ): Result<LiveSpeechSession, ServiceError> {
+            val session = OpenAiRealtimeSession(model, languageTag)
+            session.connect(apiKey, endpoint).getError()?.let { return Err(it) }
             return Ok(session)
         }
 
-        suspend fun ping(apiKey: String, model: String): Result<Unit, ServiceError> {
-            val session = OpenAiRealtimeSession()
-            val result = session.connect(apiKey, model, ENDPOINT)
+        suspend fun ping(
+            apiKey: String,
+            model: String = OpenAiRealtimeService.DEFAULT_MODEL,
+            endpoint: String = ENDPOINT
+        ): Result<Unit, ServiceError> {
+            val session = OpenAiRealtimeSession(model)
+            val result = session.connect(apiKey, endpoint)
             session.cancel()
             return result
         }
