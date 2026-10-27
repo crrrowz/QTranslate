@@ -130,7 +130,9 @@ class ConversationWindowLayoutTest {
     fun `across recording start and stop anchored card on-screen Y is preserved`() {
         val strings = strings()
         val view = TranscriptView(strings)
+        view.setSize(600, 400)
         val scrollPane = JScrollPane(view)
+        scrollPane.setSize(600, 400)
         val pill = JButton("Pill").apply { isVisible = false }
         val overlay = TranscriptOverlayPane(scrollPane, pill)
         val livePanel = LiveSlotsPanel(strings)
@@ -159,26 +161,16 @@ class ConversationWindowLayoutTest {
         val session = ConversationSession(id = "s-1", title = "Session 1", createdAt = 0L, segments = segments)
         view.newestFirst = false
         view.render(session)
+        innerPanel.doLayout()
+        overlay.doLayout()
+        scrollPane.doLayout()
 
-        fun updateLayout() {
-            innerPanel.doLayout()
-            overlay.doLayout()
-            scrollPane.doLayout()
-            val vp = scrollPane.viewport
-            if (vp.width > 0) {
-                view.setSize(vp.width, maxOf(vp.height, view.preferredSize.height))
-            }
-            view.doLayout()
-        }
-        updateLayout()
-
-        // Pick seg-15
+        // Rest mouse pointer over card seg-15
         val targetSpan = view.spans.firstOrNull { it.segment.id == "seg-15" }
         assertNotNull(targetSpan)
         val initialCardYInView = view.modelToView2D(targetSpan.playStart).y
-        scrollPane.viewport.viewPosition = Point(0, initialCardYInView.toInt() - 50)
-        view.pointerPosition = Point(50, initialCardYInView.toInt() + 10)
-        updateLayout()
+        scrollPane.viewport.viewPosition = Point(0, (initialCardYInView - 40).toInt().coerceAtLeast(0))
+        view.pointerPosition = Point(50, initialCardYInView.toInt() + 5)
 
         val anchorBefore = view.captureScrollAnchor()
         assertNotNull(anchorBefore)
@@ -187,11 +179,12 @@ class ConversationWindowLayoutTest {
 
         // Start recording: livePanel becomes visible
         livePanel.render(emptyMap(), visible = true)
-        updateLayout()
+        innerPanel.doLayout()
+        overlay.doLayout()
+        scrollPane.doLayout()
 
         // Restore anchor
         view.restoreScrollAnchor(anchorBefore)
-        updateLayout()
 
         val cardYAfterStart = view.modelToView2D(targetSpan.playStart).y - scrollPane.viewport.viewPosition.y
         assertEquals(cardYBefore, cardYAfterStart, 1.0, "Card on-screen Y must be preserved (±1 px) on start")
@@ -199,11 +192,12 @@ class ConversationWindowLayoutTest {
         // Stop recording: livePanel becomes hidden
         val anchorBeforeStop = view.captureScrollAnchor()
         livePanel.render(emptyMap(), visible = false)
-        updateLayout()
+        innerPanel.doLayout()
+        overlay.doLayout()
+        scrollPane.doLayout()
 
         // Restore anchor
         view.restoreScrollAnchor(anchorBeforeStop)
-        updateLayout()
 
         val cardYAfterStop = view.modelToView2D(targetSpan.playStart).y - scrollPane.viewport.viewPosition.y
         assertEquals(cardYBefore, cardYAfterStop, 1.0, "Card on-screen Y must be preserved (±1 px) on stop")

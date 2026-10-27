@@ -94,3 +94,5 @@ QTranslate صار عنده صفحة **Conversation Sessions** تسجّل مكا�
 10. **`25c087c` — `feat(conversation): add 250ms partial render throttling, incremental card updates, and 150ms fade-in`**
     - تهدئة معدل الرسم (`<= 1` تحديث جزئي كل `250 ms` مع تمرير فوري للمقاطع المستقرة)، والتحديث الجزئي لنطاق البطاقة المتغيرة فقط دون مسح المستند بالكامل، مع ظهور تدريجي ناعم (`150 ms`) للبطاقات الجديدة.
     - إجمالي نتائج الاختبارات الفعلي من ملفات XML (`*/build/test-results/test/*.xml`): **1,576 اختباراً (1,570 ناجح، 6 متخطى، 0 فشل، 0 أخطاء)**.
+11. **`fix(conversation): overlay pause pill, fixed-height live panel, and anchor compensation on recording transitions`**
+    - جعل زر الإيقاف المؤقت طافياً كطبقة فوقية (`TranscriptOverlayPane`) بدون إزاحة تخطيط البطاقات نهائياً عند الظهور أو الإخفاء، وتثبيت ارتفاع خانات `LiveSlotsPanel` على 4 أسطر ثابتة أثناء التسجيل بدون أي تغير بارتفاعها مع تدفق النصوص، وتعويض إزاحة شريط التمرير (`restoreScrollAnchor`) عند بدء/إيقاف التسجيل أو تبديل ترتيب البطاقات.
