@@ -51,7 +51,9 @@ public interface LiveSpeechSession {
 
 public sealed interface LiveSpeechEvent {
     /** The service's current guess at the words since the last [Final]. Replaces the previous one. */
-    public data class Partial(val text: String) : LiveSpeechEvent
+    public data class Partial(val text: String, val words: List<RecognizedWord> = emptyList()) : LiveSpeechEvent {
+        public constructor(text: String) : this(text, emptyList())
+    }
 
     /**
      * A settled stretch of speech.

@@ -122,7 +122,7 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
     private fun handleMessage(text: String) {
         val parsed = parseDeepgramMessage(text)
         when (parsed) {
-            is DeepgramParsedMessage.Partial -> channel.trySend(LiveSpeechEvent.Partial(parsed.text))
+            is DeepgramParsedMessage.Partial -> channel.trySend(LiveSpeechEvent.Partial(parsed.text, parsed.words))
             is DeepgramParsedMessage.Final -> channel.trySend(LiveSpeechEvent.Final(parsed.text, parsed.words))
             is DeepgramParsedMessage.Error -> end(ServiceError.ServiceUnavailableError("Deepgram error: ${parsed.message}"))
             DeepgramParsedMessage.Ignored -> Unit
@@ -203,7 +203,7 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
 }
 
 internal sealed interface DeepgramParsedMessage {
-    data class Partial(val text: String) : DeepgramParsedMessage
+    data class Partial(val text: String, val words: List<RecognizedWord> = emptyList()) : DeepgramParsedMessage
     data class Final(val text: String, val words: List<RecognizedWord>) : DeepgramParsedMessage
     data class Error(val message: String) : DeepgramParsedMessage
     data object Ignored : DeepgramParsedMessage
@@ -232,18 +232,19 @@ internal fun parseDeepgramMessage(text: String): DeepgramParsedMessage {
     val isFinal = json["is_final"]?.jsonPrimitive?.booleanOrNull == true ||
         json["speech_final"]?.jsonPrimitive?.booleanOrNull == true
 
+    val words = runCatching {
+        firstAlt["words"]?.jsonArray?.mapNotNull { item ->
+            val wordObj = item.jsonObject
+            val w = wordObj["word"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val start = wordObj["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+            val end = wordObj["end"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+            RecognizedWord(w, (start * 1000).toLong(), (end * 1000).toLong())
+        }
+    }.getOrNull().orEmpty()
+
     return if (isFinal) {
-        val words = runCatching {
-            firstAlt["words"]?.jsonArray?.mapNotNull { item ->
-                val wordObj = item.jsonObject
-                val w = wordObj["word"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                val start = wordObj["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
-                val end = wordObj["end"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
-                RecognizedWord(w, (start * 1000).toLong(), (end * 1000).toLong())
-            }
-        }.getOrNull().orEmpty()
         DeepgramParsedMessage.Final(transcript, words)
     } else {
-        DeepgramParsedMessage.Partial(transcript)
+        DeepgramParsedMessage.Partial(transcript, words)
     }
 }

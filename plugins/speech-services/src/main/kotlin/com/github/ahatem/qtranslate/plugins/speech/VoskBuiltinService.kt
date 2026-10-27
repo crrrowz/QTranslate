@@ -339,7 +339,7 @@ class VoskBuiltinSession(
     private fun emitPartial(jsonString: String) {
         val parsed = parseVoskJson(jsonString)
         if (parsed is VoskParsedResult.Partial && parsed.text.isNotEmpty()) {
-            eventChannel.trySend(LiveSpeechEvent.Partial(parsed.text))
+            eventChannel.trySend(LiveSpeechEvent.Partial(parsed.text, parsed.words))
         }
     }
 
@@ -353,7 +353,7 @@ class VoskBuiltinSession(
 }
 
 internal sealed interface VoskParsedResult {
-    data class Partial(val text: String) : VoskParsedResult
+    data class Partial(val text: String, val words: List<RecognizedWord> = emptyList()) : VoskParsedResult
     data class Final(val text: String, val words: List<RecognizedWord>) : VoskParsedResult
     data object Empty : VoskParsedResult
 }
@@ -399,7 +399,15 @@ internal fun parseVoskJson(text: String): VoskParsedResult {
     // Partial: {"partial": "..."} or {"type": "partial", "text": "..."}
     if (json.containsKey("partial") || json.string("type") == "partial") {
         val partial = fixMojibake(json.string("partial").ifEmpty { json.string("text") }.trim())
-        return if (partial.isNotEmpty()) VoskParsedResult.Partial(partial) else VoskParsedResult.Empty
+        val words = runCatching {
+            (json["partial_result"] ?: json["result"])?.jsonArray?.mapNotNull { item ->
+                val wordObj = item.jsonObject
+                val start = wordObj["start"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+                val end = wordObj["end"]?.jsonPrimitive?.doubleOrNull ?: return@mapNotNull null
+                RecognizedWord(fixMojibake(wordObj.string("word")), (start * 1000).toLong(), (end * 1000).toLong())
+            }
+        }.getOrNull().orEmpty()
+        return if (partial.isNotEmpty()) VoskParsedResult.Partial(partial, words) else VoskParsedResult.Empty
     }
 
     // Final result: {"text": "...", "result": [...]} or {"type": "result", "text": "..."}
