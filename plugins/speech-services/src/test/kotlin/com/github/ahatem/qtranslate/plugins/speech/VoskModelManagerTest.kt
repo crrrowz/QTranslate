@@ -2,6 +2,8 @@ package com.github.ahatem.qtranslate.plugins.speech
 
 import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.get
+import com.github.michaelbull.result.getError
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -232,5 +234,193 @@ class VoskModelManagerTest {
 
         controller.cancel()
         assertTrue(controller.isCancelled.get())
+    }
+
+    @Test
+    fun `atomic install cleans up extracting temp folder on invalid structure`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir })
+        val badZip = File(tempDir, "bad.zip")
+        ZipOutputStream(FileOutputStream(badZip)).use { zos ->
+            zos.putNextEntry(ZipEntry("corrupt/some-file.txt"))
+            zos.write("corrupt".toByteArray())
+            zos.closeEntry()
+        }
+
+        val targetDir = File(manager.modelsDirectory, "corrupt-model")
+        val res = manager.atomicInstallFromArchive(badZip, targetDir)
+
+        assertTrue(res.getError() != null)
+        assertFalse(targetDir.exists())
+        assertFalse(File(manager.modelsDirectory, "corrupt-model.extracting").exists())
+    }
+
+    @Test
+    fun `atomic install correctly finds model root when archive has different folder structure`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir })
+        val archiveZip = File(tempDir, "nested.zip")
+        ZipOutputStream(FileOutputStream(archiveZip)).use { zos ->
+            zos.putNextEntry(ZipEntry("different-inner-name/am/final.mdl"))
+            zos.write("fake-model-binary".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(ZipEntry("different-inner-name/conf/model.conf"))
+            zos.write("sample_rate=16000".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(ZipEntry("different-inner-name/graph/HCLG.fst"))
+            zos.write("fake-graph".toByteArray())
+            zos.closeEntry()
+        }
+
+        val targetDir = File(manager.modelsDirectory, "vosk-model-nested")
+        val res = manager.atomicInstallFromArchive(archiveZip, targetDir)
+
+        assertNotNull(res.get())
+        assertTrue(targetDir.exists())
+        assertTrue(manager.isInstalled("vosk-model-nested"))
+        assertFalse(File(manager.modelsDirectory, "vosk-model-nested.extracting").exists())
+    }
+
+    @Test
+    fun `concurrent download of the same model is rejected`() = runBlocking {
+        val fakeModel = VoskModel(
+            name = "vosk-model-concurrent-test",
+            language = "en",
+            label = "Concurrent Test",
+            sizeBytes = 1024L,
+            url = "https://example.com/fake.zip"
+        )
+
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val downloadStarted = java.util.concurrent.CountDownLatch(1)
+
+        val manager = VoskModelManager(
+            dataDirectory = { tempDir },
+            downloader = { _, targetZip, _ ->
+                downloadStarted.countDown()
+                latch.await()
+                createZipWithModel(targetZip, fakeModel.name)
+                Ok(Unit)
+            }
+        )
+
+        val firstJob = this.launch(kotlinx.coroutines.Dispatchers.IO) {
+            manager.downloadModel(fakeModel)
+        }
+
+        downloadStarted.await()
+        assertTrue(manager.isDownloading(fakeModel.name))
+
+        val secondResult = manager.downloadModel(fakeModel)
+        val error = secondResult.getError()
+        assertNotNull(error)
+        assertTrue(error.message.contains("already being downloaded"))
+
+        latch.countDown()
+        firstJob.join()
+
+        assertFalse(manager.isDownloading(fakeModel.name))
+        assertTrue(manager.isInstalled(fakeModel.name))
+    }
+
+    @Test
+    fun `resumable download handles HTTP 416 with complete part file`() {
+        val fakeZip = File(tempDir, "server-fake.zip")
+        createZipWithModel(fakeZip, "vosk-model-416-test")
+        val fakeZipBytes = fakeZip.readBytes()
+
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0), 0)
+        server.createContext("/model.zip") { exchange ->
+            val range = exchange.requestHeaders.getFirst("Range")
+            if (range != null) {
+                exchange.responseHeaders.set("Content-Range", "bytes */${fakeZipBytes.size}")
+                exchange.sendResponseHeaders(416, -1) // no response body
+            } else {
+                exchange.sendResponseHeaders(200, fakeZipBytes.size.toLong())
+                exchange.responseBody.use { it.write(fakeZipBytes) }
+            }
+        }
+        server.start()
+
+        try {
+            val manager = VoskModelManager(dataDirectory = { tempDir })
+            val model = VoskModel(
+                name = "vosk-model-416-test",
+                language = "en",
+                label = "416 Test",
+                sizeBytes = fakeZipBytes.size.toLong(),
+                url = "http://127.0.0.1:${server.address.port}/model.zip"
+            )
+
+            // Create complete .part file
+            val partFile = File(manager.modelsDirectory, "${model.name}.zip.part")
+            partFile.writeBytes(fakeZipBytes)
+
+            val controller = VoskDownloadController()
+            val result = manager.downloadModelResumable(
+                model = model,
+                controller = controller,
+                onProgress = { _, _, _, _ -> },
+                onExtracting = {}
+            )
+
+            val dir = result.get()
+            assertNotNull(dir)
+            assertTrue(manager.isInstalled(model.name))
+            assertFalse(partFile.exists())
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `resumable download handles HTTP 416 with stale part file by restarting`() {
+        val fakeZip = File(tempDir, "server-fake-stale.zip")
+        createZipWithModel(fakeZip, "vosk-model-416-stale-test")
+        val fakeZipBytes = fakeZip.readBytes()
+
+        var requestCount = 0
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0), 0)
+        server.createContext("/model.zip") { exchange ->
+            requestCount++
+            val range = exchange.requestHeaders.getFirst("Range")
+            if (range != null && requestCount == 1) {
+                exchange.responseHeaders.set("Content-Range", "bytes */${fakeZipBytes.size}")
+                exchange.sendResponseHeaders(416, -1)
+            } else {
+                exchange.sendResponseHeaders(200, fakeZipBytes.size.toLong())
+                exchange.responseBody.use { it.write(fakeZipBytes) }
+            }
+        }
+        server.start()
+
+        try {
+            val manager = VoskModelManager(dataDirectory = { tempDir })
+            val model = VoskModel(
+                name = "vosk-model-416-stale-test",
+                language = "en",
+                label = "416 Stale Test",
+                sizeBytes = fakeZipBytes.size.toLong(),
+                url = "http://127.0.0.1:${server.address.port}/model.zip"
+            )
+
+            // Create corrupt/stale .part file whose length differs from server
+            val partFile = File(manager.modelsDirectory, "${model.name}.zip.part")
+            partFile.writeBytes(ByteArray(fakeZipBytes.size + 100))
+
+            val controller = VoskDownloadController()
+            val result = manager.downloadModelResumable(
+                model = model,
+                controller = controller,
+                onProgress = { _, _, _, _ -> },
+                onExtracting = {}
+            )
+
+            val dir = result.get()
+            assertNotNull(dir)
+            assertTrue(manager.isInstalled(model.name))
+            assertFalse(partFile.exists())
+            assertTrue(requestCount >= 2, "Expected at least 2 requests (initial 416 then restart)")
+        } finally {
+            server.stop(0)
+        }
     }
 }

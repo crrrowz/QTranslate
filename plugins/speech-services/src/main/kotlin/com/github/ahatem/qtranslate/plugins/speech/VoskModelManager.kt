@@ -47,6 +47,10 @@ class VoskModelManager(
     private val persistentDirectoryProvider: (() -> File)? = null,
     private val downloader: suspend (url: String, targetZip: File, onProgress: ((Long, Long) -> Unit)?) -> Result<Unit, ServiceError> = ::defaultDownload
 ) {
+    private val activeDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun isDownloading(modelName: String): Boolean = activeDownloads.contains(modelName)
+
     val modelsDirectory: File
         get() = File(dataDirectory(), "vosk-models").apply { if (!exists()) mkdirs() }
 
@@ -85,6 +89,78 @@ class VoskModelManager(
         if (!isDirectory) return false
         val files = listFiles() ?: return false
         return files.isNotEmpty() && !isValidModelDir()
+    }
+
+    /**
+     * Locates the root directory containing required Vosk model files within [searchDir] (up to depth 2).
+     * This avoids brittle name-guessing when archive root folders differ from the model catalogue name (A4).
+     */
+    internal fun findModelRoot(searchDir: File): File? {
+        if (!searchDir.exists() || !searchDir.isDirectory) return null
+        if (searchDir.isValidModelDir()) return searchDir
+
+        val children = searchDir.listFiles() ?: return null
+        for (child in children) {
+            if (child.isDirectory && child.isValidModelDir()) return child
+        }
+
+        for (child in children) {
+            if (child.isDirectory) {
+                val subchildren = child.listFiles() ?: continue
+                for (sub in subchildren) {
+                    if (sub.isDirectory && sub.isValidModelDir()) return sub
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * Atomically extracts an archive file into a temporary folder, identifies the valid model root,
+     * and moves it into [targetDir] (A2, A4). Cleans up any temp files on failure or cancellation.
+     */
+    internal fun atomicInstallFromArchive(
+        archiveFile: File,
+        targetDir: File,
+        destinationParentDir: File = modelsDirectory
+    ): Result<File, ServiceError> {
+        val tempExtractDir = File(destinationParentDir, "${targetDir.name}.extracting")
+        if (tempExtractDir.exists()) tempExtractDir.deleteRecursively()
+        tempExtractDir.mkdirs()
+
+        return try {
+            extractZip(archiveFile, tempExtractDir)
+            archiveFile.delete()
+
+            val modelRoot = findModelRoot(tempExtractDir)
+                ?: return Err(ServiceError.ValidationError("Extracted archive does not contain a valid Vosk model structure."))
+
+            if (targetDir.exists()) targetDir.deleteRecursively()
+
+            if (modelRoot == tempExtractDir) {
+                if (!tempExtractDir.renameTo(targetDir)) {
+                    tempExtractDir.copyRecursively(targetDir, overwrite = true)
+                    tempExtractDir.deleteRecursively()
+                }
+            } else {
+                if (!modelRoot.renameTo(targetDir)) {
+                    modelRoot.copyRecursively(targetDir, overwrite = true)
+                }
+                tempExtractDir.deleteRecursively()
+            }
+
+            if (!targetDir.isValidModelDir()) {
+                targetDir.deleteRecursively()
+                return Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
+            }
+
+            Ok(targetDir)
+        } catch (e: Exception) {
+            tempExtractDir.deleteRecursively()
+            Err(ServiceError.ValidationError("Failed to extract or install model: ${e.message}"))
+        } finally {
+            if (tempExtractDir.exists()) tempExtractDir.deleteRecursively()
+        }
     }
 
     fun isInstalled(modelName: String): Boolean {
@@ -174,6 +250,10 @@ class VoskModelManager(
             return@withContext Ok(targetDir)
         }
 
+        if (!activeDownloads.add(model.name)) {
+            return@withContext Err(ServiceError.ValidationError("Model '${model.name}' is already being downloaded."))
+        }
+
         val tempZip = File(modelsDirectory, "${model.name}.zip.tmp")
         try {
             val downloadError = downloader(model.url, tempZip, onProgress).getError()
@@ -182,35 +262,27 @@ class VoskModelManager(
                 return@withContext Err(downloadError)
             }
 
-            extractZip(tempZip, modelsDirectory)
-            tempZip.delete()
-
-            if (!targetDir.isDirectory) {
-                // If the archive unzipped into an inner or slightly different folder name
-                val found = modelsDirectory.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith(model.name) }
-                if (found != null && found != targetDir) {
-                    found.renameTo(targetDir)
-                }
-            }
-
-            if (!isInstalled(model.name)) {
-                return@withContext Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
-            }
-
-            Ok(targetDir)
+            atomicInstallFromArchive(tempZip, targetDir)
         } catch (e: Exception) {
             tempZip.delete()
             targetDir.deleteRecursively()
             Err(ServiceError.NetworkError("Failed to download or extract model '${model.name}': ${e.message}", e))
+        } finally {
+            activeDownloads.remove(model.name)
+            if (tempZip.exists()) tempZip.delete()
         }
     }
 
     fun deleteModel(modelName: String): Boolean {
         val dir1 = File(modelsDirectory, modelName)
         val dir2 = File(persistentModelsDirectory, modelName)
+        val part1 = File(modelsDirectory, "$modelName.zip.part")
+        val extract1 = File(modelsDirectory, "$modelName.extracting")
         var deleted = false
         if (dir1.exists()) deleted = dir1.deleteRecursively() || deleted
         if (dir2.exists()) deleted = dir2.deleteRecursively() || deleted
+        if (part1.exists()) deleted = part1.delete() || deleted
+        if (extract1.exists()) deleted = extract1.deleteRecursively() || deleted
         return deleted
     }
 
@@ -231,15 +303,10 @@ class VoskModelManager(
                 Ok(targetDir)
             } else if (sourceFile.name.endsWith(".zip", ignoreCase = true)) {
                 // ZIP archive import
-                extractZip(sourceFile, targetRoot)
                 val guessedName = sourceFile.nameWithoutExtension
-                val found = targetRoot.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith(guessedName) }
-                    ?: File(targetRoot, guessedName)
-                if (found.exists()) {
-                    Ok(found)
-                } else {
-                    Err(ServiceError.ValidationError("Could not locate extracted model folder in ${targetRoot.absolutePath}"))
-                }
+                val tempZipCopy = File(targetRoot, "$guessedName.import.tmp.zip")
+                sourceFile.copyTo(tempZipCopy, overwrite = true)
+                atomicInstallFromArchive(tempZipCopy, File(targetRoot, guessedName))
             } else {
                 Err(ServiceError.ValidationError("Please select a .zip archive or an extracted model folder."))
             }
@@ -339,12 +406,16 @@ class VoskModelManager(
         val targetDir = File(modelsDirectory, model.name)
         if (isInstalled(model.name)) return Ok(targetDir)
 
+        if (!activeDownloads.add(model.name)) {
+            return Err(ServiceError.ValidationError("Model '${model.name}' is already being downloaded."))
+        }
+
         val partFile = File(modelsDirectory, "${model.name}.zip.part")
         val finalZip = File(modelsDirectory, "${model.name}.zip")
 
         return try {
             var downloaded = if (partFile.exists()) partFile.length() else 0L
-            var totalLength = model.sizeBytes
+            var totalLength = -1L
 
             while (!controller.isCancelled.get() && (totalLength <= 0 || downloaded < totalLength)) {
                 if (controller.isPaused.get()) {
@@ -355,18 +426,44 @@ class VoskModelManager(
                 downloaded = if (partFile.exists()) partFile.length() else 0L
                 val (conn, code) = openConnectionWithRedirects(model.url, rangeStart = downloaded)
 
+                // HTTP 416: Requested Range Not Satisfiable
+                if (code == 416) {
+                    val contentRangeTotal = parseContentRangeTotal(conn.getHeaderField("Content-Range"))
+                    val realLength = contentRangeTotal ?: runCatching {
+                        val (headConn, _) = openConnectionWithRedirects(model.url, method = "HEAD")
+                        headConn.contentLengthLong.also { headConn.disconnect() }
+                    }.getOrNull() ?: -1L
+                    conn.disconnect()
+
+                    if (realLength > 0 && partFile.exists() && partFile.length() == realLength) {
+                        // The .part file is already completely downloaded
+                        totalLength = realLength
+                        downloaded = realLength
+                        break
+                    } else {
+                        // The .part file is stale/invalid; restart from scratch
+                        partFile.delete()
+                        downloaded = 0L
+                        continue
+                    }
+                }
+
                 val append = (code == HttpURLConnection.HTTP_PARTIAL)
                 if (code !in 200..299 && code != HttpURLConnection.HTTP_PARTIAL) {
+                    conn.disconnect()
                     return Err(ServiceError.NetworkError("HTTP $code from server while downloading ${model.name}"))
                 }
 
+                val contentRangeTotal = parseContentRangeTotal(conn.getHeaderField("Content-Range"))
                 val serverContentLength = conn.contentLengthLong
                 if (append) {
-                    if (serverContentLength > 0) totalLength = downloaded + serverContentLength
+                    totalLength = contentRangeTotal ?: if (serverContentLength > 0) downloaded + serverContentLength else -1L
                 } else {
-                    if (serverContentLength > 0) totalLength = serverContentLength
+                    totalLength = if (serverContentLength > 0) serverContentLength else -1L
                     downloaded = 0L
                 }
+
+                val reportedTotal = if (totalLength > 0) totalLength else model.sizeBytes
 
                 partFile.parentFile?.mkdirs()
                 val fos = FileOutputStream(partFile, append)
@@ -398,9 +495,9 @@ class VoskModelManager(
                                 currentSpeed = (speedAccumulator * 1000) / elapsed
                                 speedAccumulator = 0L
                                 lastSpeedTime = now
-                                val remaining = if (totalLength > downloaded) totalLength - downloaded else 0L
+                                val remaining = if (reportedTotal > downloaded) reportedTotal - downloaded else 0L
                                 val eta = if (currentSpeed > 0) remaining / currentSpeed else -1L
-                                onProgress(downloaded, totalLength, currentSpeed, eta)
+                                onProgress(downloaded, reportedTotal, currentSpeed, eta)
                             }
                         }
                     }
@@ -424,27 +521,16 @@ class VoskModelManager(
                 partFile.delete()
             }
 
-            extractZip(finalZip, modelsDirectory)
-            finalZip.delete()
-
-            if (!targetDir.isDirectory) {
-                val found = modelsDirectory.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith(model.name) }
-                if (found != null && found != targetDir) {
-                    found.renameTo(targetDir)
-                }
-            }
-
-            if (!isInstalled(model.name)) {
-                return Err(ServiceError.ValidationError("Extracted model directory is empty or invalid: ${targetDir.name}"))
-            }
-
-            Ok(targetDir)
+            atomicInstallFromArchive(finalZip, targetDir)
         } catch (e: Exception) {
             if (controller.isCancelled.get()) {
                 partFile.delete()
                 return Err(ServiceError.UnknownError("Download cancelled by user."))
             }
             Err(ServiceError.NetworkError("Download failed: ${e.message}", e))
+        } finally {
+            activeDownloads.remove(model.name)
+            if (finalZip.exists()) finalZip.delete()
         }
     }
 
@@ -458,6 +544,10 @@ class VoskModelManager(
 
         if (isInstalled(model.name)) {
             return "Model '${model.label}' is already installed and ready to use."
+        }
+
+        if (isDownloading(model.name)) {
+            return "Model '${model.label}' is already being downloaded."
         }
 
         val controller = VoskDownloadController()
@@ -626,18 +716,29 @@ class VoskModelManager(
         const val DROPDOWN_OPTIONS: String =
             "vosk-model-small-en-us-0.15,vosk-model-en-us-0.22-lgraph,vosk-model-ar-mgb2-0.4,vosk-model-ar-0.22-linto-1.1.0,vosk-model-small-de-0.15,vosk-model-small-fr-0.22,vosk-model-small-es-0.42,vosk-model-small-it-0.22,vosk-model-small-ru-0.22,vosk-model-small-tr-0.3,vosk-model-small-pt-0.3,vosk-model-small-ja-0.22,vosk-model-small-cn-0.22,vosk-model-small-uk-v3-nano"
 
+        internal fun parseContentRangeTotal(contentRange: String?): Long? {
+            if (contentRange.isNullOrBlank()) return null
+            val slashIndex = contentRange.lastIndexOf('/')
+            if (slashIndex != -1 && slashIndex + 1 < contentRange.length) {
+                return contentRange.substring(slashIndex + 1).trim().toLongOrNull()
+            }
+            return null
+        }
+
         internal fun openConnectionWithRedirects(
             urlStr: String,
             rangeStart: Long = 0L,
-            readTimeoutMillis: Int = 30_000
+            readTimeoutMillis: Int = 30_000,
+            method: String = "GET"
         ): Pair<HttpURLConnection, Int> {
             var url = URI(urlStr).toURL()
             var conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = method
             conn.connectTimeout = 15_000
             conn.readTimeout = readTimeoutMillis
             conn.instanceFollowRedirects = true
             conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
-            if (rangeStart > 0) {
+            if (rangeStart > 0 && method == "GET") {
                 conn.setRequestProperty("Range", "bytes=$rangeStart-")
             }
 
@@ -648,10 +749,11 @@ class VoskModelManager(
                 conn.disconnect()
                 url = URI(location).toURL()
                 conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = method
                 conn.connectTimeout = 15_000
                 conn.readTimeout = readTimeoutMillis
                 conn.setRequestProperty("User-Agent", "QTranslate/1.5.0")
-                if (rangeStart > 0) {
+                if (rangeStart > 0 && method == "GET") {
                     conn.setRequestProperty("Range", "bytes=$rangeStart-")
                 }
                 code = conn.responseCode
