@@ -5,6 +5,9 @@ import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
 import com.github.ahatem.qtranslate.core.conversation.TranscriptWord
 import com.github.ahatem.qtranslate.core.conversation.VerificationState
 import java.awt.Color
+import java.awt.Component
+import java.awt.Point
+import java.awt.Rectangle
 import javax.swing.UIManager
 
 /**
@@ -46,6 +49,9 @@ object TranscriptView {
         data class Header(override val span: SegmentSpan) : Hit
         data class Text(override val span: SegmentSpan, val offset: Int) : Hit
         data class TranslationRetry(override val span: SegmentSpan) : Hit
+        data class LoadMore(val bounds: Rectangle) : Hit {
+            override val span: SegmentSpan get() = throw UnsupportedOperationException("LoadMore has no segment span")
+        }
     }
 
     data class ScrollAnchor(

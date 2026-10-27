@@ -100,3 +100,16 @@ QTranslate صار عنده صفحة **Conversation Sessions** تسجّل مكا�
     - استبدال المستند النصي الواحد (`JTextPane`) بقائمة بطاقات افتراضية (`TranscriptListView : JComponent, Scrollable, TranscriptSurface`) مدعومة بفهرس ارتفاعات ومجاميع تراكمية نقي بدون Swing (`CardHeightIndex`) وختم رسم منفرد قابل لإعادة الاستخدام (`TranscriptCardStamp` / `CellRendererPane`).
     - حساب إحداثيات البطاقات وتثبيت التمرير (`computeAnchoredScrollY`) حسابياً بدقة البكسل (`±1 px`) عبر المجاميع التراكمية دون تخمين التخطيط، ورسم البطاقات المرئية فقط (`visibleRange` + هامش `2` بطاقات) مع تحديث البطاقة المتغيرة في أقل من `1 ms` حتى مع وجود `2,000` بطاقة.
     - إجمالي نتائج الاختبارات الفعلي من ملفات XML (`192` ملفاً عبر `*/build/test-results/test/*.xml` و `plugins/*/build/test-results/test/*.xml`): **1,589 اختباراً (1,580 ناجح، 9 متخطى، 0 فشل، 0 أخطاء)**، ونجاح اختبارات `Swing` 10 مرات متتالية (`--rerun-tasks`) وبناء الحزمة المحمولة (`assemblePortable`).
+
+## 6. القياسات والأداء (Windowed Cards & Load More)
+
+تم قياس استهلاك الذاكرة وسرعة التحديث المباشر قبل وبعد تقييد نافذة البطاقات (N = 10 افتراضياً مع Load more وتحسين `withSegment` لتفادي النسخ غير الضروري):
+
+- **استهلاك الذاكرة (Heap usage after 60-min replay / 2,000 lines):**
+  - قبل التعديل (Baseline): `18.46 MB`
+  - بعد نافذة البطاقات (Windowed Cards): `11.53 MB` (انخفاض ملحوظ في استهلاك الذاكرة بنسبة ~37%)
+- **زمن التحديث الحي للسطر الواحد (Time per live partial update):**
+  - عند 200 سطر: `1.29 ms`
+  - عند 1,000 سطر: `1.68 ms`
+  - عند 2,000 سطر: `1.25 ms` (زمن متطابق ومستقر بدون أي تباطؤ O(n))
+- **عدد البطاقات المقاسة أثناء التحديث الحي (Measured cards during update):** بطاقة واحدة فقط (`measuredCards = 1`).

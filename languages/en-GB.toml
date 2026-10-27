@@ -874,3 +874,5 @@ auto_translate_tooltip = "Automatically translate each settled line into the tar
 auto_translate_failed = "Translation failed · retry"
 online_translation_notice = "Line text is sent to the active online translation service."
 export_include_translations = "Include translations"
+load_more_cards = "Load %d older lines (%d remaining)"
+load_more_cards_short = "Load more"

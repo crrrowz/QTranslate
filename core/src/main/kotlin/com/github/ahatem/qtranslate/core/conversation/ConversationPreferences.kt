@@ -25,7 +25,9 @@ data class ConversationPreferences(
     /** Whether the one-time notice about online translation has been dismissed. */
     val autoTranslateNoticeDismissed: Boolean = false,
     /** The privacy notice has been read and dismissed. */
-    val privacyNoticeDismissed: Boolean = false
+    val privacyNoticeDismissed: Boolean = false,
+    /** Number of latest cards to keep in the visible window (10..100). */
+    val visibleCardWindow: Int = 10
 ) {
     companion object {
         private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

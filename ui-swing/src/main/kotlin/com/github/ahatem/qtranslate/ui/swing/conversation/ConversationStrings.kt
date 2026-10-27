@@ -112,4 +112,6 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val autoTranslateFailed = localizer.getString("conversation.auto_translate_failed")
     val onlineTranslationNotice = localizer.getString("conversation.online_translation_notice")
     val exportIncludeTranslations = localizer.getString("conversation.export_include_translations")
+    fun loadMoreCards(pageSize: Int, remaining: Int) = localizer.getString("conversation.load_more_cards", pageSize, remaining)
+    val loadMoreCardsShort = localizer.getString("conversation.load_more_cards_short")
 }

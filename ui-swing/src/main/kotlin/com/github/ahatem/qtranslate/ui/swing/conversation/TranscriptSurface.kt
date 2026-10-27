@@ -20,6 +20,7 @@ interface TranscriptSurface {
     var chatLayout: Boolean
     var rtlLayout: Boolean
     var autoTranslate: Boolean
+    var windowSize: Int
     var isProgrammaticScroll: Boolean
     var pointerPosition: Point?
     var clock: () -> Long
@@ -35,6 +36,8 @@ interface TranscriptSurface {
     val incrementalRenderCount: Int
 
     fun render(session: ConversationSession?)
+    fun loadMore()
+    fun ensureSegmentVisible(segmentId: String)
     fun flushThrottledRender()
 
     fun captureScrollAnchor(): TranscriptView.ScrollAnchor?
@@ -52,6 +55,7 @@ interface TranscriptSurface {
     fun boundsOf(range: IntRange): Rectangle?
 
     fun clearSelection()
+    fun scrollToSegment(segmentId: String)
 
     /** Highlights all occurrences of [query] across rendered cards (or clears highlights when blank). */
     fun highlightSearch(query: String)

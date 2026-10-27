@@ -269,6 +269,7 @@ class ConversationWindowLayoutTest {
                 )
             }
             val session = ConversationSession(id = "s-1", title = "Session 1", createdAt = 0L, segments = segments)
+            view.windowSize = 50
             view.newestFirst = true
             view.render(session)
             layoutAll(innerPanel, overlay, scrollPane)
@@ -338,6 +339,7 @@ class ConversationWindowLayoutTest {
                 )
             }
             val session = ConversationSession(id = "s-1", title = "Session 1", createdAt = 0L, segments = segments)
+            view.windowSize = 50
             view.newestFirst = false
             view.render(session)
             layoutAll(innerPanel, overlay, scrollPane)
@@ -418,6 +420,7 @@ class ConversationWindowLayoutTest {
                     )
                 }
             )
+            view.windowSize = 100
             view.newestFirst = true
             view.render(session)
             layoutAll(innerPanel, overlay, scrollPane)
@@ -569,6 +572,7 @@ class ConversationWindowLayoutTest {
         SwingUtilities.invokeAndWait {
             val strings = strings()
             val view = TranscriptListView(strings)
+            view.windowSize = 2000
             var now = 1_000L
             view.clock = { now }
             view.newestFirst = true

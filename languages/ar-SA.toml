@@ -878,3 +878,5 @@ auto_translate_tooltip = "ترجمة كل سطر مستقر تلقائياً إ�
 auto_translate_failed = "فشلت الترجمة · إعادة المحاولة"
 online_translation_notice = "يتم إرسال نص السطر إلى خدمة الترجمة النشطة عبر الإنترنت."
 export_include_translations = "تضمين الترجمات"
+load_more_cards = "تحميل %d أسطر أقدم (متبقي %d)"
+load_more_cards_short = "تحميل المزيد"

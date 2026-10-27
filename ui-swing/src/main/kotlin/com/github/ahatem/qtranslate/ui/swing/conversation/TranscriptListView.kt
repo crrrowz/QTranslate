@@ -192,8 +192,52 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
             }
         }
 
+    override var windowSize: Int = 10
+        set(value) {
+            val clamped = value.coerceAtLeast(1)
+            if (field != clamped) {
+                field = clamped
+                loadedPagesCount = 0
+                renderedKey = null
+                render(currentSession)
+            }
+        }
+
+    internal var loadedPagesCount: Int = 0
+
+    override fun loadMore() {
+        val session = currentSession ?: return
+        val totalCount = session.segments.size
+        val currentMax = windowSize * (loadedPagesCount + 1)
+        if (currentMax < totalCount) {
+            val anchor = captureScrollAnchor()
+            loadedPagesCount++
+            renderedKey = null
+            render(session)
+            restoreScrollAnchor(anchor)
+        }
+    }
+
+    override fun ensureSegmentVisible(segmentId: String) {
+        val session = currentSession ?: return
+        val idx = session.segments.indexOfFirst { it.id == segmentId }
+        if (idx < 0) return
+        val distFromEnd = session.segments.size - idx
+        val neededCards = distFromEnd
+        val currentCap = windowSize * (loadedPagesCount + 1)
+        if (neededCards > currentCap) {
+            val neededPages = ((neededCards - 1) / windowSize)
+            loadedPagesCount = maxOf(loadedPagesCount, neededPages)
+            renderedKey = null
+            render(session)
+        }
+    }
+
     override var currentSession: ConversationSession? = null
         private set
+
+    internal var hasMoreOlderCards: Boolean = false
+    internal var remainingOlderCardsCount: Int = 0
 
     private var renderedKey: Any? = null
     private var lastIndexedWidth: Int = 0
@@ -337,7 +381,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun render(session: ConversationSession?) {
         currentSession = session
-        val key = session?.let { (it.id to it.segments) to newestFirst }
+        val key = session?.let { ((it.id to it.segments) to newestFirst) to (windowSize to loadedPagesCount) }
         if (key == renderedKey) return
 
         val now = clock()
@@ -361,7 +405,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
     override fun flushThrottledRender() {
         val pending = pendingThrottledSession ?: return
         pendingThrottledSession = null
-        val key = (pending.id to pending.segments) to newestFirst
+        val key = ((pending.id to pending.segments) to newestFirst) to (windowSize to loadedPagesCount)
         if (key != renderedKey) {
             performRender(pending, key, clock())
         }
@@ -425,7 +469,16 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         } else null
 
         val rawSegments = session?.segments.orEmpty()
-        val ordered = if (newestFirst) rawSegments.reversed() else rawSegments
+        val totalRawCount = rawSegments.size
+        val maxCardsToRender = windowSize * (loadedPagesCount + 1)
+        val visibleRawSegments = if (totalRawCount > maxCardsToRender) {
+            rawSegments.takeLast(maxCardsToRender)
+        } else {
+            rawSegments
+        }
+        val ordered = if (newestFirst) visibleRawSegments.reversed() else visibleRawSegments
+        hasMoreOlderCards = totalRawCount > visibleRawSegments.size
+        remainingOlderCardsCount = totalRawCount - visibleRawSegments.size
 
         val w = effectiveWidth()
         val singleDiffIndex = if (lastIndexedWidth == w) findSingleChangedCardIndex(ordered) else -1
@@ -506,9 +559,13 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
             val newCards = ArrayList<CardModel>(ordered.size)
             val newSpans = ArrayList<TranscriptView.SegmentSpan>(ordered.size)
-            val newSpecs = ArrayList<CardHeightIndex.CardSpec>(ordered.size)
+            val newSpecs = ArrayList<CardHeightIndex.CardSpec>(ordered.size + 1)
             spanById.clear()
             cardById.clear()
+
+            if (hasMoreOlderCards && !newestFirst) {
+                newSpecs.add(CardHeightIndex.CardSpec(LOAD_MORE_ID, 0))
+            }
 
             var anyActiveCorrectionHighlight = false
             var runningGlobalOffset = 0
@@ -575,6 +632,10 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
                 cardById[segment.id] = model
             }
 
+            if (hasMoreOlderCards && newestFirst) {
+                newSpecs.add(CardHeightIndex.CardSpec(LOAD_MORE_ID, 0))
+            }
+
             if (cachedEntries.size > newCards.size) {
                 val iter = cachedEntries.keys.iterator()
                 while (iter.hasNext()) {
@@ -588,7 +649,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
             cards = newCards
             spans = newSpans
             heightIndex.sync(newSpecs, w) { segId ->
-                cachedEntries[segId]?.cardHeight ?: 48
+                if (segId == LOAD_MORE_ID) LOAD_MORE_HEIGHT else cachedEntries[segId]?.cardHeight ?: 48
             }
 
             if (cardFadeInStartMillis.values.any { now - it < TranscriptView.CARD_FADE_IN_MS } && isShowing) {
@@ -859,10 +920,37 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
                 )
                 paintedInPass++
             }
+
+            if (hasMoreOlderCards) {
+                val loadMoreTop = heightIndex.topOf(LOAD_MORE_ID)
+                if (loadMoreTop != null && loadMoreTop + LOAD_MORE_HEIGHT >= clip.y && loadMoreTop <= clip.y + clip.height) {
+                    paintLoadMoreRow(g2, loadMoreTop, w)
+                }
+            }
             stamp.lastPaintCardCount = paintedInPass
         } finally {
             g2.dispose()
         }
+    }
+
+    private fun paintLoadMoreRow(g: Graphics2D, topY: Int, totalWidth: Int) {
+        val h = LOAD_MORE_HEIGHT
+        val x = 10
+        val w = (totalWidth - 20).coerceAtLeast(100)
+
+        g.color = UIManager.getColor("Button.background") ?: Color(0x2a2a2a)
+        g.fillRoundRect(x, topY + 4, w, h - 8, 8, 8)
+        g.color = UIManager.getColor("Component.borderColor") ?: Color(0x3a3a3a)
+        g.drawRoundRect(x, topY + 4, w, h - 8, 8, 8)
+
+        g.color = UIManager.getColor("Component.linkColor") ?: Color(0x389FD6)
+        g.font = font.deriveFont(Font.BOLD, (font.size2D - 1f).coerceAtLeast(11f))
+        val text = strings.loadMoreCards(windowSize, remainingOlderCardsCount)
+        val fm = g.fontMetrics
+        val textW = fm.stringWidth(text)
+        val textX = x + (w - textW) / 2
+        val textY = topY + 4 + (h - 8 + fm.ascent - fm.descent) / 2
+        g.drawString(text, textX, textY)
     }
 
     override fun spanAtPoint(point: Point): TranscriptView.SegmentSpan? {
@@ -875,6 +963,13 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun hitTest(point: Point): TranscriptView.Hit? {
         if (cards.isEmpty()) return null
+        if (hasMoreOlderCards) {
+            val loadMoreTop = heightIndex.topOf(LOAD_MORE_ID)
+            if (loadMoreTop != null && point.y in loadMoreTop until (loadMoreTop + LOAD_MORE_HEIGHT)) {
+                val bounds = Rectangle(10, loadMoreTop + 4, (width - 20).coerceAtLeast(100), LOAD_MORE_HEIGHT - 8)
+                if (bounds.contains(point)) return TranscriptView.Hit.LoadMore(bounds)
+            }
+        }
         val idx = heightIndex.cardAt(point.y, clampToNearest = true)
         if (idx !in cards.indices) return null
         val model = cards[idx]
@@ -894,6 +989,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         is TranscriptView.Hit.StopButton -> strings.actionStopAudio
         is TranscriptView.Hit.RetryButton -> strings.actionRetrySegment
         is TranscriptView.Hit.TranslationRetry -> strings.autoTranslateFailed
+        is TranscriptView.Hit.LoadMore -> strings.loadMoreCards(windowSize, remainingOlderCardsCount)
         is TranscriptView.Hit.DeleteButton -> strings.actionDeleteMessage
         is TranscriptView.Hit.VerificationBadge -> {
             val seg = hit.span.segment
@@ -963,7 +1059,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun updateCursor(hit: TranscriptView.Hit?) {
         cursor = when (hit) {
-            is TranscriptView.Hit.PlayButton, is TranscriptView.Hit.StopButton, is TranscriptView.Hit.RetryButton, is TranscriptView.Hit.DeleteButton, is TranscriptView.Hit.TranslationRetry ->
+            is TranscriptView.Hit.PlayButton, is TranscriptView.Hit.StopButton, is TranscriptView.Hit.RetryButton, is TranscriptView.Hit.DeleteButton, is TranscriptView.Hit.TranslationRetry, is TranscriptView.Hit.LoadMore ->
                 Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             is TranscriptView.Hit.Text ->
                 Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)
@@ -1009,6 +1105,12 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun cardTopY(segmentId: String): Double? =
         heightIndex.topOf(segmentId)?.toDouble()
+
+    override fun scrollToSegment(segmentId: String) {
+        val topY = heightIndex.topOf(segmentId) ?: return
+        val scrollPane = (parent?.parent as? JScrollPane) ?: return
+        scrollPane.viewport.viewPosition = Point(0, topY)
+    }
 
     override fun renderedText(): String {
         if (cards.isEmpty()) return strings.emptyHint
@@ -1056,6 +1158,8 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         const val TOP_PADDING = 12
         const val BOTTOM_PADDING = 16
         const val OVERSCAN_CARDS = 2
+        const val LOAD_MORE_ID = "__load_more__"
+        const val LOAD_MORE_HEIGHT = 38
 
         /** Returns true when the virtualised card list is enabled (default true; override with `-Dqtranslate.transcript.cards`). */
         fun isCardListEnabled(defaultValue: Boolean = true): Boolean =

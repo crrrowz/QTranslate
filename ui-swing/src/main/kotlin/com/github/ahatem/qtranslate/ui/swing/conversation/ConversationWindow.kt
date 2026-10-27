@@ -886,6 +886,8 @@ class ConversationWindow(
             syncRenderGateState()
             if (renderGate.submit(sessionToRender)) {
                 updatePausePill(visible = false)
+                // When actively following live, trim back to standard window N
+                (transcript as? TranscriptListView)?.loadedPagesCount = 0
                 transcript.render(sessionToRender)
             } else if (renderGate.hasPendingUpdates()) {
                 updatePausePill(visible = true, pendingCount = renderGate.pendingCount)
@@ -933,6 +935,7 @@ class ConversationWindow(
         transcript.chatLayout = preferences.chatLayout
         autoTranslateCheck.isSelected = preferences.autoTranslate
         transcript.autoTranslate = preferences.autoTranslate
+        transcript.windowSize = preferences.visibleCardWindow
         isAppMode = preferences.systemAudioMode == "app"
         deviceModeButton.isSelected = !isAppMode
         appModeButton.isSelected = isAppMode
@@ -1129,7 +1132,14 @@ class ConversationWindow(
     }
 
     private fun highlightSearch() {
-        transcript.highlightSearch(searchField.text.trim())
+        val query = searchField.text.trim()
+        transcript.highlightSearch(query)
+        if (query.isNotEmpty()) {
+            displayedSession()?.segments?.firstOrNull { it.text.contains(query, ignoreCase = true) }?.let { hitSeg ->
+                transcript.ensureSegmentVisible(hitSeg.id)
+                transcript.scrollToSegment(hitSeg.id)
+            }
+        }
     }
 
     private fun updateSessionButtons() {
@@ -1234,6 +1244,7 @@ class ConversationWindow(
             is TranscriptView.Hit.RetryButton -> retry(hit.span.segment)
             is TranscriptView.Hit.TranslationRetry -> retryTranslation(hit.span.segment)
             is TranscriptView.Hit.DeleteButton -> deleteSingleSegment(hit.span.segment)
+            is TranscriptView.Hit.LoadMore -> transcript.loadMore()
             is TranscriptView.Hit.VerificationBadge -> Unit
             is TranscriptView.Hit.Header -> Unit // Clicking speaker label or timestamp does not trigger playback
             is TranscriptView.Hit.Text -> if (hit.span.segment.failed) retry(hit.span.segment)

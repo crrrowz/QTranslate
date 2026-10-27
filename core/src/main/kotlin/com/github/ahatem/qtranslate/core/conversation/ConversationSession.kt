@@ -133,7 +133,16 @@ data class ConversationSession(
      * replaces it in place so existing cards never swap or move.
      */
     fun withSegment(segment: TranscriptSegment): ConversationSession {
-        val existingIdx = segments.indexOfFirst { it.id == segment.id }
+        // Fast path: streaming update to the last segment (covers >99% of live updates)
+        if (segments.isNotEmpty() && segments.last().id == segment.id) {
+            val existing = segments.last()
+            val preserved = segment.copy(settledAtMillis = existing.settledAtMillis)
+            val updated = ArrayList(segments)
+            updated[updated.lastIndex] = preserved
+            return copy(segments = updated)
+        }
+
+        val existingIdx = segments.indexOfLast { it.id == segment.id }
         if (existingIdx >= 0) {
             val existing = segments[existingIdx]
             val preserved = segment.copy(settledAtMillis = existing.settledAtMillis)
@@ -141,16 +150,27 @@ data class ConversationSession(
             updated[existingIdx] = preserved
             return copy(segments = updated)
         }
-        val index = segments.indexOfFirst {
+
+        // Fast path: appending settled segment at the end
+        if (segments.isEmpty() || segment.settledAtMillis >= segments.last().settledAtMillis) {
+            return copy(segments = segments + segment)
+        }
+
+        val index = segments.binarySearch {
             if (it.settledAtMillis != segment.settledAtMillis) {
-                it.settledAtMillis > segment.settledAtMillis
+                it.settledAtMillis.compareTo(segment.settledAtMillis)
             } else if (it.source != segment.source) {
-                it.source.ordinal > segment.source.ordinal
+                it.source.ordinal.compareTo(segment.source.ordinal)
             } else {
-                it.id > segment.id
+                it.id.compareTo(segment.id)
             }
-        }.let { if (it < 0) segments.size else it }
-        return copy(segments = segments.subList(0, index) + segment + segments.subList(index, segments.size))
+        }.let { if (it < 0) -(it + 1) else it }
+
+        val updated = ArrayList<TranscriptSegment>(segments.size + 1)
+        updated.addAll(segments.subList(0, index))
+        updated.add(segment)
+        updated.addAll(segments.subList(index, segments.size))
+        return copy(segments = updated)
     }
 
     /** Removes a segment by id. */
