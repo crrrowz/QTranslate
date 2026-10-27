@@ -97,6 +97,7 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val orderOldestAtTop = localizer.getString("conversation.order_oldest_at_top")
     val orderTooltip = localizer.getString("conversation.order_tooltip")
     val actionPlayAudio = localizer.getString("conversation.action_play_audio")
+    val actionStopAudio = localizer.getString("conversation.action_stop_audio")
     val actionRetrySegment = localizer.getString("conversation.action_retry_segment")
     val actionDeleteMessage = localizer.getString("conversation.action_delete_message")
     fun updatesPaused(count: Int) = localizer.getString("conversation.updates_paused", count)

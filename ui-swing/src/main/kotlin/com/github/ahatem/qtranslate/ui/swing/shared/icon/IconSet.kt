@@ -147,6 +147,7 @@ object Icons {
     val EDIT get() = IconSet.path("edit")
     val DELETE get() = IconSet.path("delete")
     val PLAY get() = IconSet.path("play")
+    val STOP get() = IconSet.path("stop")
     val RETRY get() = IconSet.path("retry")
     val MOVE_UP get() = IconSet.path("move-up")
     val MOVE_DOWN get() = IconSet.path("move-down")

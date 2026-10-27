@@ -36,7 +36,8 @@ class ConversationFeature(
     appData: File,
     loggerFactory: LoggerFactory,
     val microphoneBackend: AudioBackend = JavaSoundAudioBackend(),
-    val systemBackend: WasapiLoopbackBackend = WasapiLoopbackBackend()
+    val systemBackend: WasapiLoopbackBackend = WasapiLoopbackBackend(),
+    val clock: () -> Long = System::currentTimeMillis
 ) {
     val repository = SessionRepository(File(appData, "conversations"))
 
@@ -52,16 +53,21 @@ class ConversationFeature(
     private var playbackActiveUntil = 0L
 
     fun markPlayback(durationMillis: Long) {
-        val now = System.currentTimeMillis()
+        val now = clock()
         playbackActiveUntil = maxOf(playbackActiveUntil, now + durationMillis + PLAYBACK_COOLDOWN_MILLIS)
     }
 
-    private fun isPlaybackActive(): Boolean {
+    fun stop() {
+        player.stop()
+        playbackActiveUntil = clock() + PLAYBACK_COOLDOWN_MILLIS
+    }
+
+    fun isPlaybackActive(): Boolean {
         if (player.playing.value != null) {
-            playbackActiveUntil = maxOf(playbackActiveUntil, System.currentTimeMillis() + PLAYBACK_COOLDOWN_MILLIS)
+            playbackActiveUntil = maxOf(playbackActiveUntil, clock() + PLAYBACK_COOLDOWN_MILLIS)
             return true
         }
-        return System.currentTimeMillis() < playbackActiveUntil
+        return clock() < playbackActiveUntil
     }
 
     val recorder = ConversationRecorder(

@@ -100,6 +100,34 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override var clock: () -> Long = System::currentTimeMillis
 
+    override var playingTag: Any?
+        get() = stamp.playingTag
+        set(value) {
+            val oldTag = stamp.playingTag
+            if (oldTag != value) {
+                stamp.playingTag = value
+                val oldSegId = when (oldTag) {
+                    is String -> oldTag
+                    is com.github.ahatem.qtranslate.core.conversation.PlaybackTag -> oldTag.segmentId
+                    else -> oldTag?.toString()
+                }
+                val newSegId = when (value) {
+                    is String -> value
+                    is com.github.ahatem.qtranslate.core.conversation.PlaybackTag -> value.segmentId
+                    else -> value?.toString()
+                }
+                // Repaint only the affected cards without re-measuring heights
+                if (oldSegId != null) repaintCard(oldSegId)
+                if (newSegId != null && newSegId != oldSegId) repaintCard(newSegId)
+            }
+        }
+
+    private fun repaintCard(segmentId: String) {
+        val top = heightIndex.topOf(segmentId) ?: return
+        val height = heightIndex.heightOf(segmentId) ?: return
+        repaint(0, top, width.coerceAtLeast(1), height)
+    }
+
     override var fullRenderCount: Int = 0
         private set
 
@@ -851,6 +879,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun tooltipForHit(hit: TranscriptView.Hit?): String? = when (hit) {
         is TranscriptView.Hit.PlayButton -> strings.actionPlayAudio
+        is TranscriptView.Hit.StopButton -> strings.actionStopAudio
         is TranscriptView.Hit.RetryButton -> strings.actionRetrySegment
         is TranscriptView.Hit.DeleteButton -> strings.actionDeleteMessage
         is TranscriptView.Hit.VerificationBadge -> {
@@ -921,7 +950,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun updateCursor(hit: TranscriptView.Hit?) {
         cursor = when (hit) {
-            is TranscriptView.Hit.PlayButton, is TranscriptView.Hit.RetryButton, is TranscriptView.Hit.DeleteButton ->
+            is TranscriptView.Hit.PlayButton, is TranscriptView.Hit.StopButton, is TranscriptView.Hit.RetryButton, is TranscriptView.Hit.DeleteButton ->
                 Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             is TranscriptView.Hit.Text ->
                 Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)

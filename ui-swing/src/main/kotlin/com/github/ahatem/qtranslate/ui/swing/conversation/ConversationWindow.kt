@@ -44,6 +44,7 @@ import java.awt.Point
 import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
@@ -59,6 +60,7 @@ import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JLabel
@@ -70,6 +72,7 @@ import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTextField
 import javax.swing.JToggleButton
+import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 import javax.swing.Timer
@@ -243,6 +246,8 @@ class ConversationWindow(
     private var popupHovered = false
     private var popupJob: Job? = null
     private var popupContent: HoverTranslationPopup.Content? = null
+    private var activePopupSegment: TranscriptSegment? = null
+    private var activePopupWordRange: Pair<Long, Long>? = null
     private val showTimer = Timer(SHOW_DELAY_MILLIS) { showWordCard() }.apply { isRepeats = false }
     private val hideTimer = Timer(HIDE_DELAY_MILLIS) { if (!popupHovered) hideCard() }.apply { isRepeats = false }
     private val searchTimer = Timer(250) { reloadSessions() }.apply { isRepeats = false }
@@ -263,6 +268,19 @@ class ConversationWindow(
         }
         wireEvents()
         scope.launch { recorder.state.collect(::render) }
+        scope.launch {
+            feature.player.playing.collect { tag ->
+                withContext(Dispatchers.Swing) {
+                    transcript.playingTag = tag
+                    updateHoverPopupPlaying(tag)
+                }
+            }
+        }
+        rootPane.registerKeyboardAction(
+            { feature.stop() },
+            KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+            JComponent.WHEN_IN_FOCUSED_WINDOW
+        )
     }
 
     /** Brings the window up, refreshing devices and sessions. */
@@ -1115,6 +1133,7 @@ class ConversationWindow(
         if (e.clickCount != 1 || !SwingUtilities.isLeftMouseButton(e)) return
         when (val hit = transcript.hitTest(e.point)) {
             is TranscriptView.Hit.PlayButton -> playRange(hit.span.segment, hit.span.segment.startMillis, hit.span.segment.endMillis)
+            is TranscriptView.Hit.StopButton -> feature.stop()
             is TranscriptView.Hit.RetryButton -> retry(hit.span.segment)
             is TranscriptView.Hit.DeleteButton -> deleteSingleSegment(hit.span.segment)
             is TranscriptView.Hit.VerificationBadge -> Unit
@@ -1144,8 +1163,9 @@ class ConversationWindow(
         val anchor = transcript.boundsOf(effectiveStart until effectiveEnd) ?: return
         val session = displayedSession() ?: return
 
+        activePopupWordRange = timed.takeIf { it.isNotEmpty() }?.let { Pair(it.first().startMillis, it.last().endMillis) }
         showCard(anchor, phrase, contextSentence = null, onPlay = timed.takeIf { it.isNotEmpty() }?.let {
-            { playRange(span.segment, it.first().startMillis, it.last().endMillis) }
+            { playWordRange(span.segment, it.first().startMillis, it.last().endMillis) }
         }, segment = span.segment, session = session)
     }
 
@@ -1157,7 +1177,8 @@ class ConversationWindow(
         val anchor = transcript.boundsOf(range) ?: return
         val timed = transcript.timedWordAt(span, range)
         val sentence = span.segment.text.takeIf { it.trim().contains(' ') }
-        showCard(anchor, word, sentence, timed?.let { { playRange(span.segment, it.startMillis, it.endMillis) } }, span.segment, session)
+        activePopupWordRange = timed?.let { Pair(it.startMillis, it.endMillis) }
+        showCard(anchor, word, sentence, timed?.let { { playWordRange(span.segment, it.startMillis, it.endMillis) } }, span.segment, session)
     }
 
     private fun showCard(
@@ -1179,8 +1200,23 @@ class ConversationWindow(
             canPlayWord = onPlay != null && hasAudio,
             canPlaySentence = hasAudio
         )
-        popup.onPlayWord = { onPlay?.invoke() }
-        popup.onPlaySentence = { segment?.let { playRange(it, it.startMillis, it.endMillis) } }
+        activePopupSegment = segment
+        popup.onPlayWord = {
+            val tag = feature.player.playing.value
+            if (isWordPlaying(tag, segment?.id, activePopupWordRange)) {
+                feature.stop()
+            } else {
+                onPlay?.invoke()
+            }
+        }
+        popup.onPlaySentence = {
+            val tag = feature.player.playing.value
+            if (isSentencePlaying(tag, segment?.id)) {
+                feature.stop()
+            } else {
+                segment?.let { playRange(it, it.startMillis, it.endMillis) }
+            }
+        }
         popup.onShowSentence = {
             if (contextSentence != null) {
                 updateCard(text) { it.copy(contextLoading = true) }
@@ -1202,6 +1238,7 @@ class ConversationWindow(
         }
         popupContent = content
         popup.show(screen, content)
+        updateHoverPopupPlaying(feature.player.playing.value)
 
         popupJob?.cancel()
         popupJob = scope.launch {
@@ -1253,6 +1290,8 @@ class ConversationWindow(
         popupContent = null
         popupHovered = false
         hoverRange = null
+        activePopupSegment = null
+        activePopupWordRange = null
         checkAndFlushIfIdle()
     }
 
@@ -1338,9 +1377,54 @@ class ConversationWindow(
         scope.launch {
             // A little padding either side: word timings are tight, and a clipped first consonant
             // makes a word harder to recognise.
-            val played = feature.play(session, segment.source, (startMillis - 120).coerceAtLeast(0), endMillis + 120, segment.id)
+            val played = feature.play(
+                session = session,
+                source = segment.source,
+                startMillis = (startMillis - 120).coerceAtLeast(0),
+                endMillis = endMillis + 120,
+                tag = com.github.ahatem.qtranslate.core.conversation.PlaybackTag.Line(segment.id)
+            )
             if (!played) JOptionPane.showMessageDialog(this@ConversationWindow, strings.noAudio)
         }
+    }
+
+    private fun playWordRange(segment: TranscriptSegment, startMillis: Long, endMillis: Long) {
+        val session = displayedSession() ?: return
+        scope.launch {
+            val played = feature.play(
+                session = session,
+                source = segment.source,
+                startMillis = (startMillis - 120).coerceAtLeast(0),
+                endMillis = endMillis + 120,
+                tag = com.github.ahatem.qtranslate.core.conversation.PlaybackTag.Word(segment.id, startMillis, endMillis)
+            )
+            if (!played) JOptionPane.showMessageDialog(this@ConversationWindow, strings.noAudio)
+        }
+    }
+
+    private fun isSentencePlaying(tag: Any?, segmentId: String?): Boolean {
+        if (tag == null || segmentId == null) return false
+        return when (tag) {
+            is com.github.ahatem.qtranslate.core.conversation.PlaybackTag.Line -> tag.segmentId == segmentId
+            is String -> tag == segmentId
+            else -> false
+        }
+    }
+
+    private fun isWordPlaying(tag: Any?, segmentId: String?, range: Pair<Long, Long>?): Boolean {
+        if (tag == null || segmentId == null || range == null) return false
+        return when (tag) {
+            is com.github.ahatem.qtranslate.core.conversation.PlaybackTag.Word ->
+                tag.segmentId == segmentId && tag.startMillis == range.first && tag.endMillis == range.second
+            else -> false
+        }
+    }
+
+    private fun updateHoverPopupPlaying(tag: Any?) {
+        val segId = activePopupSegment?.id
+        val wordPlaying = isWordPlaying(tag, segId, activePopupWordRange)
+        val sentencePlaying = isSentencePlaying(tag, segId)
+        popup.setPlayingState(playingWord = wordPlaying, playingSentence = sentencePlaying)
     }
 
     private fun renderSpeechStatus() {

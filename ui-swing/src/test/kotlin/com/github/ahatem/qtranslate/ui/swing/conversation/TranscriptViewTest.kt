@@ -74,6 +74,12 @@ class TranscriptViewTest {
         val playHit = view.hitTest(Point(playPos.x + 1, playPos.y + 1))
         assertTrue(playHit is TranscriptView.Hit.PlayButton, "Hit over play symbol should be Hit.PlayButton")
 
+        // When playing, hit test should return Hit.StopButton
+        view.playingTag = "seg-1"
+        val stopHit = view.hitTest(Point(playPos.x + 1, playPos.y + 1))
+        assertTrue(stopHit is TranscriptView.Hit.StopButton, "Hit over playing segment symbol should be Hit.StopButton")
+        view.playingTag = null
+
         // Point over retry button
         val retryPos = view.boundsOf((span.retryStart + 1)..(span.retryStart + 1))
         assertNotNull(retryPos)

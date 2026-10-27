@@ -36,6 +36,7 @@ object TranscriptView {
         val span: SegmentSpan
 
         data class PlayButton(override val span: SegmentSpan) : Hit
+        data class StopButton(override val span: SegmentSpan) : Hit
         data class RetryButton(override val span: SegmentSpan) : Hit
         data class DeleteButton(override val span: SegmentSpan) : Hit
         data class VerificationBadge(override val span: SegmentSpan) : Hit

@@ -22,6 +22,7 @@ interface TranscriptSurface {
     var isProgrammaticScroll: Boolean
     var pointerPosition: Point?
     var clock: () -> Long
+    var playingTag: Any?
 
     val currentSession: ConversationSession?
     val spans: List<TranscriptView.SegmentSpan>

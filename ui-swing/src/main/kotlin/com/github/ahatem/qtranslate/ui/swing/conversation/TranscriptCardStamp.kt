@@ -34,6 +34,7 @@ data class CardModel(
     val isLatest: Boolean = false,
     val chatLayout: Boolean = true,
     val rtlLayout: Boolean = false,
+    val isPlaying: Boolean = false,
     val baseGlobalOffset: Int = 0
 ) {
     val id: String get() = segment.id
@@ -101,6 +102,18 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
 
     init {
         rendererPane.add(stampPane)
+    }
+
+    /** Current playback tag being played, or null. Used by stamp to render stop button on active line. */
+    var playingTag: Any? = null
+
+    internal fun isSegmentPlaying(segmentId: String): Boolean {
+        val tag = playingTag ?: return false
+        return when (tag) {
+            is String -> tag == segmentId
+            is com.github.ahatem.qtranslate.core.conversation.PlaybackTag -> tag.segmentId == segmentId
+            else -> tag.toString() == segmentId
+        }
     }
 
     /** Number of card measurements executed since creation or [resetCounters]. */
@@ -266,9 +279,12 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
 
         val localSpan = layout.localSpan
         val globalSpan = layout.globalSpan
+        val playing = model.isPlaying || isSegmentPlaying(model.id)
 
         val playBox = localBoundsOf(localSpan.playStart until localSpan.playEnd)
-        if (playBox != null && playBox.grow(4).contains(localPoint)) return TranscriptView.Hit.PlayButton(globalSpan)
+        if (playBox != null && playBox.grow(4).contains(localPoint)) {
+            return if (playing) TranscriptView.Hit.StopButton(globalSpan) else TranscriptView.Hit.PlayButton(globalSpan)
+        }
 
         if (localSpan.badgeEnd > localSpan.badgeStart) {
             val badgeBox = localBoundsOf(localSpan.badgeStart until localSpan.badgeEnd)
@@ -295,7 +311,8 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
         if (localPoint.x < minOf(box.x, right) - 6 || localPoint.x > maxOf(box.x, right) + 6) return null
 
         return when {
-            localOffset in localSpan.playStart until localSpan.playEnd -> TranscriptView.Hit.PlayButton(globalSpan)
+            localOffset in localSpan.playStart until localSpan.playEnd ->
+                if (playing) TranscriptView.Hit.StopButton(globalSpan) else TranscriptView.Hit.PlayButton(globalSpan)
             localOffset in localSpan.badgeStart until localSpan.badgeEnd -> TranscriptView.Hit.VerificationBadge(globalSpan)
             localOffset in localSpan.retryStart until localSpan.retryEnd -> TranscriptView.Hit.RetryButton(globalSpan)
             localOffset in localSpan.deleteStart until localSpan.deleteEnd -> TranscriptView.Hit.DeleteButton(globalSpan)
@@ -373,7 +390,8 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
 
         val playStart = 0
         val iconSize = (stampPane.font.size - 2).coerceIn(12, 16)
-        val playIcon = FlatSVGIcon(Icons.PLAY, iconSize, iconSize).apply {
+        val playing = model.isPlaying || isSegmentPlaying(segment.id)
+        val playIcon = FlatSVGIcon(if (playing) Icons.STOP else Icons.PLAY, iconSize, iconSize).apply {
             colorFilter = FlatSVGIcon.ColorFilter { TranscriptView.sourceColor(segment.source) }
         }
         doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, playIcon) })

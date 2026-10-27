@@ -185,6 +185,13 @@ class HoverTranslationPopup(owner: Window, private val strings: ConversationStri
         window.pack()
     }
 
+    fun setPlayingState(playingWord: Boolean, playingSentence: Boolean) {
+        playWord.icon = FlatSVGIcon(if (playingWord) Icons.STOP else Icons.PLAY, 12, 12)
+        playWord.text = if (playingWord) strings.stop else strings.playWord
+        playSentence.icon = FlatSVGIcon(if (playingSentence) Icons.STOP else Icons.PLAY, 12, 12)
+        playSentence.text = if (playingSentence) strings.stop else strings.playSentence
+    }
+
     fun hide() {
         window.isVisible = false
         current = null
