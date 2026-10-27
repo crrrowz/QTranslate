@@ -136,7 +136,7 @@ class VoskBuiltinServiceTest {
         val manager = VoskModelManager({ tempDir })
         // Create model directory on disk
         val modelDir = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs() }
-        File(modelDir, "conf.txt").writeText("test")
+        File(modelDir, "am").mkdirs(); File(modelDir, "am/final.mdl").writeText("test")
 
         val modelCreates = AtomicInteger(0)
         var lastCreatedModel: FakeModelHandle? = null
@@ -182,7 +182,7 @@ class VoskBuiltinServiceTest {
         val manager = VoskModelManager({ tempDir })
         File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply {
             mkdirs()
-            File(this, "README").writeText("fake model")
+            File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("fake model")
         }
 
         val fakeRecognizer = FakeRecognizerHandle().apply {
@@ -237,9 +237,9 @@ class VoskBuiltinServiceTest {
     fun `model cache caps at 2 models and keys by model name`() {
         val manager = VoskModelManager({ tempDir })
         // Create 3 model directories
-        val m1 = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs(); File(this, "README").writeText("1") }
-        val m2 = File(manager.modelsDirectory, "vosk-model-small-de-0.15").apply { mkdirs(); File(this, "README").writeText("2") }
-        val m3 = File(manager.modelsDirectory, "vosk-model-small-fr-0.22").apply { mkdirs(); File(this, "README").writeText("3") }
+        val m1 = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("1") }
+        val m2 = File(manager.modelsDirectory, "vosk-model-small-de-0.15").apply { File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("2") }
+        val m3 = File(manager.modelsDirectory, "vosk-model-small-fr-0.22").apply { File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("3") }
 
         val createdModels = mutableMapOf<String, FakeModelHandle>()
         val service = VoskBuiltinService(

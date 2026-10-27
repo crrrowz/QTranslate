@@ -59,8 +59,12 @@ class VoskModelManager(
         }
     }
 
+    /**
+     * Every Vosk model ships its acoustic model at am/final.mdl. Checking for it (not just a non-empty
+     * folder) keeps a half-extracted folder from counting as installed, which hid the Download button.
+     */
     private fun File.isValidModelDir(): Boolean =
-        isDirectory && (list()?.isNotEmpty() == true)
+        File(this, "am/final.mdl").isFile
 
     fun isInstalled(modelName: String): Boolean {
         if (File(modelsDirectory, modelName).isValidModelDir()) return true

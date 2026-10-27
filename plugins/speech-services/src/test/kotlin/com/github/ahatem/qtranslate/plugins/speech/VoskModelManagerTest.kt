@@ -32,6 +32,29 @@ class VoskModelManagerTest {
         }
     }
 
+    private fun writeFakeModelFiles(dir: File) {
+        File(dir, "am").mkdirs()
+        File(dir, "am/final.mdl").writeText("fake-model-binary")
+        File(dir, "conf").mkdirs()
+        File(dir, "conf/model.conf").writeText("sample_rate=16000")
+    }
+
+    @Test
+    fun `half-extracted model folder is not reported as installed`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { File(tempDir, "persistent") })
+        val partial = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs() }
+        File(partial, "conf").mkdirs()
+        File(partial, "conf/model.conf").writeText("sample_rate=16000")
+
+        assertFalse(manager.isInstalled("vosk-model-small-en-us-0.15"))
+        assertTrue(manager.listInstalledModels().isEmpty())
+        assertNull(manager.findModelForLanguage("en"))
+
+        File(partial, "am").mkdirs()
+        File(partial, "am/final.mdl").writeText("fake-model-binary")
+        assertTrue(manager.isInstalled("vosk-model-small-en-us-0.15"))
+    }
+
     @Test
     fun `model manager detects installed models and resolves for language`() {
         val isolatedDir = File(tempDir, "isolated").apply { mkdirs() }
@@ -43,7 +66,7 @@ class VoskModelManagerTest {
 
         // Create a model folder
         val enModelDir = File(modelsRoot, "vosk-model-small-en-us-0.15").apply { mkdirs() }
-        File(enModelDir, "model.conf").writeText("sample_rate=16000")
+        writeFakeModelFiles(enModelDir)
 
         assertTrue(manager.isInstalled("vosk-model-small-en-us-0.15"))
         assertEquals(1, manager.listInstalledModels().size)
@@ -55,7 +78,7 @@ class VoskModelManagerTest {
 
         // Create an Arabic model folder
         val arModelDir = File(modelsRoot, "vosk-model-ar-mgb2-0.4").apply { mkdirs() }
-        File(arModelDir, "model.conf").writeText("sample_rate=16000")
+        writeFakeModelFiles(arModelDir)
         assertEquals(arModelDir.absolutePath, manager.findModelForLanguage("ar")?.absolutePath)
         // Auto mode prefers English when preferred model is not specified
         assertEquals(enModelDir.absolutePath, manager.findModelForLanguage("auto")?.absolutePath)
@@ -128,7 +151,7 @@ class VoskModelManagerTest {
 
         // Place a model only in the persistent directory
         val legacyModelDir = File(isolatedPersistentDir, "vosk-model-small-en-us-0.15").apply { mkdirs() }
-        File(legacyModelDir, "model.conf").writeText("sample_rate=16000")
+        writeFakeModelFiles(legacyModelDir)
 
         assertTrue(manager.isInstalled("vosk-model-small-en-us-0.15"), "Should detect model in persistent fallback directory")
         assertEquals(legacyModelDir.absolutePath, manager.findModelForLanguage("en")?.absolutePath, "Should find model in persistent fallback directory")
