@@ -165,7 +165,7 @@ class ConversationWindow(
     private val exportButton = JButton(strings.export)
     private val deleteButton = JButton(strings.delete)
 
-    internal val transcript: TranscriptSurface = TranscriptListView.createSurface(strings, defaultCardList = false)
+    internal val transcript: TranscriptSurface = TranscriptListView.createSurface(strings, defaultCardList = true)
     internal val liveSlotsPanel = LiveSlotsPanel(strings)
     private val transcriptInnerPanel = JPanel(BorderLayout())
     private val micMuteButton = JButton(FlatSVGIcon(Icons.MIC, 15, 15)).apply {

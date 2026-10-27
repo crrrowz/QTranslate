@@ -1013,12 +1013,12 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         const val BOTTOM_PADDING = 16
         const val OVERSCAN_CARDS = 2
 
-        /** Returns true when the virtualised card list is enabled via `-Dqtranslate.transcript.cards=true`. */
-        fun isCardListEnabled(defaultValue: Boolean = false): Boolean =
+        /** Returns true when the virtualised card list is enabled (default true; override with `-Dqtranslate.transcript.cards`). */
+        fun isCardListEnabled(defaultValue: Boolean = true): Boolean =
             System.getProperty(CARDS_PROPERTY)?.toBooleanStrictOrNull() ?: defaultValue
 
-        /** Factory returning [TranscriptListView] when enabled by flag, or [TranscriptView] otherwise. */
-        fun createSurface(strings: ConversationStrings, defaultCardList: Boolean = false): TranscriptSurface =
+        /** Factory returning [TranscriptListView] by default, or [TranscriptView] when disabled by flag. */
+        fun createSurface(strings: ConversationStrings, defaultCardList: Boolean = true): TranscriptSurface =
             if (isCardListEnabled(defaultCardList)) TranscriptListView(strings) else TranscriptView(strings)
     }
 }
