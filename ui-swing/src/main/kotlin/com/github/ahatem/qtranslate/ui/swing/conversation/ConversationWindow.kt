@@ -197,19 +197,22 @@ class ConversationWindow(
         putClientProperty("JButton.buttonType", "toolBarButton")
         toolTipText = strings.orderTooltip
     }
-    private val pausePill = JButton().apply {
+    internal val pausePill = JButton().apply {
         isFocusable = false
         cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         putClientProperty("JButton.buttonType", "roundRect")
         putClientProperty("FlatLaf.styleClass", "small")
         foreground = UIManager.getColor("Actions.Blue") ?: Color(0x389FD6)
-        addActionListener { flushBufferedUpdates() }
-    }
-    private val pausePillBar = JPanel(FlowLayout(FlowLayout.CENTER, 0, 4)).apply {
-        isOpaque = false
         isVisible = false
-        add(pausePill)
+        addActionListener { flushBufferedUpdates() }
+        addMouseListener(object : MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) {
+                renderGate.onPointerEntered()
+                freezeGraceTimer.stop()
+            }
+        })
     }
+    internal val transcriptOverlayPane = TranscriptOverlayPane(transcriptScroll, pausePill)
     private val popup = HoverTranslationPopup(this, strings)
 
     /** Gate deciding whether transcript DOM updates are frozen while reading/hovering. */
@@ -381,15 +384,11 @@ class ConversationWindow(
         add(top, BorderLayout.NORTH)
         transcriptInnerPanel.apply {
             add(liveSlotsPanel, BorderLayout.NORTH)
-            add(transcriptScroll, BorderLayout.CENTER)
-        }
-        val transcriptContainer = JPanel(BorderLayout()).apply {
-            add(pausePillBar, BorderLayout.NORTH)
-            add(transcriptInnerPanel, BorderLayout.CENTER)
+            add(transcriptOverlayPane, BorderLayout.CENTER)
         }
         transcriptScroll.border = BorderFactory.createMatteBorder(1, 0, 1, 0, UIManager.getColor("Component.borderColor"))
         transcriptScroll.verticalScrollBar.unitIncrement = 16
-        add(transcriptContainer, BorderLayout.CENTER)
+        add(transcriptInnerPanel, BorderLayout.CENTER)
         add(JPanel(BorderLayout()).apply {
             add(JLabel(strings.interactionHint).apply {
                 foreground = UIManager.getColor("Label.disabledForeground")
@@ -608,7 +607,9 @@ class ConversationWindow(
             }
             override fun mouseExited(e: MouseEvent) {
                 hoverCard = false
-                if (transcriptScroll.viewport.mousePosition == null) {
+                val inViewport = transcriptScroll.viewport.mousePosition != null
+                val inPill = pausePill.isVisible && pausePill.mousePosition != null
+                if (!inViewport && !inPill) {
                     renderGate.onPointerExited()
                     freezeGraceTimer.restart()
                 }
@@ -754,11 +755,11 @@ class ConversationWindow(
 
             syncRenderGateState()
             if (renderGate.submit(sessionToRender)) {
-                pausePillBar.isVisible = false
+                pausePill.isVisible = false
                 transcript.render(sessionToRender)
             } else if (renderGate.hasPendingUpdates()) {
                 pausePill.text = strings.updatesPaused(renderGate.pendingCount)
-                pausePillBar.isVisible = true
+                pausePill.isVisible = true
             }
         } else {
             liveSlotsPanel.render(emptyMap(), visible = false)
@@ -1246,7 +1247,7 @@ class ConversationWindow(
     }
 
     private fun syncRenderGateState() {
-        if (transcriptScroll.viewport.mousePosition != null || transcript.mousePosition != null) {
+        if (transcriptScroll.viewport.mousePosition != null || transcript.mousePosition != null || (pausePill.isVisible && pausePill.mousePosition != null)) {
             renderGate.onPointerEntered()
             freezeGraceTimer.stop()
         }
@@ -1257,13 +1258,13 @@ class ConversationWindow(
     private fun checkAndFlushIfIdle() {
         syncRenderGateState()
         val session = renderGate.tryFlushIfUnfrozen() ?: return
-        pausePillBar.isVisible = false
+        pausePill.isVisible = false
         transcript.render(session)
     }
 
     private fun flushBufferedUpdates() {
         val session = renderGate.forceFlush() ?: return
-        pausePillBar.isVisible = false
+        pausePill.isVisible = false
         transcript.render(session)
     }
 
