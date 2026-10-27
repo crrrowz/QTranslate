@@ -70,6 +70,9 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     /** True while TranscriptView is adjusting scroll position programmatically (to prevent dismissing popups). */
     var isProgrammaticScroll: Boolean = false
 
+    /** Current pointer position inside this transcript view, or null when outside. */
+    var pointerPosition: Point? = null
+
     /** Newest messages appear at the top by default so users see incoming speech without scrolling. */
     var newestFirst: Boolean = true
         set(value) {
@@ -128,6 +131,15 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         border = javax.swing.BorderFactory.createEmptyBorder(12, 16, 16, 16)
         font = font.deriveFont(font.size2D + 2f)
 
+        addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) { pointerPosition = e.point }
+            override fun mouseExited(e: MouseEvent) { pointerPosition = null }
+        })
+        addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
+            override fun mouseMoved(e: MouseEvent) { pointerPosition = e.point }
+            override fun mouseDragged(e: MouseEvent) { pointerPosition = e.point }
+        })
+
         // Clear any text selection that is dragged exclusively across the header or play button
         addCaretListener { e ->
             val dot = e.dot
@@ -161,19 +173,21 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val wasAtTop = scrollBar == null || scrollBar.value <= 24
         val wasAtBottom = scrollBar == null || scrollBar.value + scrollBar.visibleAmount >= scrollBar.maximum - 24
 
-        // Viewport scroll anchor
-        val anchorSpan = if (viewRect != null && spans.isNotEmpty()) {
+        // Anchor card under the pointer first; otherwise fall back to the first visible card.
+        val pointer = pointerPosition ?: runCatching { mousePosition }.getOrNull()
+        val pointerSpan = pointer?.let(::spanAtPoint)
+        val firstVisibleSpan = if (viewRect != null && spans.isNotEmpty()) {
             spans.firstOrNull { span ->
                 val bounds = runCatching { modelToView2D(span.playStart) }.getOrNull()
                 bounds != null && (bounds.y + 10) >= viewRect.y
             } ?: spans.firstOrNull()
         } else null
+        val anchorSpan = pointerSpan ?: firstVisibleSpan
 
         val anchorSegmentId = anchorSpan?.segment?.id
-        val anchorYOffset = if (anchorSpan != null && viewRect != null) {
-            val b = runCatching { modelToView2D(anchorSpan.playStart) }.getOrNull()
-            if (b != null) b.y - viewRect.y else 0.0
-        } else 0.0
+        val currentScrollY = viewport?.viewPosition?.y ?: scrollBar?.value ?: 0
+        val anchorOldBounds = anchorSpan?.let { runCatching { modelToView2D(it.playStart) }.getOrNull() }
+        val anchorYOffset = if (anchorOldBounds != null) anchorOldBounds.y - currentScrollY else null
 
         // Selection preservation
         val selStart = selectionStart
@@ -284,30 +298,57 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
         spans = built
 
-        SwingUtilities.invokeLater {
+        fun applyScrollAndSelectionRestore() {
             isProgrammaticScroll = true
             try {
-                if (newestFirst && wasAtTop) {
-                    scrollBar?.value = 0
-                } else if (!newestFirst && wasAtBottom) {
-                    scrollBar?.value = scrollBar.maximum
-                } else if (anchorSegmentId != null && viewRect != null) {
+                if (scrollPane != null) {
+                    val vpSize = viewport?.extentSize?.takeIf { it.width > 0 && it.height > 0 } ?: scrollPane.size
+                    if (vpSize.width > 0) {
+                        setSize(vpSize.width, Int.MAX_VALUE / 2)
+                        val pref = preferredSize
+                        setSize(vpSize.width, maxOf(vpSize.height, pref.height))
+                    }
+                    doLayout()
+                    scrollPane.doLayout()
+                    viewport?.doLayout()
+                } else if (width > 0 && height > 0) {
+                    doLayout()
+                }
+                val pointerInTranscript = pointer != null
+                val pinnedToLiveEdge = if (newestFirst) wasAtTop else wasAtBottom
+                val followLiveEdge = pinnedToLiveEdge && !pointerInTranscript
+
+                if (followLiveEdge) {
+                    if (newestFirst) {
+                        if (viewport != null) viewport.viewPosition = Point(viewport.viewPosition.x, 0)
+                        scrollBar?.value = 0
+                    } else if (scrollBar != null) {
+                        val bottomY = (scrollBar.maximum - scrollBar.visibleAmount).coerceAtLeast(0)
+                        if (viewport != null) viewport.viewPosition = Point(viewport.viewPosition.x, bottomY)
+                        scrollBar.value = scrollBar.maximum
+                    }
+                } else if (anchorSegmentId != null && anchorYOffset != null) {
                     val newSpan = built.firstOrNull { it.segment.id == anchorSegmentId }
                     if (newSpan != null) {
                         val newBounds = runCatching { modelToView2D(newSpan.playStart) }.getOrNull()
                         if (newBounds != null) {
-                            val targetY = (newBounds.y - anchorYOffset).toInt().coerceIn(0, scrollBar?.maximum ?: 0)
+                            val maxScroll = if (viewport != null && viewport.extentSize.height > 0) {
+                                (height - viewport.extentSize.height).coerceAtLeast(0)
+                            } else if (scrollBar != null && scrollBar.maximum > 0) {
+                                (scrollBar.maximum - scrollBar.visibleAmount).coerceAtLeast(0)
+                            } else Int.MAX_VALUE
+                            val targetY = kotlin.math.round(newBounds.y - anchorYOffset).toInt().coerceIn(0, maxScroll)
+                            if (viewport != null) {
+                                viewport.viewPosition = Point(viewport.viewPosition.x, targetY)
+                            }
                             scrollBar?.value = targetY
                         }
                     }
                 }
             } finally {
-                SwingUtilities.invokeLater {
-                    isProgrammaticScroll = false
-                }
+                isProgrammaticScroll = false
             }
 
-            // Restore selection if applicable
             if (selSegmentId != null && selRelStart != null && selRelEnd != null) {
                 val newSpan = built.firstOrNull { it.segment.id == selSegmentId }
                 if (newSpan != null) {
@@ -319,6 +360,9 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
                 }
             }
         }
+
+        applyScrollAndSelectionRestore()
+        SwingUtilities.invokeLater { applyScrollAndSelectionRestore() }
     }
 
     override fun paintComponent(g: Graphics) {
@@ -381,6 +425,19 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         (0.299 * color.red + 0.587 * color.green + 0.114 * color.blue) < 128
 
     private fun Rectangle.grow(pad: Int): Rectangle = Rectangle(x - pad, y - pad, width + pad * 2, height + pad * 2)
+
+    /** Finds the card span containing [point] vertically or by character offset. */
+    fun spanAtPoint(point: Point): SegmentSpan? {
+        val offset = viewToModel2D(point).takeIf { it >= 0 }
+        if (offset != null) {
+            spans.firstOrNull { offset in it.playStart..it.textEnd }?.let { return it }
+        }
+        return spans.firstOrNull { span ->
+            val top = runCatching { modelToView2D(span.playStart) }.getOrNull() ?: return@firstOrNull false
+            val bottom = runCatching { modelToView2D(span.textEnd) }.getOrNull() ?: top
+            point.y.toDouble() in (top.y - 8.0)..(bottom.y + bottom.height + 8.0)
+        }
+    }
 
     /** What is under [point], if anything. */
     fun hitTest(point: Point): Hit? {

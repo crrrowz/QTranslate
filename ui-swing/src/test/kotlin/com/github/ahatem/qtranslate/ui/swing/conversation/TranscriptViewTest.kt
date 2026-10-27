@@ -9,6 +9,7 @@ import com.github.ahatem.qtranslate.core.localization.LocalizationManager
 import org.junit.jupiter.api.Test
 import java.awt.Point
 import java.nio.file.Files
+import javax.swing.JScrollPane
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -146,5 +147,53 @@ class TranscriptViewTest {
         val doc = view.styledDocument
         val docText = doc.getText(0, doc.length)
         assertTrue(docText.contains("Hello world how are you"))
+    }
+
+    @Test
+    fun `inserting a card above anchored card under pointer keeps anchored card on-screen Y unchanged`() {
+        val view = TranscriptView(strings())
+        view.newestFirst = true
+        val scrollPane = JScrollPane(view)
+        scrollPane.setSize(600, 180)
+        scrollPane.doLayout()
+        scrollPane.viewport.doLayout()
+
+        val initialSegments = (1..8).map { i ->
+            TranscriptSegment(
+                id = "seg-$i",
+                source = AudioSource.MICROPHONE,
+                startMillis = i * 1000L,
+                endMillis = i * 1000L + 800L,
+                text = "Line number $i with enough words to take up vertical space in the transcript view"
+            )
+        }
+        val session1 = ConversationSession(id = "s", title = "T", createdAt = 0L, segments = initialSegments)
+        view.render(session1)
+        scrollPane.validate()
+
+        val anchoredSpanBefore = view.spans.first { it.segment.id == "seg-7" }
+        val docPosBefore = view.modelToView2D(anchoredSpanBefore.playStart)
+        assertNotNull(docPosBefore)
+        view.pointerPosition = Point(docPosBefore.x.toInt() + 10, docPosBefore.y.toInt() + 4)
+
+        val screenYBefore = kotlin.math.round(docPosBefore.y - scrollPane.viewport.viewPosition.y).toInt()
+
+        val newerSegment = TranscriptSegment(
+            id = "seg-9",
+            source = AudioSource.SYSTEM,
+            startMillis = 9000L,
+            endMillis = 9800L,
+            text = "A brand new incoming message that gets inserted at the very top of the transcript"
+        )
+        val session2 = session1.withSegment(newerSegment)
+        view.render(session2)
+        scrollPane.validate()
+
+        val anchoredSpanAfter = view.spans.first { it.segment.id == "seg-7" }
+        val docPosAfter = view.modelToView2D(anchoredSpanAfter.playStart)
+        assertNotNull(docPosAfter)
+        val screenYAfter = kotlin.math.round(docPosAfter.y - scrollPane.viewport.viewPosition.y).toInt()
+
+        assertEquals(screenYBefore, screenYAfter, "Anchored card under pointer must stay at the exact same on-screen Y")
     }
 }
