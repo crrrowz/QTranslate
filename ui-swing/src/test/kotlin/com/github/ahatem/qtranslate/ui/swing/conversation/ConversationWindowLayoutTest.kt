@@ -73,9 +73,10 @@ class ConversationWindowLayoutTest {
             val initialBounds = scrollPane.viewport.bounds
             assertTrue(initialBounds.width > 0 && initialBounds.height > 0)
 
-            // Show pill
+            // Show pill dynamically without manual layoutAll — TranscriptOverlayPane must auto-layout pill bounds
+            pill.text = "⏸ Updates paused while reading · 2 new"
             pill.isVisible = true
-            layoutAll(container, overlay, scrollPane)
+            assertTrue(pill.bounds.width > 0 && pill.bounds.height > 0, "Visible pause pill must immediately receive non-zero bounds")
 
             val boundsWithPill = scrollPane.viewport.bounds
             assertEquals(initialBounds, boundsWithPill, "Showing pill must not change viewport bounds")
@@ -86,6 +87,15 @@ class ConversationWindowLayoutTest {
 
             val boundsWithoutPill = scrollPane.viewport.bounds
             assertEquals(initialBounds, boundsWithoutPill, "Hiding pill must not change viewport bounds")
+
+            // Pointer in empty space below cards must not count as hovering a card or block live-edge scroll
+            val s1 = TranscriptSegment(id = "seg-1", source = AudioSource.MICROPHONE, startMillis = 1000, endMillis = 2000, text = "First card")
+            view.render(ConversationSession(id = "s-1", title = "T", createdAt = 0L, segments = listOf(s1)))
+            view.pointerPosition = Point(100, 350) // empty space well below single card
+            assertEquals(null, view.spanAtPoint(Point(100, 350)), "Empty space below cards must return null spanAtPoint")
+            val s2 = TranscriptSegment(id = "seg-2", source = AudioSource.SYSTEM, startMillis = 2000, endMillis = 3000, text = "Second card at top")
+            view.render(ConversationSession(id = "s-1", title = "T", createdAt = 0L, segments = listOf(s1, s2)))
+            assertEquals(0, scrollPane.viewport.viewPosition.y, "Pointer in empty space must not prevent staying at top live edge")
         }
     }
 

@@ -600,9 +600,9 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
                 }
             }
 
-            val pointerInTranscript = pointer != null
+            val pointerOnCard = pointer != null && spanAtPoint(pointer) != null
             val pinnedToLiveEdge = if (newestFirst) wasAtTop else wasAtBottom
-            val followLiveEdge = pinnedToLiveEdge && !pointerInTranscript
+            val followLiveEdge = pinnedToLiveEdge && !pointerOnCard
 
             if (followLiveEdge) {
                 if (newestFirst) {
@@ -827,6 +827,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun spanAtPoint(point: Point): TranscriptView.SegmentSpan? {
         if (cards.isEmpty()) return null
+        if (point.y < 0 || point.y >= heightIndex.bottomOfIndex(cards.lastIndex)) return null
         val idx = heightIndex.cardAt(point.y, clampToNearest = true)
         if (idx !in spans.indices) return null
         return spans[idx]

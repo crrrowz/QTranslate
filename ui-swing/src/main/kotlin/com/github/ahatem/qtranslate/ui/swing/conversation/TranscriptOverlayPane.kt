@@ -24,6 +24,22 @@ class TranscriptOverlayPane(
         // Layer 300: modal/popup layer so the pill sits clearly above the transcript contents
         add(pill, POPUP_LAYER)
         layout = OverlayLayout()
+
+        pill.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentShown(e: java.awt.event.ComponentEvent?) {
+                doLayout()
+                repaint()
+            }
+
+            override fun componentHidden(e: java.awt.event.ComponentEvent?) {
+                doLayout()
+                repaint()
+            }
+        })
+        pill.addPropertyChangeListener("text") {
+            doLayout()
+            repaint()
+        }
     }
 
     private inner class OverlayLayout : LayoutManager {
@@ -45,21 +61,19 @@ class TranscriptOverlayPane(
             transcriptScroll.setBounds(insets.left, insets.top, w, h)
 
             // 2. Position pill over top edge of viewport (avoid covering vertical scrollbar)
-            if (pill.isVisible) {
-                val pillPref = pill.preferredSize
-                val pillW = pillPref.width.coerceAtLeast(32)
-                val pillH = pillPref.height.coerceAtLeast(20)
+            val pillPref = pill.preferredSize
+            val pillW = pillPref.width.coerceAtLeast(32)
+            val pillH = pillPref.height.coerceAtLeast(20)
 
-                // The viewport bounds within transcriptScroll
-                val viewportBounds = transcriptScroll.viewport.bounds
-                val scrollBarW = if (transcriptScroll.verticalScrollBar.isVisible) transcriptScroll.verticalScrollBar.width else 0
+            // The viewport bounds within transcriptScroll
+            val viewportBounds = transcriptScroll.viewport.bounds
+            val scrollBarW = if (transcriptScroll.verticalScrollBar.isVisible) transcriptScroll.verticalScrollBar.width else 0
 
-                val availW = (w - scrollBarW).coerceAtLeast(pillW)
-                val pillX = insets.left + viewportBounds.x + (availW - pillW) / 2
-                val pillY = insets.top + viewportBounds.y + 6 // 6px padding from top edge
+            val availW = (w - scrollBarW).coerceAtLeast(pillW)
+            val pillX = insets.left + viewportBounds.x + (availW - pillW) / 2
+            val pillY = insets.top + viewportBounds.y + 6 // 6px padding from top edge
 
-                pill.setBounds(pillX, pillY, pillW, pillH)
-            }
+            pill.setBounds(pillX, pillY, pillW, pillH)
         }
     }
 }

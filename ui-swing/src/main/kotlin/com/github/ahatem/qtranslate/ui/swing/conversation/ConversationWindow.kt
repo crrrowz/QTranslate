@@ -202,13 +202,24 @@ class ConversationWindow(
         cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         putClientProperty("JButton.buttonType", "roundRect")
         putClientProperty("FlatLaf.styleClass", "small")
-        foreground = UIManager.getColor("Actions.Blue") ?: Color(0x389FD6)
+        background = UIManager.getColor("Notifications.background")
+            ?: UIManager.getColor("ToolTip.background")
+            ?: Color(0x2D333B)
+        foreground = UIManager.getColor("Actions.Yellow")
+            ?: UIManager.getColor("Actions.Blue")
+            ?: Color(0xE5C07B)
+        isOpaque = true
+        margin = Insets(4, 12, 4, 12)
         isVisible = false
         addActionListener { flushBufferedUpdates() }
         addMouseListener(object : MouseAdapter() {
             override fun mouseEntered(e: MouseEvent) {
                 renderGate.onPointerEntered()
                 freezeGraceTimer.stop()
+            }
+            override fun mouseExited(e: MouseEvent) {
+                syncRenderGateState()
+                checkAndFlushIfIdle()
             }
         })
     }
@@ -217,7 +228,7 @@ class ConversationWindow(
 
     /** Gate deciding whether transcript DOM updates are frozen while reading/hovering. */
     private val renderGate = RenderGate<ConversationSession?>()
-    private val freezeGraceTimer = Timer(RenderGate.DEFAULT_GRACE_MILLIS.toInt()) { checkAndFlushIfIdle() }.apply { isRepeats = false }
+    private val freezeGraceTimer = Timer((RenderGate.DEFAULT_GRACE_MILLIS + 25).toInt()) { checkAndFlushIfIdle() }.apply { isRepeats = false }
 
     /** The saved session on screen when nothing is recording. */
     private var viewed: ConversationSession? = null
@@ -600,25 +611,18 @@ class ConversationWindow(
         var pressPoint: Point? = null
         val mouse = object : MouseAdapter() {
             override fun mouseEntered(e: MouseEvent) {
-                renderGate.onPointerEntered()
-                freezeGraceTimer.stop()
+                syncRenderGateState()
             }
             override fun mousePressed(e: MouseEvent) {
                 pressPoint = e.point
             }
             override fun mouseMoved(e: MouseEvent) {
-                renderGate.onPointerEntered()
-                freezeGraceTimer.stop()
+                syncRenderGateState()
                 onTranscriptHover(e)
             }
             override fun mouseExited(e: MouseEvent) {
                 hoverCard = false
-                val inViewport = transcriptScroll.viewport.mousePosition != null
-                val inPill = pausePill.isVisible && pausePill.mousePosition != null
-                if (!inViewport && !inPill) {
-                    renderGate.onPointerExited()
-                    freezeGraceTimer.restart()
-                }
+                syncRenderGateState()
                 showTimer.stop()
                 hideTimer.restart()
                 checkAndFlushIfIdle()
@@ -777,11 +781,10 @@ class ConversationWindow(
 
             syncRenderGateState()
             if (renderGate.submit(sessionToRender)) {
-                pausePill.isVisible = false
+                updatePausePill(visible = false)
                 transcript.render(sessionToRender)
             } else if (renderGate.hasPendingUpdates()) {
-                pausePill.text = strings.updatesPaused(renderGate.pendingCount)
-                pausePill.isVisible = true
+                updatePausePill(visible = true, pendingCount = renderGate.pendingCount)
             }
         }
         renderSpeechStatus()
@@ -1253,10 +1256,38 @@ class ConversationWindow(
         checkAndFlushIfIdle()
     }
 
+    private fun updatePausePill(visible: Boolean, pendingCount: Int = 0) {
+        if (visible) {
+            pausePill.text = strings.updatesPaused(pendingCount)
+            pausePill.isVisible = true
+        } else {
+            pausePill.isVisible = false
+        }
+        transcriptOverlayPane.doLayout()
+        transcriptOverlayPane.repaint()
+    }
+
+    private fun isPointerOverCardsOrPill(): Boolean {
+        if (pausePill.isVisible && pausePill.mousePosition != null) return true
+        val pt = transcript.asComponent.mousePosition ?: transcript.pointerPosition ?: return false
+        val span = transcript.spanAtPoint(pt) ?: return false
+        val xBounds = TranscriptView.cardHorizontalBounds(
+            source = span.segment.source,
+            totalWidth = transcript.asComponent.width,
+            chatLayout = transcript.chatLayout,
+            rtl = transcript.rtlLayout
+        )
+        return pt.x in xBounds
+    }
+
     private fun syncRenderGateState() {
-        if (transcriptScroll.viewport.mousePosition != null || transcript.asComponent.mousePosition != null || (pausePill.isVisible && pausePill.mousePosition != null)) {
+        if (isPointerOverCardsOrPill()) {
             renderGate.onPointerEntered()
             freezeGraceTimer.stop()
+        } else if (renderGate.pointerInside) {
+            renderGate.onPointerExited()
+            freezeGraceTimer.initialDelay = (RenderGate.DEFAULT_GRACE_MILLIS + 25).toInt()
+            freezeGraceTimer.restart()
         }
         renderGate.popupVisible = popup.isVisible || popupHovered
         renderGate.hasSelection = transcript.selectionStart != transcript.selectionEnd
@@ -1264,15 +1295,42 @@ class ConversationWindow(
 
     private fun checkAndFlushIfIdle() {
         syncRenderGateState()
+        if (renderGate.isWithinGracePeriod()) {
+            if (!freezeGraceTimer.isRunning) {
+                freezeGraceTimer.initialDelay = 50
+                freezeGraceTimer.restart()
+            }
+            return
+        }
         val session = renderGate.tryFlushIfUnfrozen() ?: return
-        pausePill.isVisible = false
+        updatePausePill(visible = false)
         transcript.render(session)
     }
 
     private fun flushBufferedUpdates() {
         val session = renderGate.forceFlush() ?: return
-        pausePill.isVisible = false
+        transcript.pointerPosition = null
+        updatePausePill(visible = false)
         transcript.render(session)
+        scrollToLiveEdge()
+    }
+
+    private fun scrollToLiveEdge() {
+        transcript.isProgrammaticScroll = true
+        try {
+            val scrollBar = transcriptScroll.verticalScrollBar
+            val viewport = transcriptScroll.viewport
+            if (transcript.newestFirst) {
+                viewport.viewPosition = Point(viewport.viewPosition.x, 0)
+                scrollBar.value = 0
+            } else {
+                val bottomY = (transcript.asComponent.height - viewport.extentSize.height).coerceAtLeast(0)
+                viewport.viewPosition = Point(viewport.viewPosition.x, bottomY)
+                scrollBar.value = bottomY
+            }
+        } finally {
+            transcript.isProgrammaticScroll = false
+        }
     }
 
     private fun playRange(segment: TranscriptSegment, startMillis: Long, endMillis: Long) {
