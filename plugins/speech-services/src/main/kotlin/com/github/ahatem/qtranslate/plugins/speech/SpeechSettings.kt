@@ -282,5 +282,6 @@ data class SpeechSettings(
 
     private fun isLocal(host: String): Boolean =
         host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" ||
-            host.endsWith(".local") || host.startsWith("192.168.") || host.startsWith("10.")
+            host.endsWith(".local") || host.startsWith("192.168.") || host.startsWith("10.") ||
+            Regex("""^172\.(1[6-9]|2\d|3[01])\.""").containsMatchIn(host)
 }
