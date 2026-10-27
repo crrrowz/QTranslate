@@ -29,14 +29,31 @@ class VoskModelManagerTest {
             zos.putNextEntry(ZipEntry("$modelName/am/final.mdl"))
             zos.write("fake-model-binary".toByteArray())
             zos.closeEntry()
+            zos.putNextEntry(ZipEntry("$modelName/conf/"))
+            zos.closeEntry()
+            zos.putNextEntry(ZipEntry("$modelName/conf/model.conf"))
+            zos.write("sample_rate=16000".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(ZipEntry("$modelName/graph/"))
+            zos.closeEntry()
+            zos.putNextEntry(ZipEntry("$modelName/graph/HCLG.fst"))
+            zos.write("fake-graph".toByteArray())
+            zos.closeEntry()
         }
     }
 
-    private fun writeFakeModelFiles(dir: File) {
+    private fun writeFakeModelFiles(dir: File, dynamicGraph: Boolean = false) {
         File(dir, "am").mkdirs()
         File(dir, "am/final.mdl").writeText("fake-model-binary")
         File(dir, "conf").mkdirs()
         File(dir, "conf/model.conf").writeText("sample_rate=16000")
+        File(dir, "graph").mkdirs()
+        if (dynamicGraph) {
+            File(dir, "graph/HCLr.fst").writeText("fake-hclr")
+            File(dir, "graph/Gr.fst").writeText("fake-gr")
+        } else {
+            File(dir, "graph/HCLG.fst").writeText("fake-hclg")
+        }
     }
 
     @Test
@@ -50,9 +67,53 @@ class VoskModelManagerTest {
         assertTrue(manager.listInstalledModels().isEmpty())
         assertNull(manager.findModelForLanguage("en"))
 
+        // Add acoustic model without graph -> still incomplete
         File(partial, "am").mkdirs()
         File(partial, "am/final.mdl").writeText("fake-model-binary")
+        assertFalse(manager.isInstalled("vosk-model-small-en-us-0.15"))
+
+        // Add graph -> now valid
+        File(partial, "graph").mkdirs()
+        File(partial, "graph/HCLG.fst").writeText("fake-graph")
         assertTrue(manager.isInstalled("vosk-model-small-en-us-0.15"))
+    }
+
+    @Test
+    fun `reproduce B1 - partial folder for second model does not hide download button`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { File(tempDir, "persistent") })
+        val settings = SpeechSettings().apply { modelManager = manager }
+
+        // Model A is fully installed
+        val modelA = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs() }
+        writeFakeModelFiles(modelA)
+
+        // Model B has a broken/partial extraction folder left behind
+        val modelB = File(manager.modelsDirectory, "vosk-model-ar-mgb2-0.4").apply { mkdirs() }
+        File(modelB, "conf").mkdirs()
+        File(modelB, "conf/model.conf").writeText("sample_rate=16000")
+
+        // Setting model A -> already installed, download button should not show
+        settings.voskBuiltinModel = "vosk-model-small-en-us-0.15"
+        assertFalse(settings.downloadSelectedModelVisible())
+
+        // Switching dropdown to Model B -> incomplete folder must NOT count as installed!
+        // Download button MUST be visible!
+        settings.voskBuiltinModel = "vosk-model-ar-mgb2-0.4"
+        assertTrue(settings.downloadSelectedModelVisible(), "Download button must remain visible when model B is incomplete")
+        assertFalse(manager.isInstalled("vosk-model-ar-mgb2-0.4"))
+
+        // Status action must report incomplete folder
+        val status = manager.statusAction("vosk-model-ar-mgb2-0.4")
+        assertTrue(status.contains("incomplete, delete and download again"), status)
+    }
+
+    @Test
+    fun `dynamic graph model with HCLr and Gr is recognized as valid`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { File(tempDir, "persistent") })
+        val modelDir = File(manager.modelsDirectory, "vosk-model-en-us-0.22-lgraph").apply { mkdirs() }
+        writeFakeModelFiles(modelDir, dynamicGraph = true)
+
+        assertTrue(manager.isInstalled("vosk-model-en-us-0.22-lgraph"))
     }
 
     @Test

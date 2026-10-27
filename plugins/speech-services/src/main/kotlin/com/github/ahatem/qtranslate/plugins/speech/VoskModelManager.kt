@@ -60,11 +60,32 @@ class VoskModelManager(
     }
 
     /**
-     * Every Vosk model ships its acoustic model at am/final.mdl. Checking for it (not just a non-empty
-     * folder) keeps a half-extracted folder from counting as installed, which hid the Download button.
+     * Every Vosk model requires:
+     * 1. Acoustic model: am/final.mdl
+     * 2. Model configuration: conf/model.conf
+     * 3. Decoding graph: static graph/HCLG.fst OR rescoring/dynamic graph/HCLr.fst + graph/Gr.fst
+     *
+     * Checking for these required files prevents incomplete or corrupted extractions from being
+     * marked as installed (which previously hid the Download button).
      */
-    private fun File.isValidModelDir(): Boolean =
-        File(this, "am/final.mdl").isFile
+    internal fun File.isValidModelDir(): Boolean {
+        if (!isDirectory) return false
+        val hasAcoustic = File(this, "am/final.mdl").isFile
+        val hasConf = File(this, "conf/model.conf").isFile
+        val hasGraph = File(this, "graph/HCLG.fst").isFile ||
+            (File(this, "graph/HCLr.fst").isFile && File(this, "graph/Gr.fst").isFile)
+        return hasAcoustic && hasConf && hasGraph
+    }
+
+    /**
+     * Determines if a folder in [modelsDirectory] or [persistentModelsDirectory] exists, is non-empty,
+     * but fails [isValidModelDir].
+     */
+    internal fun File.isIncompleteModelDir(): Boolean {
+        if (!isDirectory) return false
+        val files = listFiles() ?: return false
+        return files.isNotEmpty() && !isValidModelDir()
+    }
 
     fun isInstalled(modelName: String): Boolean {
         if (File(modelsDirectory, modelName).isValidModelDir()) return true
@@ -280,8 +301,17 @@ class VoskModelManager(
         val selected = selectedModelName?.let { MODELS_BY_NAME[it] }
         val sb = StringBuilder()
         if (selected != null) {
+            val localDir = File(modelsDirectory, selected.name)
+            val persistentDir = File(persistentModelsDirectory, selected.name)
             val isInst = isInstalled(selected.name)
-            sb.append("Selected model: ${selected.label}\nStatus: ${if (isInst) "✓ Installed and ready to use" else "✗ Not downloaded yet"}\n\n")
+            val isIncomplete = localDir.isIncompleteModelDir() || persistentDir.isIncompleteModelDir()
+
+            val statusStr = when {
+                isInst -> "✓ Installed and ready to use"
+                isIncomplete -> "incomplete, delete and download again"
+                else -> "✗ Not downloaded yet"
+            }
+            sb.append("Selected model: ${selected.label}\nStatus: $statusStr\n\n")
         }
         if (installed.isEmpty()) {
             sb.append("No built-in Vosk models downloaded yet.\nChoose a model from the dropdown and click 'Download Model'.")

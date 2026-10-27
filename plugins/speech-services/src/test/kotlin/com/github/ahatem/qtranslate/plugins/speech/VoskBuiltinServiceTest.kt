@@ -131,12 +131,21 @@ class VoskBuiltinServiceTest {
         assertTrue(threadNames.all { it.startsWith("vosk-builtin-worker") })
     }
 
+    private fun writeFakeModelFiles(dir: File) {
+        File(dir, "am").mkdirs()
+        File(dir, "am/final.mdl").writeText("test-model")
+        File(dir, "conf").mkdirs()
+        File(dir, "conf/model.conf").writeText("sample_rate=16000")
+        File(dir, "graph").mkdirs()
+        File(dir, "graph/HCLG.fst").writeText("test-graph")
+    }
+
     @Test
     fun `builtin service caches models per language and closes them on shutdown`() = runBlocking {
         val manager = VoskModelManager({ tempDir })
         // Create model directory on disk
         val modelDir = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs() }
-        File(modelDir, "am").mkdirs(); File(modelDir, "am/final.mdl").writeText("test")
+        writeFakeModelFiles(modelDir)
 
         val modelCreates = AtomicInteger(0)
         var lastCreatedModel: FakeModelHandle? = null
@@ -182,7 +191,7 @@ class VoskBuiltinServiceTest {
         val manager = VoskModelManager({ tempDir })
         File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply {
             mkdirs()
-            File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("fake model")
+            writeFakeModelFiles(this)
         }
 
         val fakeRecognizer = FakeRecognizerHandle().apply {
@@ -237,9 +246,9 @@ class VoskBuiltinServiceTest {
     fun `model cache caps at 2 models and keys by model name`() {
         val manager = VoskModelManager({ tempDir })
         // Create 3 model directories
-        val m1 = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("1") }
-        val m2 = File(manager.modelsDirectory, "vosk-model-small-de-0.15").apply { File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("2") }
-        val m3 = File(manager.modelsDirectory, "vosk-model-small-fr-0.22").apply { File(this, "am").mkdirs(); File(this, "am/final.mdl").writeText("3") }
+        val m1 = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs(); writeFakeModelFiles(this) }
+        val m2 = File(manager.modelsDirectory, "vosk-model-small-de-0.15").apply { mkdirs(); writeFakeModelFiles(this) }
+        val m3 = File(manager.modelsDirectory, "vosk-model-small-fr-0.22").apply { mkdirs(); writeFakeModelFiles(this) }
 
         val createdModels = mutableMapOf<String, FakeModelHandle>()
         val service = VoskBuiltinService(
