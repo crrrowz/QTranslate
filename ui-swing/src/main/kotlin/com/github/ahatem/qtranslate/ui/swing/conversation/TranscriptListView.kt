@@ -348,19 +348,19 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         return hasDraftDiff
     }
 
-    private fun isSingleCardTextUpdate(ordered: List<TranscriptSegment>): Boolean {
-        if (ordered.isEmpty() || ordered.size != spans.size) return false
-        var diffCount = 0
+    private fun findSingleChangedCardIndex(ordered: List<TranscriptSegment>): Int {
+        if (ordered.isEmpty() || ordered.size != spans.size) return -1
+        var diffIndex = -1
         for (i in ordered.indices) {
             val newSeg = ordered[i]
             val oldSeg = spans[i].segment
-            if (newSeg.id != oldSeg.id) return false
+            if (newSeg.id != oldSeg.id) return -1
             if (newSeg != oldSeg) {
-                diffCount++
-                if (diffCount > 1) return false
+                if (diffIndex != -1) return -1
+                diffIndex = i
             }
         }
-        return diffCount == 1
+        return diffIndex
     }
 
     private fun performRender(session: ConversationSession?, key: Any?, now: Long) {
@@ -390,114 +390,179 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         val rawSegments = session?.segments.orEmpty()
         val ordered = if (newestFirst) rawSegments.reversed() else rawSegments
 
-        if (isSingleCardTextUpdate(ordered)) {
-            incrementalRenderCount++
-        } else {
-            fullRenderCount++
-        }
-
-        val hadExistingCards = cards.isNotEmpty()
-        val previousIds = if (hadExistingCards) cardById.keys.toHashSet() else emptySet()
-
         val w = effectiveWidth()
-        lastIndexedWidth = w
+        val singleDiffIndex = if (lastIndexedWidth == w) findSingleChangedCardIndex(ordered) else -1
 
-        val newCards = ArrayList<CardModel>(ordered.size)
-        val newSpans = ArrayList<TranscriptView.SegmentSpan>(ordered.size)
-        val newSpecs = ArrayList<CardHeightIndex.CardSpec>(ordered.size)
-        spanById.clear()
-        cardById.clear()
-
-        var anyActiveCorrectionHighlight = false
-        var runningGlobalOffset = 0
-
-        for (i in ordered.indices) {
-            val segment = ordered[i]
-            if (!segment.draft && hadExistingCards && segment.id !in previousIds) {
-                cardFadeInStartMillis.putIfAbsent(segment.id, now)
-            }
-            if (i > 0) {
-                runningGlobalOffset += 2 // matches "\n\n" separator between cards
-            }
-            val model = CardModel(
+        if (singleDiffIndex >= 0 && cards is MutableList<CardModel> && spans is MutableList<TranscriptView.SegmentSpan>) {
+            incrementalRenderCount++
+            val mutableCards = cards as MutableList<CardModel>
+            val mutableSpans = spans as MutableList<TranscriptView.SegmentSpan>
+            val segment = ordered[singleDiffIndex]
+            val oldModel = mutableCards[singleDiffIndex]
+            val oldSpan = mutableSpans[singleDiffIndex]
+            val baseOffset = oldModel.baseGlobalOffset
+            val newModel = CardModel(
                 segment = segment,
-                isLatest = i == 0,
+                isLatest = singleDiffIndex == 0,
                 chatLayout = chatLayout,
                 rtlLayout = rtlLayout,
-                baseGlobalOffset = runningGlobalOffset
+                baseGlobalOffset = baseOffset
             )
-            val version = model.contentVersion()
-            val existing = cachedEntries[segment.id]
-            val needsCorrectionCheck = existing != null && (
-                existing.anyActiveCorrectionHighlight ||
-                    segment.verificationState == VerificationState.CORRECTED ||
-                    segment.words.any { it.verificationState == VerificationState.CORRECTED }
-                )
+            val version = newModel.contentVersion()
+            val layout = stamp.measureCard(
+                model = newModel.copy(baseGlobalOffset = 0),
+                totalWidth = w,
+                nowMillis = now,
+                correctedFirstSeenMillis = correctedFirstSeenMillis
+            )
+            val entry = CachedCardEntry(
+                segment = segment,
+                width = w,
+                contentVersion = version,
+                cardHeight = layout.cardHeight,
+                localSpan = layout.localSpan,
+                renderedText = layout.renderedText,
+                anyActiveCorrectionHighlight = layout.anyActiveCorrectionHighlight
+            )
+            cachedEntries[segment.id] = entry
+            val newSpan = entry.globalSpanAt(baseOffset)
+            mutableCards[singleDiffIndex] = newModel
+            mutableSpans[singleDiffIndex] = newSpan
+            cardById[segment.id] = newModel
+            spanById[segment.id] = newSpan
+            heightIndex.updateCardAt(singleDiffIndex, segment.id, version, layout.cardHeight)
 
-            val entry = if (existing != null &&
-                existing.width == w &&
-                existing.contentVersion == version &&
-                !needsCorrectionCheck
-            ) {
-                existing
-            } else {
-                val layout = stamp.measureCard(
-                    model = model.copy(baseGlobalOffset = 0),
-                    totalWidth = w,
-                    nowMillis = now,
-                    correctedFirstSeenMillis = correctedFirstSeenMillis
-                )
-                CachedCardEntry(
-                    segment = segment,
-                    width = w,
-                    contentVersion = version,
-                    cardHeight = layout.cardHeight,
-                    localSpan = layout.localSpan,
-                    renderedText = layout.renderedText,
-                    anyActiveCorrectionHighlight = layout.anyActiveCorrectionHighlight
-                ).also { cachedEntries[segment.id] = it }
-            }
-
-            if (entry.anyActiveCorrectionHighlight) {
-                anyActiveCorrectionHighlight = true
-            }
-
-            val globalSpan = entry.globalSpanAt(runningGlobalOffset)
-            runningGlobalOffset = globalSpan.textEnd
-
-            newCards.add(model)
-            newSpans.add(globalSpan)
-            newSpecs.add(CardHeightIndex.CardSpec(segment.id, version))
-            spanById[segment.id] = globalSpan
-            cardById[segment.id] = model
-        }
-
-        if (cachedEntries.size > newCards.size) {
-            val iter = cachedEntries.keys.iterator()
-            while (iter.hasNext()) {
-                val k = iter.next()
-                if (!cardById.containsKey(k)) {
-                    iter.remove()
+            if (newSpan.textEnd != oldSpan.textEnd) {
+                var runningGlobalOffset = newSpan.textEnd
+                for (j in (singleDiffIndex + 1) until ordered.size) {
+                    runningGlobalOffset += 2
+                    val nextSeg = ordered[j]
+                    val nextOldModel = mutableCards[j]
+                    val nextModel = if (nextOldModel.baseGlobalOffset == runningGlobalOffset) {
+                        nextOldModel
+                    } else {
+                        nextOldModel.copy(baseGlobalOffset = runningGlobalOffset).also {
+                            mutableCards[j] = it
+                            cardById[nextSeg.id] = it
+                        }
+                    }
+                    val nextEntry = cachedEntries[nextSeg.id]
+                    if (nextEntry != null) {
+                        val nextSpan = nextEntry.globalSpanAt(nextModel.baseGlobalOffset)
+                        mutableSpans[j] = nextSpan
+                        spanById[nextSeg.id] = nextSpan
+                        runningGlobalOffset = nextSpan.textEnd
+                    }
                 }
             }
-        }
 
-        cards = newCards
-        spans = newSpans
-        heightIndex.sync(newSpecs, w) { segId ->
-            cachedEntries[segId]?.cardHeight ?: 48
-        }
+            if (entry.anyActiveCorrectionHighlight && isShowing) {
+                if (!correctionFadeTimer.isRunning) correctionFadeTimer.start()
+            }
+        } else {
+            fullRenderCount++
+            val hadExistingCards = cards.isNotEmpty()
+            val previousIds = if (hadExistingCards) cardById.keys.toHashSet() else emptySet()
 
-        if (cardFadeInStartMillis.values.any { now - it < TranscriptView.CARD_FADE_IN_MS } && isShowing) {
-            if (!fadeInTimer.isRunning) fadeInTimer.start()
-        } else if (fadeInTimer.isRunning) {
-            fadeInTimer.stop()
-        }
+            lastIndexedWidth = w
 
-        if (anyActiveCorrectionHighlight && isShowing) {
-            if (!correctionFadeTimer.isRunning) correctionFadeTimer.start()
-        } else if (correctionFadeTimer.isRunning) {
-            correctionFadeTimer.stop()
+            val newCards = ArrayList<CardModel>(ordered.size)
+            val newSpans = ArrayList<TranscriptView.SegmentSpan>(ordered.size)
+            val newSpecs = ArrayList<CardHeightIndex.CardSpec>(ordered.size)
+            spanById.clear()
+            cardById.clear()
+
+            var anyActiveCorrectionHighlight = false
+            var runningGlobalOffset = 0
+
+            for (i in ordered.indices) {
+                val segment = ordered[i]
+                if (!segment.draft && hadExistingCards && segment.id !in previousIds) {
+                    cardFadeInStartMillis.putIfAbsent(segment.id, now)
+                }
+                if (i > 0) {
+                    runningGlobalOffset += 2 // matches "\n\n" separator between cards
+                }
+                val model = CardModel(
+                    segment = segment,
+                    isLatest = i == 0,
+                    chatLayout = chatLayout,
+                    rtlLayout = rtlLayout,
+                    baseGlobalOffset = runningGlobalOffset
+                )
+                val version = model.contentVersion()
+                val existing = cachedEntries[segment.id]
+                val needsCorrectionCheck = existing != null && (
+                    existing.anyActiveCorrectionHighlight ||
+                        segment.verificationState == VerificationState.CORRECTED ||
+                        segment.words.any { it.verificationState == VerificationState.CORRECTED }
+                    )
+
+                val entry = if (existing != null &&
+                    existing.width == w &&
+                    existing.contentVersion == version &&
+                    !needsCorrectionCheck
+                ) {
+                    existing
+                } else {
+                    val layout = stamp.measureCard(
+                        model = model.copy(baseGlobalOffset = 0),
+                        totalWidth = w,
+                        nowMillis = now,
+                        correctedFirstSeenMillis = correctedFirstSeenMillis
+                    )
+                    CachedCardEntry(
+                        segment = segment,
+                        width = w,
+                        contentVersion = version,
+                        cardHeight = layout.cardHeight,
+                        localSpan = layout.localSpan,
+                        renderedText = layout.renderedText,
+                        anyActiveCorrectionHighlight = layout.anyActiveCorrectionHighlight
+                    ).also { cachedEntries[segment.id] = it }
+                }
+
+                if (entry.anyActiveCorrectionHighlight) {
+                    anyActiveCorrectionHighlight = true
+                }
+
+                val globalSpan = entry.globalSpanAt(runningGlobalOffset)
+                runningGlobalOffset = globalSpan.textEnd
+
+                newCards.add(model)
+                newSpans.add(globalSpan)
+                newSpecs.add(CardHeightIndex.CardSpec(segment.id, version))
+                spanById[segment.id] = globalSpan
+                cardById[segment.id] = model
+            }
+
+            if (cachedEntries.size > newCards.size) {
+                val iter = cachedEntries.keys.iterator()
+                while (iter.hasNext()) {
+                    val k = iter.next()
+                    if (!cardById.containsKey(k)) {
+                        iter.remove()
+                    }
+                }
+            }
+
+            cards = newCards
+            spans = newSpans
+            heightIndex.sync(newSpecs, w) { segId ->
+                cachedEntries[segId]?.cardHeight ?: 48
+            }
+
+            if (cardFadeInStartMillis.values.any { now - it < TranscriptView.CARD_FADE_IN_MS } && isShowing) {
+                if (!fadeInTimer.isRunning) fadeInTimer.start()
+            } else if (fadeInTimer.isRunning) {
+                fadeInTimer.stop()
+            }
+
+            if (anyActiveCorrectionHighlight && isShowing) {
+                if (!correctionFadeTimer.isRunning) correctionFadeTimer.start()
+            } else if (correctionFadeTimer.isRunning) {
+                correctionFadeTimer.stop()
+            }
         }
 
         // Restore selection if still valid
@@ -520,20 +585,18 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
         isProgrammaticScroll = true
         try {
-            val totalH = heightIndex.totalHeight
+            val totalH = heightIndex.totalHeight.coerceAtLeast(40)
             if (scrollPane != null) {
                 val vpSize = viewport?.extentSize?.takeIf { it.width > 0 && it.height > 0 } ?: scrollPane.size
                 val targetW = if (vpSize.width > 0) vpSize.width else w
-                val targetH = maxOf(vpSize.height, totalH)
-                if (width != targetW || height != targetH) {
-                    setSize(targetW, targetH)
+                if (width != targetW || height != totalH) {
+                    setSize(targetW, totalH)
                 }
                 scrollPane.doLayout()
                 viewport?.doLayout()
             } else if (width > 0) {
-                val targetH = maxOf(height, totalH)
-                if (height != targetH) {
-                    setSize(width, targetH)
+                if (height != totalH) {
+                    setSize(width, totalH)
                 }
             }
 
@@ -929,8 +992,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
     // Scrollable implementation
     override fun getPreferredSize(): Dimension {
         val w = effectiveWidth()
-        val vpHeight = (parent as? JViewport)?.extentSize?.height ?: 0
-        val h = maxOf(heightIndex.totalHeight, vpHeight, 40)
+        val h = heightIndex.totalHeight.coerceAtLeast(40)
         return Dimension(w, h)
     }
 

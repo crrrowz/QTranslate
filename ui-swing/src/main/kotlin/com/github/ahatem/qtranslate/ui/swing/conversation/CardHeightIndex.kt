@@ -109,6 +109,22 @@ class CardHeightIndex(
         cachedHeights.remove(segmentId)
     }
 
+    /**
+     * Updates a single existing card at [index] in place without rebuilding the full ID list or hash map.
+     */
+    fun updateCardAt(index: Int, segmentId: String, contentVersion: Any, newHeight: Int) {
+        if (index !in orderedIds.indices || orderedIds[index] != segmentId) return
+        val clamped = newHeight.coerceAtLeast(1)
+        cachedHeights[segmentId] = CachedHeight(width, contentVersion, clamped)
+        val delta = clamped - heights[index]
+        if (delta == 0) return
+        heights[index] = clamped
+        for (i in (index + 1)..orderedIds.size) {
+            prefixTops[i] += delta
+        }
+        totalHeightValue += delta
+    }
+
     /** Invalidates all cached heights (for example when theme font or layout mode changes). */
     fun invalidateAll() {
         cachedHeights.clear()
