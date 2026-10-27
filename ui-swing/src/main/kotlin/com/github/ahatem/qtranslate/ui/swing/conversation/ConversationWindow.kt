@@ -226,9 +226,9 @@ class ConversationWindow(
     }
     private val popup = HoverTranslationPopup(this, strings)
 
-    /** Buffered session to render when updates are frozen during user interaction. */
-    private var bufferedSessionToRender: ConversationSession? = null
-    private var pendingUpdatesCount: Int = 0
+    /** Gate deciding whether transcript DOM updates are frozen while reading/hovering. */
+    private val renderGate = RenderGate<ConversationSession?>()
+    private val freezeGraceTimer = Timer(RenderGate.DEFAULT_GRACE_MILLIS.toInt()) { checkAndFlushIfIdle() }.apply { isRepeats = false }
 
     /** The saved session on screen when nothing is recording. */
     private var viewed: ConversationSession? = null
@@ -592,12 +592,24 @@ class ConversationWindow(
 
         var pressPoint: Point? = null
         val mouse = object : MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) {
+                renderGate.onPointerEntered()
+                freezeGraceTimer.stop()
+            }
             override fun mousePressed(e: MouseEvent) {
                 pressPoint = e.point
             }
-            override fun mouseMoved(e: MouseEvent) = onTranscriptHover(e)
+            override fun mouseMoved(e: MouseEvent) {
+                renderGate.onPointerEntered()
+                freezeGraceTimer.stop()
+                onTranscriptHover(e)
+            }
             override fun mouseExited(e: MouseEvent) {
                 hoverCard = false
+                if (transcriptScroll.viewport.mousePosition == null) {
+                    renderGate.onPointerExited()
+                    freezeGraceTimer.restart()
+                }
                 showTimer.stop()
                 hideTimer.restart()
                 checkAndFlushIfIdle()
@@ -760,18 +772,13 @@ class ConversationWindow(
                 }
             }
 
-            if (isUserInteracting()) {
-                if (bufferedSessionToRender != sessionToRender) {
-                    bufferedSessionToRender = sessionToRender
-                    pendingUpdatesCount++
-                    pausePill.text = strings.updatesPaused(pendingUpdatesCount)
-                    pausePillBar.isVisible = true
-                }
-            } else {
-                bufferedSessionToRender = null
-                pendingUpdatesCount = 0
+            syncRenderGateState()
+            if (renderGate.submit(sessionToRender)) {
                 pausePillBar.isVisible = false
                 transcript.render(sessionToRender)
+            } else if (renderGate.hasPendingUpdates()) {
+                pausePill.text = strings.updatesPaused(renderGate.pendingCount)
+                pausePillBar.isVisible = true
             }
         }
         renderSpeechStatus()
@@ -1258,21 +1265,24 @@ class ConversationWindow(
         checkAndFlushIfIdle()
     }
 
-    private fun isUserInteracting(): Boolean =
-        popup.isVisible || popupHovered ||
-            (transcript.selectionStart != transcript.selectionEnd) ||
-            ((hoverRange != null || hoverCard) && transcript.mousePosition != null)
+    private fun syncRenderGateState() {
+        if (transcriptScroll.viewport.mousePosition != null || transcript.mousePosition != null) {
+            renderGate.onPointerEntered()
+            freezeGraceTimer.stop()
+        }
+        renderGate.popupVisible = popup.isVisible || popupHovered
+        renderGate.hasSelection = transcript.selectionStart != transcript.selectionEnd
+    }
 
     private fun checkAndFlushIfIdle() {
-        if (!isUserInteracting() && bufferedSessionToRender != null) {
-            flushBufferedUpdates()
-        }
+        syncRenderGateState()
+        val session = renderGate.tryFlushIfUnfrozen() ?: return
+        pausePillBar.isVisible = false
+        transcript.render(session)
     }
 
     private fun flushBufferedUpdates() {
-        val session = bufferedSessionToRender ?: return
-        bufferedSessionToRender = null
-        pendingUpdatesCount = 0
+        val session = renderGate.forceFlush() ?: return
         pausePillBar.isVisible = false
         transcript.render(session)
     }
