@@ -38,7 +38,7 @@ import javax.swing.text.StyledDocument
  * rather than clicking anywhere on the speaker text.
  * Messages can be displayed newest-at-top or oldest-first.
  */
-class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
+class TranscriptView(private val strings: ConversationStrings) : JTextPane(), TranscriptSurface {
 
     /** Where a segment landed in the document. */
     class SegmentSpan(
@@ -70,18 +70,18 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         data class Text(override val span: SegmentSpan, val offset: Int) : Hit
     }
 
-    var spans: List<SegmentSpan> = emptyList()
+    override var spans: List<SegmentSpan> = emptyList()
         private set
 
     /** Injectable clock for deterministic testing of correction highlight fade-out and render throttling. */
-    var clock: () -> Long = System::currentTimeMillis
+    override var clock: () -> Long = System::currentTimeMillis
 
     /** Number of full document rebuilds executed, exposed for testing calm rendering guarantees. */
-    var fullRenderCount: Int = 0
+    override var fullRenderCount: Int = 0
         private set
 
     /** Number of in-place single-card incremental text updates executed without wiping the document. */
-    var incrementalRenderCount: Int = 0
+    override var incrementalRenderCount: Int = 0
         private set
 
     private var lastRenderMillis: Long = -RENDER_THROTTLE_MS
@@ -101,13 +101,13 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** True while TranscriptView is adjusting scroll position programmatically (to prevent dismissing popups). */
-    var isProgrammaticScroll: Boolean = false
+    override var isProgrammaticScroll: Boolean = false
 
     /** Current pointer position inside this transcript view, or null when outside. */
-    var pointerPosition: Point? = null
+    override var pointerPosition: Point? = null
 
     /** Newest messages appear at the top by default so users see incoming speech without scrolling. */
-    var newestFirst: Boolean = true
+    override var newestFirst: Boolean = true
         set(value) {
             if (field != value) {
                 field = value
@@ -117,7 +117,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
 
     /** Aligns "Me" and "Them" cards on opposite horizontal sides of the transcript view. */
-    var chatLayout: Boolean = true
+    override var chatLayout: Boolean = true
         set(value) {
             if (field != value) {
                 field = value
@@ -127,7 +127,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
 
     /** True when the surrounding UI is in right-to-left orientation (swaps left/right sides in chat layout). */
-    var rtlLayout: Boolean = false
+    override var rtlLayout: Boolean = false
         set(value) {
             if (field != value) {
                 field = value
@@ -136,8 +136,18 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             }
         }
 
-    var currentSession: ConversationSession? = null
+    override var currentSession: ConversationSession? = null
         private set
+
+    override val selectionStartOffset: Int
+        get() = selectionStart
+
+    override val selectionEndOffset: Int
+        get() = selectionEnd
+
+    private var currentSearchHighlights: List<Pair<String, IntRange>> = emptyList()
+    override val searchHighlights: List<Pair<String, IntRange>>
+        get() = currentSearchHighlights
     private var renderedKey: Any? = null
 
     inner class TranscriptCaret : DefaultCaret() {
@@ -213,7 +223,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
      * to at most once every [RENDER_THROTTLE_MS] (~250 ms) while settled archive updates flush immediately,
      * and updates a single changed card incrementally in place when card structure is unchanged.
      */
-    fun render(session: ConversationSession?) {
+    override fun render(session: ConversationSession?) {
         currentSession = session
         val key = session?.let { (it.id to it.segments) to newestFirst }
         if (key == renderedKey) return
@@ -237,7 +247,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** Flushes any throttled partial update immediately. */
-    fun flushThrottledRender() {
+    override fun flushThrottledRender() {
         val pending = pendingThrottledSession ?: return
         pendingThrottledSession = null
         val key = (pending.id to pending.segments) to newestFirst
@@ -652,7 +662,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         return if (parent is TranscriptOverlayPane) parent.parent ?: parent else parent
     }
 
-    fun captureScrollAnchor(): ScrollAnchor? {
+    override fun captureScrollAnchor(): ScrollAnchor? {
         val scrollPane = (parent?.parent as? JScrollPane)
         val viewport = scrollPane?.viewport
         val viewRect = viewport?.viewRect
@@ -685,7 +695,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         )
     }
 
-    fun restoreScrollAnchor(anchor: ScrollAnchor?) {
+    override fun restoreScrollAnchor(anchor: ScrollAnchor?) {
         if (anchor == null) return
         val scrollPane = (parent?.parent as? JScrollPane) ?: return
         val viewport = scrollPane.viewport
@@ -724,7 +734,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** Returns the current fade-in alpha (`0.15f..1.0f`) for a newly settled archive card over [CARD_FADE_IN_MS] (~150 ms). */
-    fun cardAlpha(segmentId: String, nowMillis: Long = clock()): Float {
+    override fun cardAlpha(segmentId: String, nowMillis: Long): Float {
         val started = cardFadeInStartMillis[segmentId] ?: return 1f
         val elapsed = (nowMillis - started).coerceAtLeast(0L)
         if (elapsed >= CARD_FADE_IN_MS) return 1f
@@ -836,7 +846,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** Re-evaluates active correction highlights and triggers a re-render when any expires. */
-    fun checkCorrectionHighlightFade() {
+    override fun checkCorrectionHighlightFade() {
         val now = clock()
         val anyStillActive = correctedFirstSeenMillis.values.any { now - it < CORRECTION_HIGHLIGHT_MS }
         renderedKey = null
@@ -852,7 +862,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     private fun Rectangle.grow(pad: Int): Rectangle = Rectangle(x - pad, y - pad, width + pad * 2, height + pad * 2)
 
     /** Finds the card span containing [point] vertically or by character offset. */
-    fun spanAtPoint(point: Point): SegmentSpan? {
+    override fun spanAtPoint(point: Point): SegmentSpan? {
         val offset = viewToModel2D(point).takeIf { it >= 0 }
         if (offset != null) {
             spans.firstOrNull { offset in it.playStart..it.textEnd }?.let { return it }
@@ -865,7 +875,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** What is under [point], if anything. */
-    fun hitTest(point: Point): Hit? {
+    override fun hitTest(point: Point): Hit? {
         val offset = viewToModel2D(point).takeIf { it >= 0 } ?: return null
         val span = spans.firstOrNull { offset in it.playStart until it.textEnd } ?: return null
 
@@ -899,7 +909,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** Localized tooltip text for [hit], including verification badge and unverified segment explanations. */
-    fun tooltipForHit(hit: Hit?): String? = when (hit) {
+    override fun tooltipForHit(hit: Hit?): String? = when (hit) {
         is Hit.PlayButton -> strings.actionPlayAudio
         is Hit.RetryButton -> strings.actionRetrySegment
         is Hit.DeleteButton -> strings.actionDeleteMessage
@@ -923,7 +933,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** The word around [offset] inside [span], as a document range, or null on spaces and punctuation. */
-    fun wordRangeAt(span: SegmentSpan, offset: Int): IntRange? {
+    override fun wordRangeAt(span: SegmentSpan, offset: Int): IntRange? {
         val text = runCatching { document.getText(span.textStart, span.textEnd - span.textStart) }.getOrNull() ?: return null
         val local = offset - span.textStart
         if (local !in text.indices) return null
@@ -937,18 +947,18 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /** The recognised word overlapping [range], when the speech service reported timings. */
-    fun timedWordAt(span: SegmentSpan, range: IntRange): TranscriptWord? =
+    override fun timedWordAt(span: SegmentSpan, range: IntRange): TranscriptWord? =
         span.words.firstOrNull { (chars, _) -> chars.first <= range.last && range.first <= chars.last }?.second
 
-    fun textOf(range: IntRange): String = document.getText(range.first, range.last - range.first + 1)
+    override fun textOf(range: IntRange): String = document.getText(range.first, range.last - range.first + 1)
 
-    fun boundsOf(range: IntRange): Rectangle? = runCatching {
+    override fun boundsOf(range: IntRange): Rectangle? = runCatching {
         val start = modelToView2D(range.first).bounds
         val end = modelToView2D(range.last + 1).bounds
         if (start.y == end.y) Rectangle(start.x, start.y, end.x - start.x, start.height) else start
     }.getOrNull()
 
-    fun updateCursor(hit: Hit?) {
+    override fun updateCursor(hit: Hit?) {
         cursor = when (hit) {
             is Hit.PlayButton, is Hit.RetryButton, is Hit.DeleteButton ->
                 Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
@@ -959,9 +969,49 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
     }
 
-    fun setHandCursor(hand: Boolean) {
+    override fun setHandCursor(hand: Boolean) {
         cursor = if (hand) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR) else Cursor.getDefaultCursor()
     }
+
+    override fun clearSelection() {
+        select(0, 0)
+    }
+
+    override fun highlightSearch(query: String) {
+        highlighter.removeAllHighlights()
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            currentSearchHighlights = emptyList()
+            return
+        }
+        val painter = javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(
+            UIManager.getColor("Actions.Yellow")?.let { Color(it.red, it.green, it.blue, 90) }
+                ?: Color(255, 220, 0, 90)
+        )
+        val found = ArrayList<Pair<String, IntRange>>()
+        spans.forEach { span ->
+            val text = document.getText(span.textStart, span.textEnd - span.textStart)
+            var at = text.indexOf(trimmed, ignoreCase = true)
+            while (at >= 0) {
+                val start = span.textStart + at
+                val end = start + trimmed.length
+                highlighter.addHighlight(start, end, painter)
+                found += span.segment.id to (at until (at + trimmed.length))
+                at = text.indexOf(trimmed, at + trimmed.length, ignoreCase = true)
+            }
+        }
+        currentSearchHighlights = found
+    }
+
+    override fun cardTopY(segmentId: String): Double? {
+        val span = spans.firstOrNull { it.segment.id == segmentId } ?: return null
+        return runCatching { modelToView2D(span.playStart).y }.getOrNull()
+    }
+
+    override fun renderedText(): String = styledDocument.getText(0, styledDocument.length)
+
+    override fun characterAttributesAt(offset: Int): javax.swing.text.AttributeSet? =
+        styledDocument.getCharacterElement(offset).attributes
 
     /**
      * Maps each recognised word to its characters in the segment text, in order. Speech services
@@ -1005,7 +1055,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         StyleConstants.setBackground(this, correctedHighlightColor())
     }
 
-    fun correctedHighlightColor(): Color {
+    override fun correctedHighlightColor(): Color {
         val bg = UIManager.getColor("TextPane.background") ?: background ?: Color(0x1e1e1e)
         return if (isDark(bg)) Color(85, 70, 22) else Color(255, 240, 175)
     }

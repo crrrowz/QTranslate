@@ -165,7 +165,7 @@ class ConversationWindow(
     private val exportButton = JButton(strings.export)
     private val deleteButton = JButton(strings.delete)
 
-    private val transcript = TranscriptView(strings)
+    internal val transcript: TranscriptSurface = TranscriptView(strings)
     internal val liveSlotsPanel = LiveSlotsPanel(strings)
     private val transcriptInnerPanel = JPanel(BorderLayout())
     private val micMuteButton = JButton(FlatSVGIcon(Icons.MIC, 15, 15)).apply {
@@ -192,7 +192,7 @@ class ConversationWindow(
             repaint()
         }
     }
-    private val transcriptScroll = JScrollPane(transcript)
+    private val transcriptScroll = JScrollPane(transcript.asComponent)
     private val orderButton = JButton(strings.orderNewestAtTop).apply {
         putClientProperty("JButton.buttonType", "toolBarButton")
         toolTipText = strings.orderTooltip
@@ -260,7 +260,7 @@ class ConversationWindow(
             val rtl = isRtl()
             applyComponentOrientation(if (rtl) ComponentOrientation.RIGHT_TO_LEFT else ComponentOrientation.LEFT_TO_RIGHT)
             // The transcript keeps its own direction per paragraph, whatever the UI language.
-            transcript.componentOrientation = ComponentOrientation.LEFT_TO_RIGHT
+            transcript.asComponent.componentOrientation = ComponentOrientation.LEFT_TO_RIGHT
             transcript.rtlLayout = rtl
             loadPreferences()
             loadDevices()
@@ -638,8 +638,8 @@ class ConversationWindow(
                 onTranscriptSelection()
             }
         }
-        transcript.addMouseListener(mouse)
-        transcript.addMouseMotionListener(mouse)
+        transcript.asComponent.addMouseListener(mouse)
+        transcript.asComponent.addMouseMotionListener(mouse)
         transcriptScroll.viewport.addChangeListener {
             if (popup.isVisible && !transcript.isProgrammaticScroll) {
                 hideCard()
@@ -1017,20 +1017,7 @@ class ConversationWindow(
     }
 
     private fun highlightSearch() {
-        transcript.highlighter.removeAllHighlights()
-        val query = searchField.text.trim()
-        if (query.isEmpty()) return
-        val painter = DefaultHighlighter.DefaultHighlightPainter(UIManager.getColor("Actions.Yellow")?.let {
-            Color(it.red, it.green, it.blue, 90)
-        } ?: Color(255, 220, 0, 90))
-        transcript.spans.forEach { span ->
-            val text = transcript.document.getText(span.textStart, span.textEnd - span.textStart)
-            var at = text.indexOf(query, ignoreCase = true)
-            while (at >= 0) {
-                transcript.highlighter.addHighlight(span.textStart + at, span.textStart + at + query.length, painter)
-                at = text.indexOf(query, at + query.length, ignoreCase = true)
-            }
-        }
+        transcript.highlightSearch(searchField.text.trim())
     }
 
     private fun updateSessionButtons() {
@@ -1104,7 +1091,7 @@ class ConversationWindow(
         val hit = transcript.hitTest(e.point)
         hoverCard = hit != null
         transcript.updateCursor(hit)
-        transcript.toolTipText = transcript.tooltipForHit(hit)
+        transcript.asComponent.toolTipText = transcript.tooltipForHit(hit)
         // A selection owns the card until it is cleared.
         if (transcript.selectionStart != transcript.selectionEnd) return
 
@@ -1207,7 +1194,7 @@ class ConversationWindow(
 
         val screen = Rectangle(anchorInTranscript).apply {
             val origin = java.awt.Point(x, y)
-            SwingUtilities.convertPointToScreen(origin, transcript)
+            SwingUtilities.convertPointToScreen(origin, transcript.asComponent)
             location = origin
         }
         popupContent = content
@@ -1267,7 +1254,7 @@ class ConversationWindow(
     }
 
     private fun syncRenderGateState() {
-        if (transcriptScroll.viewport.mousePosition != null || transcript.mousePosition != null || (pausePill.isVisible && pausePill.mousePosition != null)) {
+        if (transcriptScroll.viewport.mousePosition != null || transcript.asComponent.mousePosition != null || (pausePill.isVisible && pausePill.mousePosition != null)) {
             renderGate.onPointerEntered()
             freezeGraceTimer.stop()
         }
