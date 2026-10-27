@@ -415,6 +415,9 @@ class ConversationWindow(
             add(liveSlotsPanel, BorderLayout.NORTH)
             add(transcriptOverlayPane, BorderLayout.CENTER)
         }
+        val bg = UIManager.getColor("TextPane.background") ?: Color(0x1e1e1e)
+        transcriptScroll.viewport.background = bg
+        transcriptScroll.background = bg
         transcriptScroll.border = BorderFactory.createMatteBorder(1, 0, 1, 0, UIManager.getColor("Component.borderColor"))
         transcriptScroll.verticalScrollBar.unitIncrement = 16
         add(transcriptInnerPanel, BorderLayout.CENTER)

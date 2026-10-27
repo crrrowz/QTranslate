@@ -78,13 +78,13 @@ class TranscriptCardStampTest {
 
         assertEquals(StyleConstants.ALIGN_RIGHT, arLtrUi.paragraphAlignment, "Arabic card paragraph must be right-aligned")
         assertEquals(StyleConstants.ALIGN_LEFT, enLtrUi.paragraphAlignment, "English card paragraph must be left-aligned")
-        assertEquals(10, arLtrUi.horizontalBounds.first, "MICROPHONE card sits on the left in LTR UI")
-        assertTrue(enLtrUi.horizontalBounds.first > arLtrUi.horizontalBounds.first, "SYSTEM card sits on the right in LTR UI")
+        assertEquals(10..590, arLtrUi.horizontalBounds, "Cards span full width minus margins in LTR UI")
+        assertEquals(10..590, enLtrUi.horizontalBounds, "Cards span full width minus margins in LTR UI")
 
         val arRtlUi = stamp.measureCard(CardModel(arabicSeg, chatLayout = true, rtlLayout = true), totalWidth = 600)
         val enRtlUi = stamp.measureCard(CardModel(englishSeg, chatLayout = true, rtlLayout = true), totalWidth = 600)
-        assertEquals(10, enRtlUi.horizontalBounds.first, "SYSTEM card sits on the left in RTL UI")
-        assertTrue(arRtlUi.horizontalBounds.first > enRtlUi.horizontalBounds.first, "MICROPHONE card sits on the right in RTL UI")
+        assertEquals(10..590, enRtlUi.horizontalBounds, "Cards span full width minus margins in RTL UI")
+        assertEquals(10..590, arRtlUi.horizontalBounds, "Cards span full width minus margins in RTL UI")
 
         // Verify paintCard stamps onto a Graphics2D without throwing
         val host = JPanel()

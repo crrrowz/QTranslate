@@ -377,21 +377,21 @@ class TranscriptViewTest {
     }
 
     @Test
-    fun `chat layout aligns Me and Them on opposite sides and flips sides in RTL`() = SwingUtilities.invokeAndWait {
+    fun `cards use full width minus margins in both layouts and for both sources`() = SwingUtilities.invokeAndWait {
         val ltrMic = TranscriptView.cardHorizontalBounds(AudioSource.MICROPHONE, 600, chatLayout = true, rtl = false)
         val ltrSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = true, rtl = false)
-        assertEquals(10, ltrMic.first, "In LTR chat layout, MICROPHONE card starts on the left")
-        assertTrue(ltrSys.first > ltrMic.first, "In LTR chat layout, SYSTEM card is shifted to the right")
-        assertEquals(590, ltrSys.last, "In LTR chat layout, SYSTEM card reaches right edge")
+        assertEquals(10..590, ltrMic, "In LTR chat layout, MICROPHONE card spans full width (10 px margins)")
+        assertEquals(10..590, ltrSys, "In LTR chat layout, SYSTEM card spans full width (10 px margins)")
 
         val rtlMic = TranscriptView.cardHorizontalBounds(AudioSource.MICROPHONE, 600, chatLayout = true, rtl = true)
         val rtlSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = true, rtl = true)
-        assertEquals(10, rtlSys.first, "In RTL chat layout, SYSTEM card starts on the left")
-        assertTrue(rtlMic.first > rtlSys.first, "In RTL chat layout, MICROPHONE card is shifted to the right")
+        assertEquals(10..590, rtlMic, "In RTL chat layout, MICROPHONE card spans full width")
+        assertEquals(10..590, rtlSys, "In RTL chat layout, SYSTEM card spans full width")
 
         val disabledMic = TranscriptView.cardHorizontalBounds(AudioSource.MICROPHONE, 600, chatLayout = false, rtl = false)
         val disabledSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = false, rtl = false)
-        assertEquals(disabledMic, disabledSys, "When chatLayout is false, both speakers span the full width")
+        assertEquals(10..590, disabledMic, "When chatLayout is false, card spans full width")
+        assertEquals(10..590, disabledSys, "When chatLayout is false, card spans full width")
     }
 
     @Test

@@ -62,27 +62,21 @@ object TranscriptView {
             word.confidence != null &&
             word.confidence!! < LOW_CONFIDENCE_THRESHOLD
 
+    const val CARD_HORIZONTAL_MARGIN = 10
+
     /**
-     * Horizontal pixel range (`x..(x + w)`) for a card bubble of [source] inside [totalWidth].
-     * When [chatLayout] is true, "Me" ([AudioSource.MICROPHONE]) is placed on the left (or right in [rtl])
-     * and "Them" ([AudioSource.SYSTEM]) on the opposite side.
+     * Horizontal pixel range (`x..(x + w)`) for a card bubble inside [totalWidth].
+     * Cards use the full width of the list (10 px margins) in both layouts.
      */
     fun cardHorizontalBounds(
         source: AudioSource,
         totalWidth: Int,
-        chatLayout: Boolean,
+        chatLayout: Boolean = false,
         rtl: Boolean = false
     ): IntRange {
         val safeWidth = totalWidth.coerceAtLeast(140)
-        if (!chatLayout) {
-            val x = 10
-            val w = (safeWidth - 20).coerceAtLeast(100)
-            return x..(x + w)
-        }
-        val sideIndent = ((safeWidth - 20) * 0.14).toInt().coerceAtLeast(24)
-        val w = (safeWidth - 20 - sideIndent).coerceAtLeast(100)
-        val isLeft = if (!rtl) source == AudioSource.MICROPHONE else source == AudioSource.SYSTEM
-        val x = if (isLeft) 10 else (safeWidth - 10 - w).coerceAtLeast(10)
+        val x = CARD_HORIZONTAL_MARGIN
+        val w = (safeWidth - CARD_HORIZONTAL_MARGIN * 2).coerceAtLeast(100)
         return x..(x + w)
     }
 

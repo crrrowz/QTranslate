@@ -421,6 +421,19 @@ class ConversationWindowLayoutTest {
             layoutAll(innerPanel, overlay, scrollPane)
             view.restoreScrollAnchor(anchorStop)
             assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0)
+
+            // Toggling chat layout while pointer rests on card must preserve on-screen Y
+            val anchorChatToggle = view.captureScrollAnchor()
+            view.chatLayout = false
+            layoutAll(innerPanel, overlay, scrollPane)
+            view.restoreScrollAnchor(anchorChatToggle)
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen stability preserved when chatLayout is toggled off")
+
+            val anchorChatToggleBack = view.captureScrollAnchor()
+            view.chatLayout = true
+            layoutAll(innerPanel, overlay, scrollPane)
+            view.restoreScrollAnchor(anchorChatToggleBack)
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen stability preserved when chatLayout is toggled on")
         }
     }
 

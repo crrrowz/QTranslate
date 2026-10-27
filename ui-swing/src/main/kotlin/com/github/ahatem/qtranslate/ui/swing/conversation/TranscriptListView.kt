@@ -613,7 +613,8 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
         isProgrammaticScroll = true
         try {
-            val totalH = heightIndex.totalHeight.coerceAtLeast(40)
+            val vpHeight = viewport?.extentSize?.height ?: 0
+            val totalH = maxOf(heightIndex.totalHeight, vpHeight).coerceAtLeast(40)
             if (scrollPane != null) {
                 val vpSize = viewport?.extentSize?.takeIf { it.width > 0 && it.height > 0 } ?: scrollPane.size
                 val targetW = if (vpSize.width > 0) vpSize.width else w
@@ -1035,7 +1036,8 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun getScrollableTracksViewportWidth(): Boolean = true
 
-    override fun getScrollableTracksViewportHeight(): Boolean = false
+    override fun getScrollableTracksViewportHeight(): Boolean =
+        (parent as? JViewport)?.let { it.height > heightIndex.totalHeight } ?: false
 
     companion object {
         const val CARDS_PROPERTY = "qtranslate.transcript.cards"

@@ -222,9 +222,11 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
             gCard.color = cardBg
             gCard.fillRoundRect(x, y, w, h, 10, 10)
 
-            // Accent stripe
+            // Accent stripe (left in LTR for Me, right in LTR for Them; mirrored in RTL)
+            val isLeftStripe = isStripeOnLeft(model.segment.source, model.chatLayout, model.rtlLayout)
+            val stripeX = if (isLeftStripe) x else x + w - 4
             gCard.color = if (model.isLatest) Color(245, 175, 35) else TranscriptView.sourceColor(model.segment.source)
-            gCard.fillRoundRect(x, y, 4, h, 4, 4)
+            gCard.fillRoundRect(stripeX, y, 4, h, 4, 4)
 
             // Subtle card border
             gCard.color = borderColor
@@ -418,7 +420,7 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
         ) {
             doc.insertString(doc.length, "  ", null)
             badgeStart = doc.length
-            doc.insertString(doc.length, strings.verifiedBadge(agreementPct), verifiedBadgeStyle())
+            doc.insertString(doc.length, strings.verifiedBadge(agreementPct), verifiedBadgeStyle(agreementPct))
             badgeEnd = doc.length
         } else if (!segment.draft && segment.verificationState == VerificationState.UNVERIFIED) {
             doc.insertString(doc.length, "  ", null)
@@ -657,6 +659,12 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
         }
     }
 
+    private fun isStripeOnLeft(source: AudioSource, chatLayout: Boolean, rtlLayout: Boolean): Boolean {
+        if (!chatLayout) return true
+        val isMe = source == AudioSource.MICROPHONE
+        return if (!rtlLayout) isMe else !isMe
+    }
+
     private fun alignParagraph(
         doc: StyledDocument,
         start: Int,
@@ -669,12 +677,8 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
     ): Int {
         val rtl = isRtlText(text)
         val alignment = if (rtl) StyleConstants.ALIGN_RIGHT else StyleConstants.ALIGN_LEFT
-        val isLeftCard = if (!rtlLayout) source == AudioSource.MICROPHONE else source == AudioSource.SYSTEM
-        val sideIndent = if (chatLayout) (totalWidth * 0.14f).coerceAtLeast(24f) else 0f
         val attributes = SimpleAttributeSet().apply {
             StyleConstants.setAlignment(this, alignment)
-            StyleConstants.setLeftIndent(this, if (chatLayout && !isLeftCard) sideIndent else 0f)
-            StyleConstants.setRightIndent(this, if (chatLayout && isLeftCard) sideIndent else 0f)
             StyleConstants.setSpaceBelow(this, 3f)
         }
         doc.setParagraphAttributes(start, length.coerceAtLeast(1), attributes, false)
@@ -716,10 +720,15 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
         StyleConstants.setBackground(this, correctedHighlightColor())
     }
 
-    private fun verifiedBadgeStyle() = SimpleAttributeSet().apply {
+    private fun verifiedBadgeStyle(agreementPct: Int?) = SimpleAttributeSet().apply {
         StyleConstants.setBold(this, true)
         StyleConstants.setFontSize(this, (stampPane.font.size - 3).coerceAtLeast(10))
-        StyleConstants.setForeground(this, UIManager.getColor("Actions.Green") ?: Color(0x59A869))
+        val color = if (agreementPct != null && agreementPct < 60) {
+            UIManager.getColor("Actions.Yellow") ?: Color(0xE09B2D)
+        } else {
+            UIManager.getColor("Actions.Green") ?: Color(0x59A869)
+        }
+        StyleConstants.setForeground(this, color)
     }
 
     private fun unverifiedBadgeStyle() = SimpleAttributeSet().apply {
