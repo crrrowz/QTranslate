@@ -278,8 +278,6 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
         val pointer = pointerPosition ?: runCatching { mousePosition }.getOrNull()
         val anchor = captureScrollAnchor()
-        val anchorSegmentId = anchor?.segmentId
-        val anchorYOffset = anchor?.yOffsetInViewport
 
         // Selection preservation
         val selStart = selectionStart
@@ -413,16 +411,14 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             isProgrammaticScroll = true
             try {
                 if (scrollPane != null) {
-                    runCatching {
-                        val vpSize = viewport?.extentSize?.takeIf { it.width > 0 && it.height > 0 } ?: scrollPane.size
-                        if (vpSize.width > 0) {
-                            val pref = preferredSize
-                            setSize(vpSize.width, maxOf(vpSize.height, pref.height))
-                        }
-                        doLayout()
-                        scrollPane.doLayout()
-                        viewport?.doLayout()
+                    val vpSize = viewport?.extentSize?.takeIf { it.width > 0 && it.height > 0 } ?: scrollPane.size
+                    if (vpSize.width > 0) {
+                        val pref = preferredSize
+                        setSize(vpSize.width, maxOf(vpSize.height, pref.height))
                     }
+                    doLayout()
+                    scrollPane.doLayout()
+                    viewport?.doLayout()
                 } else if (width > 0 && height > 0) {
                     doLayout()
                 }
@@ -439,23 +435,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
                         if (viewport != null) viewport.viewPosition = Point(viewport.viewPosition.x, bottomY)
                         scrollBar.value = scrollBar.maximum
                     }
-                } else if (anchorSegmentId != null && anchorYOffset != null) {
-                    val newSpan = built.firstOrNull { it.segment.id == anchorSegmentId }
-                    if (newSpan != null) {
-                        val newBounds = runCatching { modelToView2D(newSpan.playStart) }.getOrNull()
-                        if (newBounds != null) {
-                            val maxScroll = if (viewport != null && viewport.extentSize.height > 0) {
-                                (height - viewport.extentSize.height).coerceAtLeast(0)
-                            } else if (scrollBar != null && scrollBar.maximum > 0) {
-                                (scrollBar.maximum - scrollBar.visibleAmount).coerceAtLeast(0)
-                            } else Int.MAX_VALUE
-                            val targetY = kotlin.math.round(newBounds.y - anchorYOffset).toInt().coerceIn(0, maxScroll)
-                            if (viewport != null) {
-                                viewport.viewPosition = Point(viewport.viewPosition.x, targetY)
-                            }
-                            scrollBar?.value = targetY
-                        }
-                    }
+                } else if (anchor != null) {
+                    restoreScrollAnchor(anchor)
                 }
             } finally {
                 isProgrammaticScroll = false
@@ -661,8 +642,15 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
     data class ScrollAnchor(
         val segmentId: String,
-        val yOffsetInViewport: Double
+        val yOffsetInViewport: Double,
+        val yInAncestor: Double = yOffsetInViewport,
+        val pointerOffsetInCard: Double? = null
     )
+
+    private fun stableAnchorAncestor(scrollPane: JScrollPane): java.awt.Component {
+        val parent = scrollPane.parent ?: return scrollPane
+        return if (parent is TranscriptOverlayPane) parent.parent ?: parent else parent
+    }
 
     fun captureScrollAnchor(): ScrollAnchor? {
         val scrollPane = (parent?.parent as? JScrollPane)
@@ -682,7 +670,19 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val anchorSpan = pointerSpan ?: firstVisibleSpan ?: return null
         val anchorSegmentId = anchorSpan.segment.id
         val anchorOldBounds = runCatching { modelToView2D(anchorSpan.playStart) }.getOrNull() ?: return null
-        return ScrollAnchor(anchorSegmentId, anchorOldBounds.y - currentScrollY)
+        val yOffsetInViewport = anchorOldBounds.y - currentScrollY
+        val viewportYInAncestor = if (scrollPane != null && viewport != null) {
+            SwingUtilities.convertPoint(viewport, 0, 0, stableAnchorAncestor(scrollPane)).y.toDouble()
+        } else 0.0
+        val pointerOffsetInCard = if (pointerSpan != null && pointer != null) {
+            pointer.y - anchorOldBounds.y
+        } else null
+        return ScrollAnchor(
+            segmentId = anchorSegmentId,
+            yOffsetInViewport = yOffsetInViewport,
+            yInAncestor = viewportYInAncestor + yOffsetInViewport,
+            pointerOffsetInCard = pointerOffsetInCard
+        )
     }
 
     fun restoreScrollAnchor(anchor: ScrollAnchor?) {
@@ -694,6 +694,11 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val span = spans.firstOrNull { it.segment.id == anchor.segmentId } ?: return
         val bounds = runCatching { modelToView2D(span.playStart) }.getOrNull() ?: return
 
+        val viewportYInAncestor = if (viewport != null) {
+            SwingUtilities.convertPoint(viewport, 0, 0, stableAnchorAncestor(scrollPane)).y.toDouble()
+        } else 0.0
+        val desiredOffsetInViewport = anchor.yInAncestor - viewportYInAncestor
+
         isProgrammaticScroll = true
         try {
             val maxScroll = if (viewport != null && viewport.extentSize.height > 0) {
@@ -701,11 +706,18 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             } else if (scrollBar != null && scrollBar.maximum > 0) {
                 (scrollBar.maximum - scrollBar.visibleAmount).coerceAtLeast(0)
             } else Int.MAX_VALUE
-            val targetY = kotlin.math.round(bounds.y - anchor.yOffsetInViewport).toInt().coerceIn(0, maxScroll)
+            val targetY = kotlin.math.round(bounds.y - desiredOffsetInViewport).toInt().coerceIn(0, maxScroll)
             if (viewport != null) {
                 viewport.viewPosition = Point(viewport.viewPosition.x, targetY)
             }
             scrollBar?.value = targetY
+            val currentPointer = pointerPosition
+            if (currentPointer != null && anchor.pointerOffsetInCard != null) {
+                pointerPosition = Point(
+                    currentPointer.x,
+                    kotlin.math.round(bounds.y + anchor.pointerOffsetInCard).toInt()
+                )
+            }
         } finally {
             isProgrammaticScroll = false
         }
