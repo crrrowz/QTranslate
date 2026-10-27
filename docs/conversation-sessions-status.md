@@ -68,3 +68,29 @@ QTranslate صار عنده صفحة **Conversation Sessions** تسجّل مكا�
 5. [x] **إصلاح خطأ System Services OCR على Windows:** منجز ومختبر.
 6. [x] **حل تشوه واجهة المستخدم (Direct3D):** تم تضمين التعطيل الافتراضي لـ Direct3D في `AppUiSetup` على Windows.
 7. [x] **دليل بناء وتشغيل نسخة ويندوز المستقلة (.exe):** تم التوليد والتوثيق واختبار `assemblePortable`.
+
+## 5. Transcript stability and verification (`fix/transcript-stability`)
+
+تم تنفيذ معالجة شاملة من 10 خطوات (كل خطوة بكومنت مستقل ومختبر) لحل مشاكل تحرك البطاقات تحت الماوس، وتداخل الكلام المتزامن من المتحدثين، والتحقق الصادق من دقة النص الصوتي:
+
+1. **`315b625` — `feat(conversation): freeze transcript rendering across reading zone with 900ms grace period`**
+   - تجميد تحديثات منطقة البطاقات بالكامل بمجرد وجود الماوس داخل نافذة النص (`RenderGate`)، مع مهلة سماح `900 ms` بعد خروج الماوس، واستمرار عمل شريط التحديثات المعلقة القابل للنقر.
+2. **`1941f3e` — `feat(conversation): anchor card under pointer to exact on-screen Y across transcript renders`**
+   - تثبيت البطاقة التي يقع عليها المؤشر على نفس الإحداثي الرأسي `Y` بالبكسل على الشاشة عند إضافة بطاقات جديدة في وضعي الأحدث بالأعلى والأقدم بالأعلى.
+3. **`a9229e2` — `feat(conversation): add honest VerificationState (LIVE, VERIFIED, CORRECTED, UNVERIFIED)`**
+   - إضافة حالات التحقق الصادقة (`LIVE`, `VERIFIED`, `CORRECTED`, `UNVERIFIED`) وإلغاء الاعتماد الوهمي على طاقة الصوت `RMS` عند غياب المزود الدقيق أو فشله.
+4. **`b8430f8` — `feat(conversation): cut rolling verification at word pause boundaries with 500ms overlap filtering`**
+   - قطع مقاطع التحقق الدوري عند فجوات التوقف بين الكلمات (`>= 150 ms`) الأقرب لنافذة `4.5–6 s` (`VerificationSlicer`) مع إرسال `500 ms` سياق متداخل وتصفية الكلمات المتداخلة زمنياً.
+5. **`ccfaf0b` — `feat(conversation): add word-level edit distance aligner with Arabic normalization and agreement score`**
+   - محاذاة الكلمات بالمسافة التحريرية (`WordAlignment`) مع تطبيع النص العربي (حذف التطويل والتشكيل وتوحيد الألف والياء والتاء المربوطة) وحساب نسبة التطابق `agreement`.
+6. **`8eaae57` — `feat(conversation): show verification state, 3s correction highlight fade, and accuracy badge`**
+   - عرض شارة التحقق ونسبة الدقة (`✓ 92%`) مع تلميح مترجم، وتمييز الكلمات المصححة بإضاءة ناعمة تتلاشى بعد `3 s`، وخط منقط للنصوص غير المدققة.
+7. **`b500543` — `feat(speech): add word confidence to RecognizedWord/TranscriptWord and underline low-confidence live words`**
+   - إضافة `confidence: Double? = null` إلى `RecognizedWord` (ورفع إصدار `ApiVersion` إلى `2.3.0`) وإلى `TranscriptWord`، واستخراجها من Vosk و Deepgram، ووضع خط خفيف تحت الكلمات المباشرة ذات الثقة الأقل من `0.6`.
+8. **`be9085c` — `feat(conversation): add fixed 2-speaker LiveSlotsPanel and RTL-aware chat layout`**
+   - فصل العرض المباشر في منطقة ثابتة بخانتين دائمتين (`LiveSlotsPanel`: خانة "أنا" وخانة "المكالمة") بارتفاع مستقر، وإضافة خيار تخطيط المحادثة (`chatLayout`) المتوافق مع `RTL`.
+9. **`95f921e` — `feat(conversation): order archive by settle time and restrict coalescing to last archive card`**
+   - ترتيب بطاقات الأرشيف حسب وقت الاستقرار (`settledAtMillis`) بحيث لا تتحرك البطاقات المنشأة أبداً، وحصر دمج المقاطع المتتالية (`coalescing`) في البطاقة الأخيرة فقط.
+10. **`25c087c` — `feat(conversation): add 250ms partial render throttling, incremental card updates, and 150ms fade-in`**
+    - تهدئة معدل الرسم (`<= 1` تحديث جزئي كل `250 ms` مع تمرير فوري للمقاطع المستقرة)، والتحديث الجزئي لنطاق البطاقة المتغيرة فقط دون مسح المستند بالكامل، مع ظهور تدريجي ناعم (`150 ms`) للبطاقات الجديدة.
+    - إجمالي نتائج الاختبارات الفعلي من ملفات XML (`*/build/test-results/test/*.xml`): **1,576 اختباراً (1,570 ناجح، 6 متخطى، 0 فشل، 0 أخطاء)**.
