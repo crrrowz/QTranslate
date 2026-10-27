@@ -100,4 +100,8 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val actionRetrySegment = localizer.getString("conversation.action_retry_segment")
     val actionDeleteMessage = localizer.getString("conversation.action_delete_message")
     fun updatesPaused(count: Int) = localizer.getString("conversation.updates_paused", count)
+    fun verifiedBadge(percent: Int) = localizer.getString("conversation.verified_badge", percent)
+    fun verifiedBadgeTooltip(percent: Int) = localizer.getString("conversation.verified_badge_tooltip", percent)
+    val unverifiedBadge = localizer.getString("conversation.unverified_badge")
+    val unverifiedBadgeTooltip = localizer.getString("conversation.unverified_badge_tooltip")
 }

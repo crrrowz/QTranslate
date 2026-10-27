@@ -4,13 +4,18 @@ import com.github.ahatem.qtranslate.api.core.Logger
 import com.github.ahatem.qtranslate.core.conversation.AudioSource
 import com.github.ahatem.qtranslate.core.conversation.ConversationSession
 import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
+import com.github.ahatem.qtranslate.core.conversation.TranscriptWord
+import com.github.ahatem.qtranslate.core.conversation.VerificationState
 import com.github.ahatem.qtranslate.core.localization.LanguageTomlParser
 import com.github.ahatem.qtranslate.core.localization.LocalizationManager
 import org.junit.jupiter.api.Test
 import java.awt.Point
 import java.nio.file.Files
 import javax.swing.JScrollPane
+import javax.swing.text.StyleConstants
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -195,5 +200,81 @@ class TranscriptViewTest {
         val screenYAfter = kotlin.math.round(docPosAfter.y - scrollPane.viewport.viewPosition.y).toInt()
 
         assertEquals(screenYBefore, screenYAfter, "Anchored card under pointer must stay at the exact same on-screen Y")
+    }
+
+    @Test
+    fun `render displays verification state styles, accuracy badge tooltip, and fades corrected highlight after 3s`() {
+        val s = strings()
+        val view = TranscriptView(s)
+        var now = 10_000L
+        view.clock = { now }
+        view.newestFirst = false
+        view.setSize(600, 400)
+
+        val segVerified = TranscriptSegment(
+            id = "seg-v",
+            source = AudioSource.MICROPHONE,
+            startMillis = 1000L,
+            endMillis = 3000L,
+            text = "hello world",
+            words = listOf(
+                TranscriptWord("hello", 1000L, 1800L, VerificationState.VERIFIED),
+                TranscriptWord("world", 1900L, 2800L, VerificationState.CORRECTED)
+            ),
+            verificationState = VerificationState.CORRECTED,
+            agreement = 0.92
+        )
+        val segUnverified = TranscriptSegment(
+            id = "seg-u",
+            source = AudioSource.SYSTEM,
+            startMillis = 4000L,
+            endMillis = 6000L,
+            text = "unverified line",
+            verificationState = VerificationState.UNVERIFIED
+        )
+
+        val session = ConversationSession(
+            id = "s",
+            title = "T",
+            createdAt = 0L,
+            segments = listOf(segVerified, segUnverified)
+        )
+        view.render(session)
+
+        val doc = view.styledDocument
+        val fullText = doc.getText(0, doc.length)
+        assertTrue(fullText.contains("✓ 92%"), "Verified header should include ✓ 92% badge")
+
+        val spanV = view.spans[0]
+        assertTrue(spanV.badgeEnd > spanV.badgeStart)
+        assertEquals(
+            s.verifiedBadgeTooltip(92),
+            view.tooltipForHit(TranscriptView.Hit.VerificationBadge(spanV))
+        )
+
+        // Word "world" is CORRECTED and should initially have a soft highlight background
+        val worldRange = spanV.words[1].first
+        val attrsBeforeFade = doc.getCharacterElement(worldRange.first).attributes
+        assertEquals(view.correctedHighlightColor(), StyleConstants.getBackground(attrsBeforeFade))
+        assertFalse(StyleConstants.isItalic(attrsBeforeFade))
+
+        // Advance clock past 3 seconds and trigger fade check
+        now += 3_500L
+        view.checkCorrectionHighlightFade()
+        val spanVAfter = view.spans[0]
+        val worldRangeAfter = spanVAfter.words[1].first
+        val attrsAfterFade = doc.getCharacterElement(worldRangeAfter.first).attributes
+        assertNotEquals(view.correctedHighlightColor(), StyleConstants.getBackground(attrsAfterFade))
+
+        // Unverified segment has unverified tooltip on both badge and text
+        val spanU = view.spans[1]
+        assertEquals(
+            s.unverifiedBadgeTooltip,
+            view.tooltipForHit(TranscriptView.Hit.VerificationBadge(spanU))
+        )
+        assertEquals(
+            s.unverifiedBadgeTooltip,
+            view.tooltipForHit(TranscriptView.Hit.Text(spanU, spanU.textStart + 1))
+        )
     }
 }

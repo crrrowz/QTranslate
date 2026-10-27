@@ -4,6 +4,7 @@ import com.github.ahatem.qtranslate.core.conversation.AudioSource
 import com.github.ahatem.qtranslate.core.conversation.ConversationSession
 import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
 import com.github.ahatem.qtranslate.core.conversation.TranscriptWord
+import com.github.ahatem.qtranslate.core.conversation.VerificationState
 import com.github.ahatem.qtranslate.core.conversation.formatTimestamp
 import java.awt.BasicStroke
 import java.awt.Color
@@ -22,6 +23,7 @@ import com.github.ahatem.qtranslate.ui.swing.shared.icon.Icons
 import javax.swing.JScrollPane
 import javax.swing.JTextPane
 import javax.swing.SwingUtilities
+import javax.swing.Timer
 import javax.swing.UIManager
 import javax.swing.text.DefaultCaret
 import javax.swing.text.SimpleAttributeSet
@@ -51,7 +53,9 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val textStart: Int,
         val textEnd: Int,
         /** Recognised words with their character ranges, for replaying a single word. */
-        val words: List<Pair<IntRange, TranscriptWord>>
+        val words: List<Pair<IntRange, TranscriptWord>>,
+        val badgeStart: Int = headerEnd,
+        val badgeEnd: Int = headerEnd
     )
 
     sealed interface Hit {
@@ -60,12 +64,21 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         data class PlayButton(override val span: SegmentSpan) : Hit
         data class RetryButton(override val span: SegmentSpan) : Hit
         data class DeleteButton(override val span: SegmentSpan) : Hit
+        data class VerificationBadge(override val span: SegmentSpan) : Hit
         data class Header(override val span: SegmentSpan) : Hit
         data class Text(override val span: SegmentSpan, val offset: Int) : Hit
     }
 
     var spans: List<SegmentSpan> = emptyList()
         private set
+
+    /** Injectable clock for deterministic testing of correction highlight fade-out. */
+    var clock: () -> Long = System::currentTimeMillis
+
+    private val correctedFirstSeenMillis = mutableMapOf<String, Long>()
+    private val correctionFadeTimer = Timer(250) { checkCorrectionHighlightFade() }.apply {
+        isRepeats = true
+    }
 
     /** True while TranscriptView is adjusting scroll position programmatically (to prevent dismissing popups). */
     var isProgrammaticScroll: Boolean = false
@@ -209,6 +222,9 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             doc.insertString(0, strings.emptyHint, muted(italic = true))
         }
 
+        val now = clock()
+        var anyActiveCorrectionHighlight = false
+
         segments.forEach { segment ->
             if (doc.length > 0) doc.insertString(doc.length, "\n\n", null)
 
@@ -225,6 +241,24 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             val speaker = if (segment.source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
             doc.insertString(doc.length, "${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
             val headerEnd = doc.length
+
+            var badgeStart = doc.length
+            var badgeEnd = badgeStart
+            val agreementPct = segment.agreement?.let { kotlin.math.round(it * 100.0).toInt().coerceIn(0, 100) }
+            if (agreementPct != null && (segment.verificationState == VerificationState.VERIFIED ||
+                    segment.verificationState == VerificationState.CORRECTED ||
+                    segment.confirmedText.isNotBlank())
+            ) {
+                doc.insertString(doc.length, "  ", null)
+                badgeStart = doc.length
+                doc.insertString(doc.length, strings.verifiedBadge(agreementPct), verifiedBadgeStyle())
+                badgeEnd = doc.length
+            } else if (!segment.draft && segment.verificationState == VerificationState.UNVERIFIED) {
+                doc.insertString(doc.length, "  ", null)
+                badgeStart = doc.length
+                doc.insertString(doc.length, strings.unverifiedBadge, unverifiedBadgeStyle())
+                badgeEnd = doc.length
+            }
 
             val isLiveDraft = segment.id.startsWith("live-")
             var retryStart = doc.length
@@ -269,23 +303,63 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
                         else -> segment.text
                     }
                     if (confirmed.isNotBlank()) {
-                        doc.insertString(doc.length, confirmed, body())
+                        val confirmedAttr = when (segment.verificationState) {
+                            VerificationState.UNVERIFIED -> muted(italic = false)
+                            else -> body()
+                        }
+                        doc.insertString(doc.length, confirmed, confirmedAttr)
                         if (liveTail.isNotBlank()) {
                             doc.insertString(doc.length, " ", null)
                         }
                     }
                     if (liveTail.isNotBlank()) {
-                        doc.insertString(doc.length, liveTail, body().apply {
-                            StyleConstants.setItalic(this, true)
-                            StyleConstants.setForeground(this, sourceColor(segment.source))
-                        })
+                        doc.insertString(doc.length, liveTail, muted(italic = true))
                     }
                 }
                 else -> {
-                    doc.insertString(doc.length, segment.text, body())
+                    val baseAttr = when (segment.verificationState) {
+                        VerificationState.LIVE -> muted(italic = true)
+                        VerificationState.UNVERIFIED -> muted(italic = false)
+                        VerificationState.VERIFIED, VerificationState.CORRECTED -> body()
+                    }
+                    doc.insertString(doc.length, segment.text, baseAttr)
                 }
             }
             val textEnd = doc.length
+            val wordSpans = if (segment.pending || segment.failed) emptyList() else locateWords(segment, textStart)
+            wordSpans.forEach { (range, word) ->
+                val len = range.last - range.first + 1
+                if (len <= 0) return@forEach
+                when (word.verificationState) {
+                    VerificationState.CORRECTED -> {
+                        val key = "${segment.id}:${range.first - textStart}:${word.text}"
+                        val firstSeen = correctedFirstSeenMillis.getOrPut(key) { now }
+                        if (now - firstSeen < CORRECTION_HIGHLIGHT_MS) {
+                            doc.setCharacterAttributes(range.first, len, correctedStyle(), false)
+                            anyActiveCorrectionHighlight = true
+                        } else {
+                            doc.setCharacterAttributes(range.first, len, body(), false)
+                        }
+                    }
+                    VerificationState.UNVERIFIED -> {
+                        doc.setCharacterAttributes(range.first, len, muted(italic = false), false)
+                    }
+                    VerificationState.LIVE -> {
+                        doc.setCharacterAttributes(range.first, len, muted(italic = true), false)
+                    }
+                    VerificationState.VERIFIED -> {
+                        doc.setCharacterAttributes(range.first, len, body(), false)
+                    }
+                }
+            }
+            if (wordSpans.isEmpty() && segment.verificationState == VerificationState.CORRECTED && textEnd > textStart) {
+                val key = "${segment.id}:segment"
+                val firstSeen = correctedFirstSeenMillis.getOrPut(key) { now }
+                if (now - firstSeen < CORRECTION_HIGHLIGHT_MS) {
+                    doc.setCharacterAttributes(textStart, textEnd - textStart, correctedStyle(), false)
+                    anyActiveCorrectionHighlight = true
+                }
+            }
             // Header and text together: a paragraph inserted after an Arabic line would otherwise
             // inherit its right alignment, header included.
             alignParagraph(doc, playStart, textEnd - playStart, segment.text)
@@ -293,10 +367,16 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             built += SegmentSpan(
                 segment, playStart, playEnd, headerStart, headerEnd,
                 retryStart, retryEnd, deleteStart, deleteEnd, textStart, textEnd,
-                if (segment.pending || segment.failed) emptyList() else locateWords(segment, textStart)
+                wordSpans, badgeStart, badgeEnd
             )
         }
         spans = built
+
+        if (anyActiveCorrectionHighlight && isShowing) {
+            if (!correctionFadeTimer.isRunning) correctionFadeTimer.start()
+        } else {
+            if (correctionFadeTimer.isRunning) correctionFadeTimer.stop()
+        }
 
         fun applyScrollAndSelectionRestore() {
             isProgrammaticScroll = true
@@ -362,7 +442,9 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
 
         applyScrollAndSelectionRestore()
-        SwingUtilities.invokeLater { applyScrollAndSelectionRestore() }
+        if (isShowing && SwingUtilities.isEventDispatchThread()) {
+            SwingUtilities.invokeLater { applyScrollAndSelectionRestore() }
+        }
     }
 
     override fun paintComponent(g: Graphics) {
@@ -419,6 +501,44 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
         g2.dispose()
         super.paintComponent(g)
+
+        // Subtle dotted underline under UNVERIFIED ranges
+        val gAfter = g.create() as Graphics2D
+        try {
+            gAfter.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            gAfter.color = UIManager.getColor("Label.disabledForeground") ?: Color.GRAY
+            gAfter.stroke = BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 1f, floatArrayOf(2f, 2f), 0f)
+            spans.forEach { span ->
+                if (span.words.isNotEmpty()) {
+                    span.words.forEach { (range, word) ->
+                        if (word.verificationState == VerificationState.UNVERIFIED) {
+                            boundsOf(range)?.let { box ->
+                                val yLine = box.y + box.height - 2
+                                gAfter.drawLine(box.x, yLine, box.x + box.width, yLine)
+                            }
+                        }
+                    }
+                } else if (!span.segment.draft && span.segment.verificationState == VerificationState.UNVERIFIED && span.textEnd > span.textStart) {
+                    boundsOf(span.textStart until span.textEnd)?.let { box ->
+                        val yLine = box.y + box.height - 2
+                        gAfter.drawLine(box.x, yLine, box.x + box.width, yLine)
+                    }
+                }
+            }
+        } finally {
+            gAfter.dispose()
+        }
+    }
+
+    /** Re-evaluates active correction highlights and triggers a re-render when any expires. */
+    fun checkCorrectionHighlightFade() {
+        val now = clock()
+        val anyStillActive = correctedFirstSeenMillis.values.any { now - it < CORRECTION_HIGHLIGHT_MS }
+        renderedKey = null
+        render(currentSession)
+        if (!anyStillActive && correctionFadeTimer.isRunning) {
+            correctionFadeTimer.stop()
+        }
     }
 
     private fun isDark(color: Color): Boolean =
@@ -447,6 +567,11 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val playBox = boundsOf(span.playStart until span.playEnd)
         if (playBox != null && playBox.grow(4).contains(point)) return Hit.PlayButton(span)
 
+        if (span.badgeEnd > span.badgeStart) {
+            val badgeBox = boundsOf(span.badgeStart until span.badgeEnd)
+            if (badgeBox != null && badgeBox.grow(4).contains(point)) return Hit.VerificationBadge(span)
+        }
+
         val retryBox = boundsOf(span.retryStart until span.retryEnd)
         if (retryBox != null && retryBox.grow(4).contains(point)) return Hit.RetryButton(span)
 
@@ -460,11 +585,36 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
         return when {
             offset in span.playStart until span.playEnd -> Hit.PlayButton(span)
+            offset in span.badgeStart until span.badgeEnd -> Hit.VerificationBadge(span)
             offset in span.retryStart until span.retryEnd -> Hit.RetryButton(span)
             offset in span.deleteStart until span.deleteEnd -> Hit.DeleteButton(span)
             offset < span.headerEnd -> Hit.Header(span)
             else -> Hit.Text(span, offset)
         }
+    }
+
+    /** Localized tooltip text for [hit], including verification badge and unverified segment explanations. */
+    fun tooltipForHit(hit: Hit?): String? = when (hit) {
+        is Hit.PlayButton -> strings.actionPlayAudio
+        is Hit.RetryButton -> strings.actionRetrySegment
+        is Hit.DeleteButton -> strings.actionDeleteMessage
+        is Hit.VerificationBadge -> {
+            val seg = hit.span.segment
+            val pct = seg.agreement?.let { kotlin.math.round(it * 100.0).toInt().coerceIn(0, 100) }
+            if (pct != null && seg.verificationState != VerificationState.UNVERIFIED) {
+                strings.verifiedBadgeTooltip(pct)
+            } else {
+                strings.unverifiedBadgeTooltip
+            }
+        }
+        is Hit.Text -> {
+            val seg = hit.span.segment
+            val word = wordRangeAt(hit.span, hit.offset)?.let { timedWordAt(hit.span, it) }
+            if (seg.verificationState == VerificationState.UNVERIFIED || word?.verificationState == VerificationState.UNVERIFIED) {
+                strings.unverifiedBadgeTooltip
+            } else null
+        }
+        else -> null
     }
 
     /** The word around [offset] inside [span], as a document range, or null on spaces and punctuation. */
@@ -537,6 +687,30 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
     private fun body() = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, UIManager.getColor("TextPane.foreground") ?: foreground)
+        StyleConstants.setItalic(this, false)
+    }
+
+    private fun correctedStyle() = SimpleAttributeSet().apply {
+        StyleConstants.setForeground(this, UIManager.getColor("TextPane.foreground") ?: foreground)
+        StyleConstants.setItalic(this, false)
+        StyleConstants.setBackground(this, correctedHighlightColor())
+    }
+
+    fun correctedHighlightColor(): Color {
+        val bg = UIManager.getColor("TextPane.background") ?: background ?: Color(0x1e1e1e)
+        return if (isDark(bg)) Color(85, 70, 22) else Color(255, 240, 175)
+    }
+
+    private fun verifiedBadgeStyle() = SimpleAttributeSet().apply {
+        StyleConstants.setBold(this, true)
+        StyleConstants.setFontSize(this, (font.size - 3).coerceAtLeast(10))
+        StyleConstants.setForeground(this, UIManager.getColor("Actions.Green") ?: Color(0x59A869))
+    }
+
+    private fun unverifiedBadgeStyle() = SimpleAttributeSet().apply {
+        StyleConstants.setItalic(this, false)
+        StyleConstants.setFontSize(this, (font.size - 3).coerceAtLeast(10))
+        StyleConstants.setForeground(this, UIManager.getColor("Label.disabledForeground") ?: Color.GRAY)
     }
 
     private fun muted(italic: Boolean) = SimpleAttributeSet().apply {
@@ -568,6 +742,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     companion object {
+        const val CORRECTION_HIGHLIGHT_MS = 3_000L
+
         /** One colour per source, from the theme's action palette so it suits light and dark. */
         fun sourceColor(source: AudioSource): Color = when (source) {
             AudioSource.MICROPHONE -> UIManager.getColor("Actions.Blue") ?: Color(0x389FD6)

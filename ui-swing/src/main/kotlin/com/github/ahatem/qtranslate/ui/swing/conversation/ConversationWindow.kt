@@ -1101,12 +1101,7 @@ class ConversationWindow(
         val hit = transcript.hitTest(e.point)
         hoverCard = hit != null
         transcript.updateCursor(hit)
-        transcript.toolTipText = when (hit) {
-            is TranscriptView.Hit.PlayButton -> strings.actionPlayAudio
-            is TranscriptView.Hit.RetryButton -> strings.actionRetrySegment
-            is TranscriptView.Hit.DeleteButton -> strings.actionDeleteMessage
-            else -> null
-        }
+        transcript.toolTipText = transcript.tooltipForHit(hit)
         // A selection owns the card until it is cleared.
         if (transcript.selectionStart != transcript.selectionEnd) return
 
@@ -1129,6 +1124,7 @@ class ConversationWindow(
             is TranscriptView.Hit.PlayButton -> playRange(hit.span.segment, hit.span.segment.startMillis, hit.span.segment.endMillis)
             is TranscriptView.Hit.RetryButton -> retry(hit.span.segment)
             is TranscriptView.Hit.DeleteButton -> deleteSingleSegment(hit.span.segment)
+            is TranscriptView.Hit.VerificationBadge -> Unit
             is TranscriptView.Hit.Header -> Unit // Clicking speaker label or timestamp does not trigger playback
             is TranscriptView.Hit.Text -> if (hit.span.segment.failed) retry(hit.span.segment)
             null -> Unit
