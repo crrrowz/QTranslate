@@ -85,7 +85,9 @@ data class TranscriptSegment(
     val draft: Boolean = false,
     val confirmedText: String = "",
     val confirmedWords: List<TranscriptWord> = emptyList(),
-    val verificationState: VerificationState = VerificationState.LIVE
+    val verificationState: VerificationState = VerificationState.LIVE,
+    /** Word-level agreement ratio (0.0..1.0) between live text and accurate verification, when checked. */
+    val agreement: Double? = null
 )
 
 const val COALESCE_PAUSE_THRESHOLD_MILLIS = 2_000L

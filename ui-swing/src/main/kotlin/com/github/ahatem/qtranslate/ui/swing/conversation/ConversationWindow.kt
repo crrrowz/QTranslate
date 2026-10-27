@@ -763,7 +763,8 @@ class ConversationWindow(
                         words = line.confirmedWords,
                         draft = true,
                         confirmedText = line.confirmedText,
-                        verificationState = line.verificationState
+                        verificationState = line.verificationState,
+                        agreement = line.agreement
                     )
                 }
             }

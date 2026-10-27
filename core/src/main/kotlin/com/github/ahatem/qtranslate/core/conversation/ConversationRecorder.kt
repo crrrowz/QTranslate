@@ -60,7 +60,8 @@ data class LiveLine(
     val text: String,
     val confirmedText: String = "",
     val confirmedWords: List<TranscriptWord> = emptyList(),
-    val verificationState: VerificationState = VerificationState.LIVE
+    val verificationState: VerificationState = VerificationState.LIVE,
+    val agreement: Double? = null
 ) {
     val liveText: String
         get() = when {
@@ -472,6 +473,11 @@ class ConversationRecorder(
         /** Honest verification state of the ongoing utterance's checked prefix. */
         @Volatile
         private var liveVerificationState: VerificationState = VerificationState.LIVE
+        @Volatile
+        private var liveAgreement: Double? = null
+        private var matchedWordsTotal: Int = 0
+        private var liveWordsCheckedTotal: Int = 0
+        private var accurateWordsCheckedTotal: Int = 0
         /** In-flight rolling verification job. */
         private var verificationJob: Job? = null
 
@@ -518,14 +524,23 @@ class ConversationRecorder(
                             // The accurate recognizer heard no speech where the live one guessed words.
                             updateSession { s -> s.copy(segments = s.segments.filterNot { it.id == placeholder.id }) }
                         } else {
-                            val vState = if (outcome.segment.text.trim().equals(placeholder.text.trim(), ignoreCase = true)) {
-                                VerificationState.VERIFIED
-                            } else {
-                                VerificationState.CORRECTED
-                            }
-                            val updatedWords = outcome.segment.words.map { it.copy(verificationState = vState) }
+                            val aligned = WordAlignment.align(
+                                liveText = placeholder.text,
+                                accurateText = outcome.segment.text,
+                                accurateWords = outcome.segment.words,
+                                defaultStartMillis = placeholder.startMillis,
+                                defaultEndMillis = placeholder.endMillis
+                            )
                             updateSession {
-                                applySegment(it, outcome.segment.copy(verificationState = vState, words = updatedWords))
+                                applySegment(
+                                    it,
+                                    outcome.segment.copy(
+                                        text = outcome.segment.text.trim(),
+                                        words = aligned.words,
+                                        verificationState = aligned.state,
+                                        agreement = aligned.agreement
+                                    )
+                                )
                             }
                         }
                     // Live text alone is a legitimate setup, not an error, but remains honestly UNVERIFIED.
@@ -934,19 +949,26 @@ class ConversationRecorder(
                                                 outcome.segment.text.trim() to outcome.segment.words
                                             }
                                             if (filteredText.isNotBlank()) {
+                                                val aligned = WordAlignment.align(
+                                                    liveText = sliceWordsText,
+                                                    accurateText = filteredText,
+                                                    accurateWords = filteredWords,
+                                                    defaultStartMillis = toSessionMillis(checkpointStart),
+                                                    defaultEndMillis = toSessionMillis(checkpointEnd)
+                                                )
                                                 val verified = filteredText.trim()
-                                                val sliceState = if (verified.equals(sliceWordsText.trim(), ignoreCase = true)) {
-                                                    VerificationState.VERIFIED
-                                                } else {
-                                                    VerificationState.CORRECTED
-                                                }
                                                 confirmedText = if (confirmedText.isBlank()) verified else "$confirmedText $verified"
-                                                confirmedWords = confirmedWords + filteredWords.map { it.copy(verificationState = sliceState) }
+                                                confirmedWords = confirmedWords + aligned.words
                                                 totalWordsConfirmed = wordsAtCheckpoint
-                                                liveVerificationState = if (liveVerificationState == VerificationState.CORRECTED || sliceState == VerificationState.CORRECTED) {
+                                                matchedWordsTotal += aligned.matchedCount
+                                                liveWordsCheckedTotal += aligned.liveWordCount
+                                                accurateWordsCheckedTotal += aligned.accurateWordCount
+                                                val denom = maxOf(liveWordsCheckedTotal, accurateWordsCheckedTotal)
+                                                liveAgreement = if (denom > 0) matchedWordsTotal.toDouble() / denom.toDouble() else 1.0
+                                                liveVerificationState = if (liveVerificationState == VerificationState.CORRECTED || aligned.state == VerificationState.CORRECTED) {
                                                     VerificationState.CORRECTED
                                                 } else {
-                                                    sliceState
+                                                    aligned.state
                                                 }
                                             }
                                         }
@@ -961,7 +983,7 @@ class ConversationRecorder(
                                 val latestWords = lastPartialText.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
                                 val liveTail = if (latestWords.size > totalWordsConfirmed) latestWords.drop(totalWordsConfirmed).joinToString(" ") else ""
                                 val fullText = if (confirmedText.isBlank()) lastPartialText else if (liveTail.isBlank()) confirmedText else "$confirmedText $liveTail"
-                                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(lockedStart), fullText, confirmedText, confirmedWords, liveVerificationState))) }
+                                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(lockedStart), fullText, confirmedText, confirmedWords, liveVerificationState, liveAgreement))) }
                                 }
                             }
                         }
@@ -969,7 +991,7 @@ class ConversationRecorder(
 
                     val liveTail = if (allWords.size > totalWordsConfirmed) allWords.drop(totalWordsConfirmed).joinToString(" ") else ""
                     val fullText = if (confirmedText.isBlank()) event.text else if (liveTail.isBlank()) confirmedText else "$confirmedText $liveTail"
-                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(lockedStart), fullText, confirmedText, confirmedWords, liveVerificationState))) }
+                    _state.update { it.copy(live = it.live + (source to LiveLine(toSessionMillis(lockedStart), fullText, confirmedText, confirmedWords, liveVerificationState, liveAgreement))) }
                 }
                 is LiveSpeechEvent.Final -> settle(event)
                 is LiveSpeechEvent.Failed -> {
@@ -1025,12 +1047,20 @@ class ConversationRecorder(
             val currentConfirmedWords = confirmedWords
             val currentTotalWordsConfirmed = totalWordsConfirmed
             val currentVerificationState = liveVerificationState
+            val currentAgreement = liveAgreement
+            val currentMatchedWords = matchedWordsTotal
+            val currentLiveWordsChecked = liveWordsCheckedTotal
+            val currentAccurateWordsChecked = accurateWordsCheckedTotal
 
             // Reset rolling verification state
             verifiedUpToSample = null
             confirmedText = ""
             confirmedWords = emptyList()
             liveVerificationState = VerificationState.LIVE
+            liveAgreement = null
+            matchedWordsTotal = 0
+            liveWordsCheckedTotal = 0
+            accurateWordsCheckedTotal = 0
             totalWordsConfirmed = 0
             verificationJob = null
             lastPartialText = ""
@@ -1061,7 +1091,8 @@ class ConversationRecorder(
                 words = fullWords,
                 confirmedText = currentConfirmedText,
                 draft = true,
-                verificationState = currentVerificationState
+                verificationState = currentVerificationState,
+                agreement = currentAgreement
             )
 
             val currentSession = _state.value.session
@@ -1131,31 +1162,39 @@ class ConversationRecorder(
                             )
                             val tailVerifiedText: String
                             val tailState: VerificationState
+                            val tailVerifiedWords: List<TranscriptWord>
+                            val combinedAgreement: Double?
                             when (outcome) {
                                 is SegmentTranscriber.Outcome.Done -> {
                                     if (outcome.segment.text.isNotBlank()) {
+                                        val alignedTail = WordAlignment.align(
+                                            liveText = tailLiveText,
+                                            accurateText = outcome.segment.text,
+                                            accurateWords = outcome.segment.words,
+                                            defaultStartMillis = toSessionMillis(combinedAudioStartSample),
+                                            defaultEndMillis = toSessionMillis(endSample)
+                                        )
                                         tailVerifiedText = outcome.segment.text.trim()
-                                        tailState = if (tailVerifiedText.equals(tailLiveText.trim(), ignoreCase = true)) {
-                                            VerificationState.VERIFIED
-                                        } else {
-                                            VerificationState.CORRECTED
-                                        }
+                                        tailState = alignedTail.state
+                                        tailVerifiedWords = alignedTail.words
+                                        val totMatched = currentMatchedWords + alignedTail.matchedCount
+                                        val totDenom = maxOf(currentLiveWordsChecked + alignedTail.liveWordCount, currentAccurateWordsChecked + alignedTail.accurateWordCount)
+                                        combinedAgreement = if (totDenom > 0) totMatched.toDouble() / totDenom.toDouble() else currentAgreement
                                     } else {
                                         tailVerifiedText = ""
                                         tailState = currentVerificationState
+                                        tailVerifiedWords = emptyList()
+                                        combinedAgreement = currentAgreement
                                     }
                                 }
                                 is SegmentTranscriber.Outcome.NoService,
                                 is SegmentTranscriber.Outcome.Failed -> {
                                     tailVerifiedText = tailLiveText
                                     tailState = VerificationState.UNVERIFIED
+                                    tailVerifiedWords = words.filter { it.startMillis >= toSessionMillis(combinedAudioStartSample) }
+                                        .map { it.copy(verificationState = VerificationState.UNVERIFIED) }
+                                    combinedAgreement = currentAgreement
                                 }
-                            }
-                            val tailVerifiedWords = if (outcome is SegmentTranscriber.Outcome.Done && outcome.segment.words.isNotEmpty()) {
-                                outcome.segment.words.map { it.copy(verificationState = tailState) }
-                            } else {
-                                words.filter { it.startMillis >= toSessionMillis(combinedAudioStartSample) }
-                                    .map { it.copy(verificationState = tailState) }
                             }
 
                             val stitchedText = if (currentConfirmedText.isBlank()) tailVerifiedText
@@ -1173,7 +1212,8 @@ class ConversationRecorder(
                                     text = stitchedText,
                                     words = stitchedWords,
                                     draft = false,
-                                    verificationState = finalState
+                                    verificationState = finalState,
+                                    agreement = combinedAgreement
                                 ))
                             }
                         }
