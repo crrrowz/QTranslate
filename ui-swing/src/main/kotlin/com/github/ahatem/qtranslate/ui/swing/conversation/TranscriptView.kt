@@ -96,6 +96,26 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             }
         }
 
+    /** Aligns "Me" and "Them" cards on opposite horizontal sides of the transcript view. */
+    var chatLayout: Boolean = true
+        set(value) {
+            if (field != value) {
+                field = value
+                renderedKey = null
+                render(currentSession)
+            }
+        }
+
+    /** True when the surrounding UI is in right-to-left orientation (swaps left/right sides in chat layout). */
+    var rtlLayout: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                renderedKey = null
+                render(currentSession)
+            }
+        }
+
     var currentSession: ConversationSession? = null
         private set
     private var renderedKey: Any? = null
@@ -366,7 +386,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             }
             // Header and text together: a paragraph inserted after an Arabic line would otherwise
             // inherit its right alignment, header included.
-            alignParagraph(doc, playStart, textEnd - playStart, segment.text)
+            alignParagraph(doc, playStart, textEnd - playStart, segment.text, segment.source)
 
             built += SegmentSpan(
                 segment, playStart, playEnd, headerStart, headerEnd,
@@ -485,9 +505,10 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             val cardBg = if (isLatest) latestCardBg else defaultCardBg
             val borderColor = if (isLatest) latestBorderColor else defaultBorderColor
 
-            val x = 10
+            val hBounds = cardHorizontalBounds(span.segment.source, width, chatLayout, rtlLayout)
+            val x = hBounds.first
             val y = topBox.y.toInt() - 4
-            val w = (width - 20).coerceAtLeast(100)
+            val w = (hBounds.last - hBounds.first).coerceAtLeast(100)
             val h = (bottomBox.y + bottomBox.height - topBox.y).toInt() + 8
 
             // Rounded card body
@@ -678,12 +699,16 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
     }
 
-    private fun alignParagraph(doc: StyledDocument, start: Int, length: Int, text: String) {
+    private fun alignParagraph(doc: StyledDocument, start: Int, length: Int, text: String, source: AudioSource = AudioSource.MICROPHONE) {
         val rtl = text.firstOrNull { Character.isLetter(it) }?.let {
             Character.getDirectionality(it) in setOf(Character.DIRECTIONALITY_RIGHT_TO_LEFT, Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC)
         } ?: false
+        val isLeftCard = if (!rtlLayout) source == AudioSource.MICROPHONE else source == AudioSource.SYSTEM
+        val sideIndent = if (chatLayout) ((width.takeIf { it > 0 } ?: 600) * 0.14f).coerceAtLeast(24f) else 0f
         val attributes = SimpleAttributeSet().apply {
             StyleConstants.setAlignment(this, if (rtl) StyleConstants.ALIGN_RIGHT else StyleConstants.ALIGN_LEFT)
+            StyleConstants.setLeftIndent(this, if (chatLayout && !isLeftCard) sideIndent else 0f)
+            StyleConstants.setRightIndent(this, if (chatLayout && isLeftCard) sideIndent else 0f)
             StyleConstants.setSpaceBelow(this, 3f)
         }
         doc.setParagraphAttributes(start, length.coerceAtLeast(1), attributes, false)
@@ -754,6 +779,30 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             word.verificationState == VerificationState.LIVE &&
                 word.confidence != null &&
                 word.confidence!! < LOW_CONFIDENCE_THRESHOLD
+
+        /**
+         * Horizontal pixel range (`x..(x + w)`) for a card bubble of [source] inside [totalWidth].
+         * When [chatLayout] is true, "Me" ([AudioSource.MICROPHONE]) is placed on the left (or right in [rtl])
+         * and "Them" ([AudioSource.SYSTEM]) on the opposite side.
+         */
+        fun cardHorizontalBounds(
+            source: AudioSource,
+            totalWidth: Int,
+            chatLayout: Boolean,
+            rtl: Boolean = false
+        ): IntRange {
+            val safeWidth = totalWidth.coerceAtLeast(140)
+            if (!chatLayout) {
+                val x = 10
+                val w = (safeWidth - 20).coerceAtLeast(100)
+                return x..(x + w)
+            }
+            val sideIndent = ((safeWidth - 20) * 0.14).toInt().coerceAtLeast(24)
+            val w = (safeWidth - 20 - sideIndent).coerceAtLeast(100)
+            val isLeft = if (!rtl) source == AudioSource.MICROPHONE else source == AudioSource.SYSTEM
+            val x = if (isLeft) 10 else (safeWidth - 10 - w).coerceAtLeast(10)
+            return x..(x + w)
+        }
 
         /** One colour per source, from the theme's action palette so it suits light and dark. */
         fun sourceColor(source: AudioSource): Color = when (source) {

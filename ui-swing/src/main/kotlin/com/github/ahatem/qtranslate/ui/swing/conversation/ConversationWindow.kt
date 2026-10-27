@@ -129,6 +129,7 @@ class ConversationWindow(
     private val callLanguageCombo = JComboBox<LanguageCode>()
     private val targetCombo = JComboBox<LanguageCode>()
     private val keepAudioCheck = JCheckBox(strings.keepAudio).apply { toolTipText = strings.keepAudioTooltip }
+    private val chatLayoutCheck = JCheckBox(strings.chatLayout, true).apply { toolTipText = strings.chatLayoutTooltip }
 
     private val recordButton = JButton()
     private val stopButton = JButton("■ ${strings.stop}")
@@ -165,23 +166,8 @@ class ConversationWindow(
     private val deleteButton = JButton(strings.delete)
 
     private val transcript = TranscriptView(strings)
-
-    /**
-     * What is being said right now, one line per source, while a live recognizer is in use. Kept out
-     * of the transcript document: it changes several times a second, and rebuilding the document
-     * that often would break selection and hovering.
-     */
-    private val liveLines = AudioSource.entries.associateWith { source ->
-        JLabel().apply {
-            foreground = TranscriptView.sourceColor(source)
-            border = BorderFactory.createEmptyBorder(2, 16, 2, 16)
-            font = font.deriveFont(java.awt.Font.ITALIC, font.size2D + 1f)
-        }
-    }
-    private val liveStrip = JPanel(MigLayout("fillx, wrap 1, insets 4 0 4 0, gap 0", "[grow,fill]")).apply {
-        liveLines.values.forEach { add(it, "wmin 0") }
-        isVisible = false
-    }
+    internal val liveSlotsPanel = LiveSlotsPanel(strings)
+    private val transcriptInnerPanel = JPanel(BorderLayout())
     private val micMuteButton = JButton(FlatSVGIcon(Icons.MIC, 15, 15)).apply {
         toolTipText = strings.micUnmutedTooltip
         putClientProperty("JButton.buttonType", "toolBarButton")
@@ -268,9 +254,11 @@ class ConversationWindow(
     /** Brings the window up, refreshing devices and sessions. */
     fun open() {
         if (!isVisible) {
-            applyComponentOrientation(if (isRtl()) ComponentOrientation.RIGHT_TO_LEFT else ComponentOrientation.LEFT_TO_RIGHT)
+            val rtl = isRtl()
+            applyComponentOrientation(if (rtl) ComponentOrientation.RIGHT_TO_LEFT else ComponentOrientation.LEFT_TO_RIGHT)
             // The transcript keeps its own direction per paragraph, whatever the UI language.
             transcript.componentOrientation = ComponentOrientation.LEFT_TO_RIGHT
+            transcript.rtlLayout = rtl
             loadPreferences()
             loadDevices()
             reloadSessions()
@@ -376,8 +364,9 @@ class ConversationWindow(
             add(microphoneLight, "wmin 0")
             add(systemLight, "wmin 0")
         }
-        val keepAudioRow = shrinkable(MigLayout("fillx, insets 0 12 6 12", "[grow,fill][]")).apply {
+        val keepAudioRow = shrinkable(MigLayout("fillx, insets 0 12 6 12", "[][grow,fill][]")).apply {
             add(keepAudioCheck, "wmin 0")
+            add(chatLayoutCheck, "wmin 0")
             add(orderButton)
         }
         val top = JPanel(MigLayout("fillx, wrap 1, insets 0, gap 0", "[grow,fill]")).apply {
@@ -390,9 +379,13 @@ class ConversationWindow(
             add(noticeBar)
         }
         add(top, BorderLayout.NORTH)
+        transcriptInnerPanel.apply {
+            add(liveSlotsPanel, BorderLayout.NORTH)
+            add(transcriptScroll, BorderLayout.CENTER)
+        }
         val transcriptContainer = JPanel(BorderLayout()).apply {
             add(pausePillBar, BorderLayout.NORTH)
-            add(transcriptScroll, BorderLayout.CENTER)
+            add(transcriptInnerPanel, BorderLayout.CENTER)
         }
         transcriptScroll.border = BorderFactory.createMatteBorder(1, 0, 1, 0, UIManager.getColor("Component.borderColor"))
         transcriptScroll.verticalScrollBar.unitIncrement = 16
@@ -553,9 +546,18 @@ class ConversationWindow(
             override fun windowActivated(e: java.awt.event.WindowEvent) = loadPreferences()
         })
         retryFailedButton.addActionListener { retryAllFailed() }
+        chatLayoutCheck.addActionListener {
+            val enabled = chatLayoutCheck.isSelected
+            transcript.chatLayout = enabled
+            feature.preferences = feature.preferences.copy(chatLayout = enabled)
+        }
         orderButton.addActionListener {
             transcript.newestFirst = !transcript.newestFirst
             orderButton.text = if (transcript.newestFirst) strings.orderNewestAtTop else strings.orderOldestAtTop
+            transcriptInnerPanel.remove(liveSlotsPanel)
+            transcriptInnerPanel.add(liveSlotsPanel, if (transcript.newestFirst) BorderLayout.NORTH else BorderLayout.SOUTH)
+            transcriptInnerPanel.revalidate()
+            transcriptInnerPanel.repaint()
         }
         newButton.addActionListener {
             if (!recorder.state.value.isActive) {
@@ -747,32 +749,8 @@ class ConversationWindow(
         noticeText.text = state.notice?.let(::noticeMessage).orEmpty()
 
         if (active || state.phase == RecorderPhase.STOPPING) {
-            val liveSegments = state.live.mapNotNull { (source, line) ->
-                if (line.text.isBlank()) null
-                else {
-                    val alreadySettled = state.session?.segments?.any {
-                        it.source == source && (kotlin.math.abs(it.startMillis - line.startMillis) < 1_500L || it.text.trim().equals(line.text.trim(), ignoreCase = true))
-                    } == true
-                    if (alreadySettled) null
-                    else TranscriptSegment(
-                        id = "live-${source.name.lowercase()}",
-                        source = source,
-                        startMillis = line.startMillis,
-                        endMillis = line.startMillis,
-                        text = line.text,
-                        words = line.confirmedWords + line.liveWords,
-                        draft = true,
-                        confirmedText = line.confirmedText,
-                        verificationState = line.verificationState,
-                        agreement = line.agreement
-                    )
-                }
-            }
-            val sessionToRender = if (liveSegments.isEmpty()) state.session else {
-                state.session?.let { s ->
-                    liveSegments.fold<TranscriptSegment, ConversationSession>(s) { acc, liveSeg -> acc.withSegment(liveSeg) }
-                }
-            }
+            liveSlotsPanel.render(state.live, visible = active || state.live.values.any { it.text.isNotBlank() })
+            val sessionToRender = state.session
 
             syncRenderGateState()
             if (renderGate.submit(sessionToRender)) {
@@ -782,6 +760,8 @@ class ConversationWindow(
                 pausePill.text = strings.updatesPaused(renderGate.pendingCount)
                 pausePillBar.isVisible = true
             }
+        } else {
+            liveSlotsPanel.render(emptyMap(), visible = false)
         }
         renderSpeechStatus()
         checkDeviceWarnings()
@@ -818,6 +798,8 @@ class ConversationWindow(
         val preferences = feature.preferences
         privacyBar.isVisible = !preferences.privacyNoticeDismissed
         keepAudioCheck.isSelected = preferences.keepAudio
+        chatLayoutCheck.isSelected = preferences.chatLayout
+        transcript.chatLayout = preferences.chatLayout
         isAppMode = preferences.systemAudioMode == "app"
         deviceModeButton.isSelected = !isAppMode
         appModeButton.isSelected = isAppMode
@@ -1322,22 +1304,10 @@ class ConversationWindow(
     }
 
     private fun renderLive(state: RecorderState) {
-        liveLines.forEach { (source, label) ->
-            val line = state.live[source]
-            label.isVisible = line != null
-            label.text = line?.let { "${sourceName(source)} · ${formatTimestamp(it.startMillis)} — ${it.text}" }
-            // Each line keeps its own direction: Arabic speech reads right to left.
-            label.componentOrientation = if (line != null && line.text.firstOrNull { Character.isLetter(it) }
-                    ?.let { Character.getDirectionality(it) == Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC ||
-                        Character.getDirectionality(it) == Character.DIRECTIONALITY_RIGHT_TO_LEFT } == true
-            ) ComponentOrientation.RIGHT_TO_LEFT else ComponentOrientation.LEFT_TO_RIGHT
-            label.horizontalAlignment = javax.swing.SwingConstants.LEADING
-        }
-        val visible = state.live.isNotEmpty()
-        if (liveStrip.isVisible != visible) {
-            liveStrip.isVisible = visible
-            liveStrip.parent?.revalidate()
-        }
+        liveSlotsPanel.render(
+            state.live,
+            visible = state.isActive || state.live.values.any { it.text.isNotBlank() }
+        )
     }
 
     private fun renderRetryButton() {

@@ -18,6 +18,8 @@ data class ConversationPreferences(
     val callLanguage: String = "auto",
     val targetLanguage: String? = null,
     val keepAudio: Boolean = true,
+    /** Aligns "Me" and "Them" cards on opposite sides of the transcript view. */
+    val chatLayout: Boolean = true,
     /** The privacy notice has been read and dismissed. */
     val privacyNoticeDismissed: Boolean = false
 ) {

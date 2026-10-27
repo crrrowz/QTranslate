@@ -3,6 +3,7 @@ package com.github.ahatem.qtranslate.ui.swing.conversation
 import com.github.ahatem.qtranslate.api.core.Logger
 import com.github.ahatem.qtranslate.core.conversation.AudioSource
 import com.github.ahatem.qtranslate.core.conversation.ConversationSession
+import com.github.ahatem.qtranslate.core.conversation.LiveLine
 import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
 import com.github.ahatem.qtranslate.core.conversation.TranscriptWord
 import com.github.ahatem.qtranslate.core.conversation.VerificationState
@@ -312,5 +313,71 @@ class TranscriptViewTest {
         assertFalse(StyleConstants.isUnderline(clearAttrs), "High-confidence LIVE word must not be underlined")
         assertTrue(StyleConstants.isUnderline(mumbledAttrs), "Low-confidence LIVE word (< 0.6) must be underlined")
         assertFalse(StyleConstants.isUnderline(checkedAttrs), "VERIFIED word must not have low-confidence underline")
+    }
+
+    @Test
+    fun `LiveSlotsPanel maintains two permanent speaker slots with bounded height and clears slot on settle`() {
+        val panel = LiveSlotsPanel(strings())
+        panel.setSize(600, 120)
+
+        // Simultaneous live speech from both speakers updates their respective permanent slots independently
+        panel.render(
+            mapOf(
+                AudioSource.MICROPHONE to LiveLine(
+                    startMillis = 1000L,
+                    text = "I am speaking right now",
+                    confirmedText = "I am",
+                    agreement = 0.95
+                ),
+                AudioSource.SYSTEM to LiveLine(
+                    startMillis = 1200L,
+                    text = "And the other person is speaking at the same time"
+                )
+            ),
+            visible = true
+        )
+
+        assertTrue(panel.isVisible)
+        assertEquals("I am speaking right now", panel.slotText(AudioSource.MICROPHONE))
+        assertEquals("And the other person is speaking at the same time", panel.slotText(AudioSource.SYSTEM))
+        assertTrue(panel.micSlot.badgeLabel.isVisible)
+        assertTrue(panel.micSlot.badgeLabel.text.contains("95%"))
+
+        // Slot scrollPane enforces a 2-line minimum and 4-line maximum height cap
+        val minH = panel.micSlot.scrollPane.minimumSize.height
+        val maxH = panel.micSlot.scrollPane.maximumSize.height
+        assertTrue(minH > 0 && maxH > minH)
+        assertTrue(panel.micSlot.scrollPane.preferredSize.height in minH..maxH)
+
+        // When MICROPHONE settles, its slot clears while SYSTEM keeps its live speech
+        panel.render(
+            mapOf(
+                AudioSource.SYSTEM to LiveLine(
+                    startMillis = 1200L,
+                    text = "And the other person is speaking at the same time"
+                )
+            ),
+            visible = true
+        )
+        assertEquals("", panel.slotText(AudioSource.MICROPHONE))
+        assertEquals("And the other person is speaking at the same time", panel.slotText(AudioSource.SYSTEM))
+    }
+
+    @Test
+    fun `chat layout aligns Me and Them on opposite sides and flips sides in RTL`() {
+        val ltrMic = TranscriptView.cardHorizontalBounds(AudioSource.MICROPHONE, 600, chatLayout = true, rtl = false)
+        val ltrSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = true, rtl = false)
+        assertEquals(10, ltrMic.first, "In LTR chat layout, MICROPHONE card starts on the left")
+        assertTrue(ltrSys.first > ltrMic.first, "In LTR chat layout, SYSTEM card is shifted to the right")
+        assertEquals(590, ltrSys.last, "In LTR chat layout, SYSTEM card reaches right edge")
+
+        val rtlMic = TranscriptView.cardHorizontalBounds(AudioSource.MICROPHONE, 600, chatLayout = true, rtl = true)
+        val rtlSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = true, rtl = true)
+        assertEquals(10, rtlSys.first, "In RTL chat layout, SYSTEM card starts on the left")
+        assertTrue(rtlMic.first > rtlSys.first, "In RTL chat layout, MICROPHONE card is shifted to the right")
+
+        val disabledMic = TranscriptView.cardHorizontalBounds(AudioSource.MICROPHONE, 600, chatLayout = false, rtl = false)
+        val disabledSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = false, rtl = false)
+        assertEquals(disabledMic, disabledSys, "When chatLayout is false, both speakers span the full width")
     }
 }
