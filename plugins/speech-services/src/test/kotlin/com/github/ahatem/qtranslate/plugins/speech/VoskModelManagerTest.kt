@@ -58,6 +58,17 @@ class VoskModelManagerTest {
         }
     }
 
+    private fun writeFakeFlatModelFiles(dir: File, dynamicGraph: Boolean = false) {
+        File(dir, "final.mdl").writeText("fake-flat-model")
+        File(dir, "mfcc.conf").writeText("--sample-frequency=16000")
+        if (dynamicGraph) {
+            File(dir, "HCLr.fst").writeText("fake-flat-hclr")
+            File(dir, "Gr.fst").writeText("fake-flat-gr")
+        } else {
+            File(dir, "HCLG.fst").writeText("fake-flat-hclg")
+        }
+    }
+
     @Test
     fun `half-extracted model folder is not reported as installed`() {
         val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { File(tempDir, "persistent") })
@@ -116,6 +127,35 @@ class VoskModelManagerTest {
         writeFakeModelFiles(modelDir, dynamicGraph = true)
 
         assertTrue(manager.isInstalled("vosk-model-en-us-0.22-lgraph"))
+    }
+
+    @Test
+    fun `old flat layout model is recognized as valid`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { File(tempDir, "persistent") })
+
+        // 1. Static graph flat layout (HCLG.fst)
+        val trModelDir = File(manager.modelsDirectory, "vosk-model-small-tr-0.3").apply { mkdirs() }
+        writeFakeFlatModelFiles(trModelDir, dynamicGraph = false)
+        assertTrue(manager.isInstalled("vosk-model-small-tr-0.3"))
+
+        // 2. Dynamic graph flat layout (HCLr.fst + Gr.fst, e.g. pt-0.3)
+        val ptModelDir = File(manager.modelsDirectory, "vosk-model-small-pt-0.3").apply { mkdirs() }
+        writeFakeFlatModelFiles(ptModelDir, dynamicGraph = true)
+        assertTrue(manager.isInstalled("vosk-model-small-pt-0.3"))
+    }
+
+    @Test
+    fun `incomplete old flat layout model reports incomplete status and does not count as installed`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { File(tempDir, "persistent") })
+        val ptModelDir = File(manager.modelsDirectory, "vosk-model-small-pt-0.3").apply { mkdirs() }
+
+        // Has final.mdl and mfcc.conf but missing graph files
+        File(ptModelDir, "final.mdl").writeText("fake-flat-model")
+        File(ptModelDir, "mfcc.conf").writeText("--sample-frequency=16000")
+
+        assertFalse(manager.isInstalled("vosk-model-small-pt-0.3"))
+        val status = manager.statusAction("vosk-model-small-pt-0.3")
+        assertTrue(status.contains("incomplete, delete and download again"), status)
     }
 
     @Test

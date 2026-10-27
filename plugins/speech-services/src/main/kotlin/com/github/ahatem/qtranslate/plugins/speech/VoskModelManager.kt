@@ -64,21 +64,37 @@ class VoskModelManager(
     }
 
     /**
-     * Every Vosk model requires:
-     * 1. Acoustic model: am/final.mdl
-     * 2. Model configuration: conf/model.conf
-     * 3. Decoding graph: static graph/HCLG.fst OR rescoring/dynamic graph/HCLr.fst + graph/Gr.fst
+     * Validates whether a directory contains a runnable Vosk model. Supports both standard layouts:
      *
-     * Checking for these required files prevents incomplete or corrupted extractions from being
-     * marked as installed (which previously hid the Download button).
+     * 1. New/nested layout:
+     *    - Acoustic model: `am/final.mdl`
+     *    - Model configuration: `conf/model.conf`
+     *    - Decoding graph: `graph/HCLG.fst` OR (`graph/HCLr.fst` + `graph/Gr.fst`)
+     *
+     * 2. Old/flat layout (e.g. `vosk-model-small-tr-0.3`, `vosk-model-small-pt-0.3`):
+     *    - Acoustic model: `final.mdl`
+     *    - Model configuration: `mfcc.conf`
+     *    - Decoding graph: `HCLG.fst` OR (`HCLr.fst` + `Gr.fst`)
+     *
+     * Checking for these required files prevents incomplete extractions from counting as installed
+     * while properly accepting all official models from alphacephei.com.
      */
     internal fun File.isValidModelDir(): Boolean {
         if (!isDirectory) return false
-        val hasAcoustic = File(this, "am/final.mdl").isFile
-        val hasConf = File(this, "conf/model.conf").isFile
-        val hasGraph = File(this, "graph/HCLG.fst").isFile ||
+
+        // Check new nested layout
+        val hasNestedAcoustic = File(this, "am/final.mdl").isFile
+        val hasNestedConf = File(this, "conf/model.conf").isFile
+        val hasNestedGraph = File(this, "graph/HCLG.fst").isFile ||
             (File(this, "graph/HCLr.fst").isFile && File(this, "graph/Gr.fst").isFile)
-        return hasAcoustic && hasConf && hasGraph
+        if (hasNestedAcoustic && hasNestedConf && hasNestedGraph) return true
+
+        // Check old flat layout
+        val hasFlatAcoustic = File(this, "final.mdl").isFile
+        val hasFlatConf = File(this, "mfcc.conf").isFile
+        val hasFlatGraph = File(this, "HCLG.fst").isFile ||
+            (File(this, "HCLr.fst").isFile && File(this, "Gr.fst").isFile)
+        return hasFlatAcoustic && hasFlatConf && hasFlatGraph
     }
 
     /**
