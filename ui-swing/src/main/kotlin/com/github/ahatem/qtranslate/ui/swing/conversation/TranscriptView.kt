@@ -415,9 +415,10 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
                 if (scrollPane != null) {
                     val vpSize = viewport?.extentSize?.takeIf { it.width > 0 && it.height > 0 } ?: scrollPane.size
                     if (vpSize.width > 0) {
-                        setSize(vpSize.width, Int.MAX_VALUE / 2)
-                        val pref = preferredSize
-                        setSize(vpSize.width, maxOf(vpSize.height, pref.height))
+                        val pref = runCatching { preferredSize }.getOrNull()
+                        if (pref != null) {
+                            setSize(vpSize.width, maxOf(vpSize.height, pref.height))
+                        }
                     }
                     doLayout()
                     scrollPane.doLayout()
