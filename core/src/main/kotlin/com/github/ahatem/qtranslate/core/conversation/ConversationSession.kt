@@ -151,20 +151,21 @@ data class ConversationSession(
             return copy(segments = updated)
         }
 
-        // Fast path: appending settled segment at the end
-        if (segments.isEmpty() || segment.settledAtMillis >= segments.last().settledAtMillis) {
+        // Fast path: appending strictly later settled segment at the end
+        if (segments.isEmpty() || segment.settledAtMillis > segments.last().settledAtMillis ||
+            (segment.settledAtMillis == segments.last().settledAtMillis && segment.source.ordinal > segments.last().source.ordinal)) {
             return copy(segments = segments + segment)
         }
 
-        val index = segments.binarySearch {
+        val index = segments.indexOfFirst {
             if (it.settledAtMillis != segment.settledAtMillis) {
-                it.settledAtMillis.compareTo(segment.settledAtMillis)
+                it.settledAtMillis > segment.settledAtMillis
             } else if (it.source != segment.source) {
-                it.source.ordinal.compareTo(segment.source.ordinal)
+                it.source.ordinal > segment.source.ordinal
             } else {
-                it.id.compareTo(segment.id)
+                it.id > segment.id
             }
-        }.let { if (it < 0) -(it + 1) else it }
+        }.let { if (it < 0) segments.size else it }
 
         val updated = ArrayList<TranscriptSegment>(segments.size + 1)
         updated.addAll(segments.subList(0, index))
