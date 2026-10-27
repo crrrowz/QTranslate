@@ -90,7 +90,11 @@ data class TranscriptSegment(
     /** Word-level agreement ratio (0.0..1.0) between live text and accurate verification, when checked. */
     val agreement: Double? = null,
     /** Timestamp on the session timeline when this segment settled into the archive (determines archive card order). */
-    val settledAtMillis: Long = startMillis
+    val settledAtMillis: Long = startMillis,
+    /** Automatically generated or saved translation of [text], or null. */
+    val translation: String? = null,
+    /** Error message if auto-translation failed, or null. */
+    val translationError: String? = null
 )
 
 const val COALESCE_PAUSE_THRESHOLD_MILLIS = 2_000L

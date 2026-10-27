@@ -875,3 +875,6 @@ chat_layout = "تخطيط المحادثة (أنا يميناً، الطرف ا�
 chat_layout_tooltip = "محاذاة رسائلك ورسائل المتحدث الآخر على جانبين متقابلين"
 auto_translate = "ترجمة تلقائية"
 auto_translate_tooltip = "ترجمة كل سطر مستقر تلقائياً إلى اللغة الهدف"
+auto_translate_failed = "فشلت الترجمة · إعادة المحاولة"
+online_translation_notice = "يتم إرسال نص السطر إلى خدمة الترجمة النشطة عبر الإنترنت."
+export_include_translations = "تضمين الترجمات"

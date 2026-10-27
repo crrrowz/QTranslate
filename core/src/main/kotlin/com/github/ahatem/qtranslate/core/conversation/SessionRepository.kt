@@ -100,22 +100,36 @@ class SessionRepository(val root: File) {
         }
 
     /** The transcript as plain text, one line per segment: `[00:12] Me: …`. */
-    fun exportText(session: ConversationSession, speakerName: (AudioSource) -> String): String = buildString {
+    fun exportText(
+        session: ConversationSession,
+        includeTranslations: Boolean = false,
+        speakerName: (AudioSource) -> String
+    ): String = buildString {
         appendLine(session.title)
         appendLine(SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.ROOT).format(Date(session.createdAt)))
         appendLine()
         session.segments.filter { it.text.isNotBlank() }.forEach { segment ->
             appendLine("[${formatTimestamp(segment.startMillis)}] ${speakerName(segment.source)}: ${segment.text}")
+            if (includeTranslations && !segment.translation.isNullOrBlank()) {
+                appendLine("   ${segment.translation}")
+            }
         }
     }
 
     /** Exports the transcript in standard SubRip (.srt) subtitle format. */
-    fun exportSrt(session: ConversationSession, speakerName: (AudioSource) -> String): String = buildString {
+    fun exportSrt(
+        session: ConversationSession,
+        includeTranslations: Boolean = false,
+        speakerName: (AudioSource) -> String
+    ): String = buildString {
         var index = 1
         session.segments.filter { it.text.isNotBlank() }.forEach { segment ->
             appendLine(index++)
             appendLine("${formatSrtTimestamp(segment.startMillis)} --> ${formatSrtTimestamp(segment.endMillis)}")
             appendLine("${speakerName(segment.source)}: ${segment.text}")
+            if (includeTranslations && !segment.translation.isNullOrBlank()) {
+                appendLine(segment.translation)
+            }
             appendLine()
         }
     }

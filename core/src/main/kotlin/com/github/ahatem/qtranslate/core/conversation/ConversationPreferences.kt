@@ -22,6 +22,8 @@ data class ConversationPreferences(
     val chatLayout: Boolean = true,
     /** Automatically translate each settled line into target language. */
     val autoTranslate: Boolean = false,
+    /** Whether the one-time notice about online translation has been dismissed. */
+    val autoTranslateNoticeDismissed: Boolean = false,
     /** The privacy notice has been read and dismissed. */
     val privacyNoticeDismissed: Boolean = false
 ) {

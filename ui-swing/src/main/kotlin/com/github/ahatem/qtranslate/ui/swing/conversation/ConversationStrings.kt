@@ -109,4 +109,7 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val chatLayoutTooltip = localizer.getString("conversation.chat_layout_tooltip")
     val autoTranslate = localizer.getString("conversation.auto_translate")
     val autoTranslateTooltip = localizer.getString("conversation.auto_translate_tooltip")
+    val autoTranslateFailed = localizer.getString("conversation.auto_translate_failed")
+    val onlineTranslationNotice = localizer.getString("conversation.online_translation_notice")
+    val exportIncludeTranslations = localizer.getString("conversation.export_include_translations")
 }

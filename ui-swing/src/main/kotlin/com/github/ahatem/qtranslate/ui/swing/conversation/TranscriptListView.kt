@@ -183,6 +183,15 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
             }
         }
 
+    override var autoTranslate: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                renderedKey = null
+                render(currentSession)
+            }
+        }
+
     override var currentSession: ConversationSession? = null
         private set
 
@@ -434,6 +443,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
                 isLatest = singleDiffIndex == 0,
                 chatLayout = chatLayout,
                 rtlLayout = rtlLayout,
+                autoTranslate = autoTranslate,
                 baseGlobalOffset = baseOffset
             )
             val version = newModel.contentVersion()
@@ -516,6 +526,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
                     isLatest = i == 0,
                     chatLayout = chatLayout,
                     rtlLayout = rtlLayout,
+                    autoTranslate = autoTranslate,
                     baseGlobalOffset = runningGlobalOffset
                 )
                 val version = model.contentVersion()
@@ -882,6 +893,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         is TranscriptView.Hit.PlayButton -> strings.actionPlayAudio
         is TranscriptView.Hit.StopButton -> strings.actionStopAudio
         is TranscriptView.Hit.RetryButton -> strings.actionRetrySegment
+        is TranscriptView.Hit.TranslationRetry -> strings.autoTranslateFailed
         is TranscriptView.Hit.DeleteButton -> strings.actionDeleteMessage
         is TranscriptView.Hit.VerificationBadge -> {
             val seg = hit.span.segment
@@ -951,7 +963,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
 
     override fun updateCursor(hit: TranscriptView.Hit?) {
         cursor = when (hit) {
-            is TranscriptView.Hit.PlayButton, is TranscriptView.Hit.StopButton, is TranscriptView.Hit.RetryButton, is TranscriptView.Hit.DeleteButton ->
+            is TranscriptView.Hit.PlayButton, is TranscriptView.Hit.StopButton, is TranscriptView.Hit.RetryButton, is TranscriptView.Hit.DeleteButton, is TranscriptView.Hit.TranslationRetry ->
                 Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             is TranscriptView.Hit.Text ->
                 Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)

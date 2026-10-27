@@ -35,6 +35,9 @@ data class CardModel(
     val chatLayout: Boolean = true,
     val rtlLayout: Boolean = false,
     val isPlaying: Boolean = false,
+    val autoTranslate: Boolean = false,
+    val translation: String? = segment.translation,
+    val translationError: String? = segment.translationError,
     val baseGlobalOffset: Int = 0
 ) {
     val id: String get() = segment.id
@@ -55,7 +58,10 @@ data class CardModel(
         verificationState = segment.verificationState,
         agreement = segment.agreement,
         chatLayout = chatLayout,
-        rtlLayout = rtlLayout
+        rtlLayout = rtlLayout,
+        autoTranslate = autoTranslate,
+        translation = translation,
+        translationError = translationError
     )
 
     private data class ContentKey(
@@ -69,7 +75,10 @@ data class CardModel(
         val verificationState: VerificationState,
         val agreement: Double?,
         val chatLayout: Boolean,
-        val rtlLayout: Boolean
+        val rtlLayout: Boolean,
+        val autoTranslate: Boolean,
+        val translation: String?,
+        val translationError: String?
     )
 }
 
@@ -303,6 +312,11 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
             if (deleteBox != null && deleteBox.grow(4).contains(localPoint)) return TranscriptView.Hit.DeleteButton(globalSpan)
         }
 
+        if (localSpan.isTranslationRetry && localSpan.translationEnd > localSpan.translationStart) {
+            val transBox = localBoundsOf(localSpan.translationStart until localSpan.translationEnd)
+            if (transBox != null && transBox.grow(4).contains(localPoint)) return TranscriptView.Hit.TranslationRetry(globalSpan)
+        }
+
         val docLen = stampPane.document.length
         if (docLen <= 0) return null
         val localOffset = stampPane.viewToModel2D(localPoint).takeIf { it in 0 until docLen } ?: return null
@@ -318,6 +332,8 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
             localOffset in localSpan.badgeStart until localSpan.badgeEnd -> TranscriptView.Hit.VerificationBadge(globalSpan)
             localOffset in localSpan.retryStart until localSpan.retryEnd -> TranscriptView.Hit.RetryButton(globalSpan)
             localOffset in localSpan.deleteStart until localSpan.deleteEnd -> TranscriptView.Hit.DeleteButton(globalSpan)
+            localSpan.isTranslationRetry && localOffset in localSpan.translationStart until localSpan.translationEnd ->
+                TranscriptView.Hit.TranslationRetry(globalSpan)
             localOffset < localSpan.headerEnd -> TranscriptView.Hit.Header(globalSpan)
             else -> TranscriptView.Hit.Text(globalSpan, model.baseGlobalOffset + localOffset)
         }
@@ -460,10 +476,31 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
 
         val alignment = alignParagraph(doc, playStart, textEnd - playStart, segment.text, segment.source, safeWidth, model.chatLayout, model.rtlLayout)
 
+        var translationStart = doc.length
+        var translationEnd = translationStart
+        var isTranslationRetry = false
+
+        if (model.autoTranslate && !model.isLiveDraft && !segment.draft && segment.text.isNotBlank()) {
+            doc.insertString(doc.length, "\n", null)
+            translationStart = doc.length
+            val transText = when {
+                model.translation != null -> model.translation
+                model.translationError != null -> {
+                    isTranslationRetry = true
+                    strings.autoTranslateFailed
+                }
+                else -> "…"
+            }
+            val transStyle = if (isTranslationRetry) linkStyle() else translationStyle()
+            doc.insertString(doc.length, transText, transStyle)
+            translationEnd = doc.length
+            alignParagraph(doc, translationStart, translationEnd - translationStart, transText, segment.source, safeWidth, model.chatLayout, model.rtlLayout)
+        }
+
         stampPane.setSize(safeWidth, Int.MAX_VALUE / 4)
         stampPane.doLayout()
         val pref = stampPane.preferredSize
-        val bottomBox = stampPane.modelToView2D(textEnd)
+        val bottomBox = stampPane.modelToView2D(doc.length)
         val contentHeight = if (bottomBox != null) {
             (bottomBox.y + bottomBox.height).toInt() + CARD_INNER_BOTTOM_PAD
         } else {
@@ -489,7 +526,10 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
             textEnd = textEnd,
             words = localWords,
             badgeStart = badgeStart,
-            badgeEnd = badgeEnd
+            badgeEnd = badgeEnd,
+            translationStart = translationStart,
+            translationEnd = translationEnd,
+            isTranslationRetry = isTranslationRetry
         )
         val globalSpan = if (base == 0) {
             localSpan
@@ -508,7 +548,10 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
                 textEnd = base + textEnd,
                 words = localWords.map { (r, w) -> ((base + r.first)..(base + r.last)) to w },
                 badgeStart = base + badgeStart,
-                badgeEnd = base + badgeEnd
+                badgeEnd = base + badgeEnd,
+                translationStart = base + translationStart,
+                translationEnd = base + translationEnd,
+                isTranslationRetry = isTranslationRetry
             )
         }
         val hBounds = TranscriptView.cardHorizontalBounds(segment.source, safeWidth, model.chatLayout, model.rtlLayout)
@@ -740,6 +783,11 @@ class TranscriptCardStamp(private val strings: ConversationStrings) {
     private fun mutedStyle(italic: Boolean) = SimpleAttributeSet().apply {
         StyleConstants.setForeground(this, UIManager.getColor("Label.disabledForeground") ?: Color.GRAY)
         StyleConstants.setItalic(this, italic)
+    }
+
+    private fun translationStyle() = SimpleAttributeSet().apply {
+        StyleConstants.setForeground(this, UIManager.getColor("Label.disabledForeground") ?: Color.GRAY)
+        StyleConstants.setFontSize(this, (stampPane.font.size - 2).coerceAtLeast(11))
     }
 
     private fun linkStyle() = SimpleAttributeSet().apply {

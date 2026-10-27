@@ -29,7 +29,10 @@ object TranscriptView {
         /** Recognised words with their character ranges, for replaying or translating a single word. */
         val words: List<Pair<IntRange, TranscriptWord>>,
         val badgeStart: Int = headerEnd,
-        val badgeEnd: Int = headerEnd
+        val badgeEnd: Int = headerEnd,
+        val translationStart: Int = textEnd,
+        val translationEnd: Int = textEnd,
+        val isTranslationRetry: Boolean = false
     )
 
     sealed interface Hit {
@@ -42,6 +45,7 @@ object TranscriptView {
         data class VerificationBadge(override val span: SegmentSpan) : Hit
         data class Header(override val span: SegmentSpan) : Hit
         data class Text(override val span: SegmentSpan, val offset: Int) : Hit
+        data class TranslationRetry(override val span: SegmentSpan) : Hit
     }
 
     data class ScrollAnchor(

@@ -647,6 +647,20 @@ class ConversationWindow(
             transcript.chatLayout = enabled
             feature.preferences = feature.preferences.copy(chatLayout = enabled)
         }
+        autoTranslateCheck.addActionListener {
+            val enabled = autoTranslateCheck.isSelected
+            feature.preferences = feature.preferences.copy(autoTranslate = enabled)
+            val anchor = transcript.captureScrollAnchor()
+            transcript.autoTranslate = enabled
+            transcript.restoreScrollAnchor(anchor)
+            if (enabled) {
+                if (!feature.preferences.autoTranslateNoticeDismissed) {
+                    feature.preferences = feature.preferences.copy(autoTranslateNoticeDismissed = true)
+                    JOptionPane.showMessageDialog(this@ConversationWindow, strings.onlineTranslationNotice)
+                }
+                displayedSession()?.let { checkAutoTranslate(it) }
+            }
+        }
         orderButton.addActionListener {
             val anchor = transcript.captureScrollAnchor()
             transcript.newestFirst = !transcript.newestFirst
@@ -670,8 +684,12 @@ class ConversationWindow(
             }
         }
         targetCombo.addActionListener {
-            (targetCombo.selectedItem as? LanguageCode)?.let { feature.preferences = feature.preferences.copy(targetLanguage = it.tag) }
+            val target = targetCombo.selectedItem as? LanguageCode
+            target?.let { feature.preferences = feature.preferences.copy(targetLanguage = it.tag) }
             hideCard()
+            if (autoTranslateCheck.isSelected) {
+                displayedSession()?.let { checkAutoTranslate(it) }
+            }
         }
         sessionsList.addListSelectionListener { e ->
             if (e.valueIsAdjusting || recorder.state.value.isActive) return@addListSelectionListener
@@ -880,6 +898,9 @@ class ConversationWindow(
             viewed = state.session
             reloadSessions(selectId = state.session?.id)
         }
+        if (autoTranslateCheck.isSelected) {
+            displayedSession()?.let { checkAutoTranslate(it) }
+        }
         lastPhase = state.phase
         updateSessionButtons()
     }
@@ -911,6 +932,7 @@ class ConversationWindow(
         chatLayoutCheck.isSelected = preferences.chatLayout
         transcript.chatLayout = preferences.chatLayout
         autoTranslateCheck.isSelected = preferences.autoTranslate
+        transcript.autoTranslate = preferences.autoTranslate
         isAppMode = preferences.systemAudioMode == "app"
         deviceModeButton.isSelected = !isAppMode
         appModeButton.isSelected = isAppMode
@@ -1130,11 +1152,16 @@ class ConversationWindow(
 
     private fun exportSelected() {
         val session = viewed ?: return
+        val includeTransBox = JCheckBox(strings.exportIncludeTranslations, true)
         val chooser = JFileChooser().apply {
             selectedFile = File(session.title.replace(Regex("""[\\/:*?"<>|]"""), "_") + ".txt")
             addChoosableFileFilter(FileNameExtensionFilter("Text Document (*.txt)", "txt"))
             addChoosableFileFilter(FileNameExtensionFilter("SubRip Subtitle (*.srt)", "srt"))
             fileFilter = choosableFileFilters.first()
+            accessory = JPanel(BorderLayout()).apply {
+                border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
+                add(includeTransBox, BorderLayout.NORTH)
+            }
         }
         if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return
         val ext = chooser.fileFilter?.description?.let {
@@ -1143,12 +1170,13 @@ class ConversationWindow(
         val target = chooser.selectedFile.let {
             if (it.extension.isEmpty()) File(it.path + ".$ext") else it
         }
+        val includeTranslations = includeTransBox.isSelected
         scope.launch {
             val content = withContext(Dispatchers.IO) {
                 if (target.extension.equals("srt", ignoreCase = true)) {
-                    feature.repository.exportSrt(session, ::sourceName)
+                    feature.repository.exportSrt(session, includeTranslations, ::sourceName)
                 } else {
-                    feature.repository.exportText(session, ::sourceName)
+                    feature.repository.exportText(session, includeTranslations, ::sourceName)
                 }
             }
             withContext(Dispatchers.IO) { target.writeText(content, Charsets.UTF_8) }
@@ -1204,6 +1232,7 @@ class ConversationWindow(
             is TranscriptView.Hit.PlayButton -> playRange(hit.span.segment, hit.span.segment.startMillis, hit.span.segment.endMillis)
             is TranscriptView.Hit.StopButton -> feature.stop()
             is TranscriptView.Hit.RetryButton -> retry(hit.span.segment)
+            is TranscriptView.Hit.TranslationRetry -> retryTranslation(hit.span.segment)
             is TranscriptView.Hit.DeleteButton -> deleteSingleSegment(hit.span.segment)
             is TranscriptView.Hit.VerificationBadge -> Unit
             is TranscriptView.Hit.Header -> Unit // Clicking speaker label or timestamp does not trigger playback
@@ -1547,6 +1576,61 @@ class ConversationWindow(
             retryFailedButton.isEnabled = true
             renderRetryButton()
         }
+    }
+
+    private val inFlightTranslations = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun checkAutoTranslate(session: ConversationSession) {
+        val target = targetCombo.selectedItem as? LanguageCode ?: return
+        val targetTag = target.tag
+        session.segments.forEach { seg ->
+            if (seg.id.startsWith("live-") || seg.draft || seg.text.isBlank()) return@forEach
+            if (seg.language != null && seg.language.equals(targetTag, ignoreCase = true)) return@forEach
+            if (seg.translation != null && inFlightTranslations[seg.id] == seg.text) return@forEach
+            if (inFlightTranslations[seg.id] == seg.text) return@forEach
+
+            val textVersion = seg.text
+            inFlightTranslations[seg.id] = textVersion
+            scope.launch {
+                feature.translations.translate(textVersion, target).fold(
+                    success = { translated ->
+                        val current = displayedSession() ?: return@fold
+                        val curSeg = current.segments.firstOrNull { it.id == seg.id }
+                        if (curSeg != null && curSeg.text == textVersion) {
+                            val updatedSeg = curSeg.copy(translation = translated, translationError = null)
+                            applyUpdatedSegment(updatedSeg)
+                        }
+                    },
+                    failure = { err ->
+                        val current = displayedSession() ?: return@fold
+                        val curSeg = current.segments.firstOrNull { it.id == seg.id }
+                        if (curSeg != null && curSeg.text == textVersion) {
+                            val updatedSeg = curSeg.copy(translationError = err.message)
+                            applyUpdatedSegment(updatedSeg)
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private fun applyUpdatedSegment(segment: TranscriptSegment) {
+        if (recorder.state.value.isActive) {
+            recorder.updateLiveSession { it.withSegment(segment) }
+        } else {
+            val current = viewed ?: return
+            val updated = current.withSegment(segment)
+            viewed = updated
+            transcript.render(updated)
+            scope.launch(Dispatchers.IO) { runCatching { feature.repository.save(updated) } }
+        }
+    }
+
+    private fun retryTranslation(segment: TranscriptSegment) {
+        inFlightTranslations.remove(segment.id)
+        val cleared = segment.copy(translationError = null)
+        applyUpdatedSegment(cleared)
+        displayedSession()?.let { checkAutoTranslate(it) }
     }
 
     private fun retry(segment: TranscriptSegment) {

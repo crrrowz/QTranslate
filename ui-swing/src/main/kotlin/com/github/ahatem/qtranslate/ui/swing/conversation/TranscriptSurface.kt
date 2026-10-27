@@ -19,6 +19,7 @@ interface TranscriptSurface {
     var newestFirst: Boolean
     var chatLayout: Boolean
     var rtlLayout: Boolean
+    var autoTranslate: Boolean
     var isProgrammaticScroll: Boolean
     var pointerPosition: Point?
     var clock: () -> Long

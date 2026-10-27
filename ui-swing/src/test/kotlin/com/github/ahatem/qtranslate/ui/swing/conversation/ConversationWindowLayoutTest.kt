@@ -543,6 +543,24 @@ class ConversationWindowLayoutTest {
             b2.isVisible = false
             layoutAll(innerPanel, overlayWithBannersTest, scrollPane)
             assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen Y preserved when banners are hidden")
+
+            // Auto-translate stability: turning auto-translate on and receiving translations must maintain screen stability
+            val anchorAutoTransOn = view.captureScrollAnchor()
+            view.autoTranslate = true
+            layoutAll(innerPanel, overlayWithBannersTest, scrollPane)
+            view.restoreScrollAnchor(anchorAutoTransOn)
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen Y preserved when auto-translate is turned on")
+
+            // Arrival of short translation for a settled line above X does not move card X (one line was reserved)
+            val seg70 = session.segments.first { it.id == "seg-70" }
+            val heightWithReservedLine = view.heightIndex.heightOf("seg-70")!!
+            val seg70WithShortTrans = seg70.copy(translation = "Short translation")
+            session = session.withSegment(seg70WithShortTrans)
+            view.render(session)
+            layoutAll(innerPanel, overlayWithBannersTest, scrollPane)
+            val heightWithShortTrans = view.heightIndex.heightOf("seg-70")!!
+            assertEquals(heightWithReservedLine, heightWithShortTrans, "Arrival of short translation must not change card height")
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen Y preserved when translation arrives")
         }
     }
 
