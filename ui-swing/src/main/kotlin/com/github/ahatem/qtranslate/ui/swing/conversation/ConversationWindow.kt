@@ -556,11 +556,13 @@ class ConversationWindow(
             orderButton.text = if (transcript.newestFirst) strings.orderNewestAtTop else strings.orderOldestAtTop
             transcriptInnerPanel.remove(liveSlotsPanel)
             transcriptInnerPanel.add(liveSlotsPanel, if (transcript.newestFirst) BorderLayout.NORTH else BorderLayout.SOUTH)
-            transcriptInnerPanel.revalidate()
+            transcriptInnerPanel.validate()
+            transcriptInnerPanel.doLayout()
+            transcriptOverlayPane.doLayout()
+            transcriptScroll.doLayout()
+            transcriptScroll.viewport.doLayout()
+            transcript.restoreScrollAnchor(anchor)
             transcriptInnerPanel.repaint()
-            SwingUtilities.invokeLater {
-                transcript.restoreScrollAnchor(anchor)
-            }
         }
         newButton.addActionListener {
             if (!recorder.state.value.isActive) {
@@ -757,11 +759,13 @@ class ConversationWindow(
         if (liveSlotsPanel.isVisible != shouldShowLive) {
             val anchor = transcript.captureScrollAnchor()
             liveSlotsPanel.render(state.live, visible = shouldShowLive)
-            transcriptInnerPanel.revalidate()
+            transcriptInnerPanel.validate()
+            transcriptInnerPanel.doLayout()
+            transcriptOverlayPane.doLayout()
+            transcriptScroll.doLayout()
+            transcriptScroll.viewport.doLayout()
+            transcript.restoreScrollAnchor(anchor)
             transcriptInnerPanel.repaint()
-            SwingUtilities.invokeLater {
-                transcript.restoreScrollAnchor(anchor)
-            }
         } else if (shouldShowLive) {
             liveSlotsPanel.render(state.live, visible = true)
         } else {
