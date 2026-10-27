@@ -1017,8 +1017,8 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         fun isCardListEnabled(defaultValue: Boolean = true): Boolean =
             System.getProperty(CARDS_PROPERTY)?.toBooleanStrictOrNull() ?: defaultValue
 
-        /** Factory returning [TranscriptListView] by default, or [TranscriptView] when disabled by flag. */
+        /** Factory returning the virtualised [TranscriptListView] transcript surface. */
         fun createSurface(strings: ConversationStrings, defaultCardList: Boolean = true): TranscriptSurface =
-            if (isCardListEnabled(defaultCardList)) TranscriptListView(strings) else TranscriptView(strings)
+            TranscriptListView(strings)
     }
 }
