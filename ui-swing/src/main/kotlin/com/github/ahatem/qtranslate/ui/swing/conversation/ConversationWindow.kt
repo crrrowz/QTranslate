@@ -551,12 +551,16 @@ class ConversationWindow(
             feature.preferences = feature.preferences.copy(chatLayout = enabled)
         }
         orderButton.addActionListener {
+            val anchor = transcript.captureScrollAnchor()
             transcript.newestFirst = !transcript.newestFirst
             orderButton.text = if (transcript.newestFirst) strings.orderNewestAtTop else strings.orderOldestAtTop
             transcriptInnerPanel.remove(liveSlotsPanel)
             transcriptInnerPanel.add(liveSlotsPanel, if (transcript.newestFirst) BorderLayout.NORTH else BorderLayout.SOUTH)
             transcriptInnerPanel.revalidate()
             transcriptInnerPanel.repaint()
+            SwingUtilities.invokeLater {
+                transcript.restoreScrollAnchor(anchor)
+            }
         }
         newButton.addActionListener {
             if (!recorder.state.value.isActive) {
@@ -749,8 +753,22 @@ class ConversationWindow(
         noticeBar.isVisible = state.notice != null
         noticeText.text = state.notice?.let(::noticeMessage).orEmpty()
 
+        val shouldShowLive = active || state.phase == RecorderPhase.STOPPING
+        if (liveSlotsPanel.isVisible != shouldShowLive) {
+            val anchor = transcript.captureScrollAnchor()
+            liveSlotsPanel.render(state.live, visible = shouldShowLive)
+            transcriptInnerPanel.revalidate()
+            transcriptInnerPanel.repaint()
+            SwingUtilities.invokeLater {
+                transcript.restoreScrollAnchor(anchor)
+            }
+        } else if (shouldShowLive) {
+            liveSlotsPanel.render(state.live, visible = true)
+        } else {
+            liveSlotsPanel.render(emptyMap(), visible = false)
+        }
+
         if (active || state.phase == RecorderPhase.STOPPING) {
-            liveSlotsPanel.render(state.live, visible = active || state.live.values.any { it.text.isNotBlank() })
             val sessionToRender = state.session
 
             syncRenderGateState()
@@ -761,8 +779,6 @@ class ConversationWindow(
                 pausePill.text = strings.updatesPaused(renderGate.pendingCount)
                 pausePill.isVisible = true
             }
-        } else {
-            liveSlotsPanel.render(emptyMap(), visible = false)
         }
         renderSpeechStatus()
         checkDeviceWarnings()

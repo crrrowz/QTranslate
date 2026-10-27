@@ -343,11 +343,11 @@ class TranscriptViewTest {
         assertTrue(panel.micSlot.badgeLabel.isVisible)
         assertTrue(panel.micSlot.badgeLabel.text.contains("95%"))
 
-        // Slot scrollPane enforces a 2-line minimum and 4-line maximum height cap
+        // Slot scrollPane enforces a fixed height (4 lines) so text growth never shifts archive cards
         val minH = panel.micSlot.scrollPane.minimumSize.height
         val maxH = panel.micSlot.scrollPane.maximumSize.height
-        assertTrue(minH > 0 && maxH > minH)
-        assertTrue(panel.micSlot.scrollPane.preferredSize.height in minH..maxH)
+        assertEquals(minH, maxH, "Slot scrollPane should have fixed height")
+        assertEquals(minH, panel.micSlot.scrollPane.preferredSize.height)
 
         // When MICROPHONE settles, its slot clears while SYSTEM keeps its live speech
         panel.render(

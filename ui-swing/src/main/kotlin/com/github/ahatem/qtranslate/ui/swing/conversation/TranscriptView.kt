@@ -276,21 +276,10 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val wasAtTop = scrollBar == null || scrollBar.value <= 24
         val wasAtBottom = scrollBar == null || scrollBar.value + scrollBar.visibleAmount >= scrollBar.maximum - 24
 
-        // Anchor card under the pointer first; otherwise fall back to the first visible card.
         val pointer = pointerPosition ?: runCatching { mousePosition }.getOrNull()
-        val pointerSpan = pointer?.let(::spanAtPoint)
-        val firstVisibleSpan = if (viewRect != null && spans.isNotEmpty()) {
-            spans.firstOrNull { span ->
-                val bounds = runCatching { modelToView2D(span.playStart) }.getOrNull()
-                bounds != null && (bounds.y + 10) >= viewRect.y
-            } ?: spans.firstOrNull()
-        } else null
-        val anchorSpan = pointerSpan ?: firstVisibleSpan
-
-        val anchorSegmentId = anchorSpan?.segment?.id
-        val currentScrollY = viewport?.viewPosition?.y ?: scrollBar?.value ?: 0
-        val anchorOldBounds = anchorSpan?.let { runCatching { modelToView2D(it.playStart) }.getOrNull() }
-        val anchorYOffset = if (anchorOldBounds != null) anchorOldBounds.y - currentScrollY else null
+        val anchor = captureScrollAnchor()
+        val anchorSegmentId = anchor?.segmentId
+        val anchorYOffset = anchor?.yOffsetInViewport
 
         // Selection preservation
         val selStart = selectionStart
@@ -667,6 +656,58 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             }
         }
         return wordSpans to anyActiveCorrectionHighlight
+    }
+
+    data class ScrollAnchor(
+        val segmentId: String,
+        val yOffsetInViewport: Double
+    )
+
+    fun captureScrollAnchor(): ScrollAnchor? {
+        val scrollPane = (parent?.parent as? JScrollPane)
+        val viewport = scrollPane?.viewport
+        val viewRect = viewport?.viewRect
+        val currentScrollY = viewport?.viewPosition?.y ?: scrollPane?.verticalScrollBar?.value ?: 0
+
+        val pointer = pointerPosition ?: runCatching { mousePosition }.getOrNull()
+        val pointerSpan = pointer?.let(::spanAtPoint)
+        val firstVisibleSpan = if (viewRect != null && spans.isNotEmpty()) {
+            spans.firstOrNull { span ->
+                val bounds = runCatching { modelToView2D(span.playStart) }.getOrNull()
+                bounds != null && (bounds.y + 10) >= viewRect.y
+            } ?: spans.firstOrNull()
+        } else spans.firstOrNull()
+
+        val anchorSpan = pointerSpan ?: firstVisibleSpan ?: return null
+        val anchorSegmentId = anchorSpan.segment.id
+        val anchorOldBounds = runCatching { modelToView2D(anchorSpan.playStart) }.getOrNull() ?: return null
+        return ScrollAnchor(anchorSegmentId, anchorOldBounds.y - currentScrollY)
+    }
+
+    fun restoreScrollAnchor(anchor: ScrollAnchor?) {
+        if (anchor == null) return
+        val scrollPane = (parent?.parent as? JScrollPane) ?: return
+        val viewport = scrollPane.viewport
+        val scrollBar = scrollPane.verticalScrollBar
+
+        val span = spans.firstOrNull { it.segment.id == anchor.segmentId } ?: return
+        val bounds = runCatching { modelToView2D(span.playStart) }.getOrNull() ?: return
+
+        isProgrammaticScroll = true
+        try {
+            val maxScroll = if (viewport != null && viewport.extentSize.height > 0) {
+                (height - viewport.extentSize.height).coerceAtLeast(0)
+            } else if (scrollBar != null && scrollBar.maximum > 0) {
+                (scrollBar.maximum - scrollBar.visibleAmount).coerceAtLeast(0)
+            } else Int.MAX_VALUE
+            val targetY = kotlin.math.round(bounds.y - anchor.yOffsetInViewport).toInt().coerceIn(0, maxScroll)
+            if (viewport != null) {
+                viewport.viewPosition = Point(viewport.viewPosition.x, targetY)
+            }
+            scrollBar?.value = targetY
+        } finally {
+            isProgrammaticScroll = false
+        }
     }
 
     /** Returns the current fade-in alpha (`0.15f..1.0f`) for a newly settled archive card over [CARD_FADE_IN_MS] (~150 ms). */

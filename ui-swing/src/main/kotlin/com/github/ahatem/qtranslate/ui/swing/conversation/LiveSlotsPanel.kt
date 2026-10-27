@@ -53,23 +53,19 @@ class LiveSlotsPanel(private val strings: ConversationStrings) : JPanel(
             ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
             ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         ) {
-            override fun getMinimumSize(): Dimension {
+            private fun slotHeight(): Int {
                 val lineHeight = textPane.getFontMetrics(textPane.font).height.coerceAtLeast(16)
-                return Dimension(120, lineHeight * MIN_LINES + 8)
+                return lineHeight * FIXED_LINES + 8
             }
 
-            override fun getPreferredSize(): Dimension {
-                val lineHeight = textPane.getFontMetrics(textPane.font).height.coerceAtLeast(16)
-                val minH = lineHeight * MIN_LINES + 8
-                val maxH = lineHeight * MAX_LINES + 8
-                val contentH = super.getPreferredSize().height
-                return Dimension(super.getPreferredSize().width.coerceAtLeast(120), contentH.coerceIn(minH, maxH))
-            }
+            override fun getMinimumSize(): Dimension =
+                Dimension(120, slotHeight())
 
-            override fun getMaximumSize(): Dimension {
-                val lineHeight = textPane.getFontMetrics(textPane.font).height.coerceAtLeast(16)
-                return Dimension(Int.MAX_VALUE, lineHeight * MAX_LINES + 8)
-            }
+            override fun getPreferredSize(): Dimension =
+                Dimension(super.getPreferredSize().width.coerceAtLeast(120), slotHeight())
+
+            override fun getMaximumSize(): Dimension =
+                Dimension(Int.MAX_VALUE, slotHeight())
         }.apply {
             isOpaque = false
             viewport.isOpaque = false
@@ -171,8 +167,9 @@ class LiveSlotsPanel(private val strings: ConversationStrings) : JPanel(
         }
 
         companion object {
-            const val MIN_LINES = 2
-            const val MAX_LINES = 4
+            const val FIXED_LINES = 4
+            const val MIN_LINES = FIXED_LINES
+            const val MAX_LINES = FIXED_LINES
         }
     }
 
