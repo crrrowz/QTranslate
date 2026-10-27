@@ -1087,6 +1087,8 @@ class ConversationRecorder(
                 currentConfirmedWords + words.filter { it.startMillis >= toSessionMillis(sliceStartSample) }
             } else words
 
+            val currentSession = _state.value.session
+            val settleTime = maxOf(endMillis, currentSession?.segments?.maxOfOrNull { it.settledAtMillis } ?: 0L)
             val draft = TranscriptSegment(
                 id = UUID.randomUUID().toString(),
                 source = source,
@@ -1097,10 +1099,10 @@ class ConversationRecorder(
                 confirmedText = currentConfirmedText,
                 draft = true,
                 verificationState = currentVerificationState,
-                agreement = currentAgreement
+                agreement = currentAgreement,
+                settledAtMillis = settleTime
             )
 
-            val currentSession = _state.value.session
             val candidate = currentSession?.findCoalesceCandidate(source, startMillis, endMillis, currentLanguage.tag)
 
             val segmentToApply: TranscriptSegment

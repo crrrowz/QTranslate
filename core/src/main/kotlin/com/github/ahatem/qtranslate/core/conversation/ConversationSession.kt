@@ -88,7 +88,9 @@ data class TranscriptSegment(
     val confirmedWords: List<TranscriptWord> = emptyList(),
     val verificationState: VerificationState = VerificationState.LIVE,
     /** Word-level agreement ratio (0.0..1.0) between live text and accurate verification, when checked. */
-    val agreement: Double? = null
+    val agreement: Double? = null,
+    /** Timestamp on the session timeline when this segment settled into the archive (determines archive card order). */
+    val settledAtMillis: Long = startMillis
 )
 
 const val COALESCE_PAUSE_THRESHOLD_MILLIS = 2_000L
@@ -121,19 +123,30 @@ data class ConversationSession(
     fun languageOf(source: AudioSource): String =
         if (source == AudioSource.MICROPHONE) spokenLanguage else callLanguage
 
-    /** Segments in timeline order, which is the order they were spoken. */
+    /**
+     * Archive segments ordered by settle time ([TranscriptSegment.settledAtMillis]) with a fixed tie-break
+     * ([AudioSource.MICROPHONE] before [AudioSource.SYSTEM]). Once a card is in the archive, updating it by id
+     * replaces it in place so existing cards never swap or move.
+     */
     fun withSegment(segment: TranscriptSegment): ConversationSession {
-        val others = segments.filterNot { it.id == segment.id }
-        val index = others.indexOfFirst {
-            if (it.startMillis != segment.startMillis) {
-                it.startMillis > segment.startMillis
+        val existingIdx = segments.indexOfFirst { it.id == segment.id }
+        if (existingIdx >= 0) {
+            val existing = segments[existingIdx]
+            val preserved = segment.copy(settledAtMillis = existing.settledAtMillis)
+            val updated = ArrayList(segments)
+            updated[existingIdx] = preserved
+            return copy(segments = updated)
+        }
+        val index = segments.indexOfFirst {
+            if (it.settledAtMillis != segment.settledAtMillis) {
+                it.settledAtMillis > segment.settledAtMillis
             } else if (it.source != segment.source) {
                 it.source.ordinal > segment.source.ordinal
             } else {
                 it.id > segment.id
             }
-        }.let { if (it < 0) others.size else it }
-        return copy(segments = others.subList(0, index) + segment + others.subList(index, others.size))
+        }.let { if (it < 0) segments.size else it }
+        return copy(segments = segments.subList(0, index) + segment + segments.subList(index, segments.size))
     }
 
     /** Removes a segment by id. */
@@ -151,12 +164,12 @@ data class SessionSearchHit(
  * Checks whether [candidate] can be coalesced with a new segment for [source].
  *
  * Rules:
- * - Same [source]
+ * - [candidate] MUST be the very last archive card in [ConversationSession.segments] (never coalesce into an earlier card)
+ * - Same [source] (therefore the other speaker has not settled anything since [candidate])
  * - Candidate is not failed
  * - Gap between candidate.endMillis and newStartMillis is <= 2_000 ms (and >= -500 ms)
  * - Combined duration <= 15_000 ms
  * - Language matches (or either is null/blank)
- * - No finalized segment from the other speaker occurred after candidate.startMillis
  */
 fun ConversationSession.canCoalesce(
     candidate: TranscriptSegment,
@@ -165,16 +178,14 @@ fun ConversationSession.canCoalesce(
     endMillis: Long,
     language: String? = null
 ): Boolean {
+    val lastCard = segments.lastOrNull() ?: return false
+    if (lastCard.id != candidate.id) return false
     if (candidate.source != source || candidate.failed) return false
     val gap = startMillis - candidate.endMillis
     if (gap !in -500..COALESCE_PAUSE_THRESHOLD_MILLIS) return false
     val combinedDuration = maxOf(candidate.endMillis, endMillis) - candidate.startMillis
     if (combinedDuration > COALESCE_MAX_DURATION_MILLIS) return false
     if (!candidate.language.isNullOrBlank() && !language.isNullOrBlank() && candidate.language != language) return false
-    val otherFinalizedInBetween = segments.any {
-        it.source != source && it.startMillis >= candidate.startMillis && !it.draft && !it.pending
-    }
-    if (otherFinalizedInBetween) return false
     return true
 }
 
@@ -184,7 +195,7 @@ fun ConversationSession.findCoalesceCandidate(
     endMillis: Long,
     language: String? = null
 ): TranscriptSegment? {
-    val candidate = segments.lastOrNull { it.source == source } ?: return null
+    val candidate = segments.lastOrNull() ?: return null
     return if (canCoalesce(candidate, source, startMillis, endMillis, language)) candidate else null
 }
 
@@ -208,6 +219,7 @@ fun coalesceSegments(first: TranscriptSegment, second: TranscriptSegment): Trans
         words = first.words + normalizedSecondWords,
         draft = first.draft || second.draft,
         pending = false,
-        failed = false
+        failed = false,
+        settledAtMillis = first.settledAtMillis
     )
 }
