@@ -107,4 +107,6 @@ class ConversationStrings(private val localizer: LocalizationManager) {
     val unverifiedBadgeTooltip = localizer.getString("conversation.unverified_badge_tooltip")
     val chatLayout = localizer.getString("conversation.chat_layout")
     val chatLayoutTooltip = localizer.getString("conversation.chat_layout_tooltip")
+    val autoTranslate = localizer.getString("conversation.auto_translate")
+    val autoTranslateTooltip = localizer.getString("conversation.auto_translate_tooltip")
 }

@@ -39,11 +39,14 @@ import java.awt.ComponentOrientation
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Font
 import java.awt.Insets
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -147,17 +150,56 @@ class ConversationWindow(
     private var fillingLanguages = false
 
     private val testDevicesButton = JButton(strings.testDevices)
+    private val meGroup = JPanel()
+    private val themGroup = JPanel()
+    private val translateGroup = JPanel()
+    private val row2Audio = JPanel()
+
+    private fun relayoutAudioRow(windowWidth: Int) {
+        row2Audio.removeAll()
+        if (windowWidth >= 1000) {
+            row2Audio.layout = MigLayout("fillx, insets 0, gap 10", "[grow,fill][grow,fill][grow,fill]")
+            row2Audio.add(meGroup, "growx")
+            row2Audio.add(themGroup, "growx")
+            row2Audio.add(translateGroup, "growx")
+        } else {
+            row2Audio.layout = MigLayout("fillx, wrap 1, insets 0, gap 6", "[grow,fill]")
+            row2Audio.add(meGroup, "growx")
+            row2Audio.add(themGroup, "growx")
+            row2Audio.add(translateGroup, "growx")
+        }
+        row2Audio.revalidate()
+        row2Audio.repaint()
+    }
     private val deviceWarningText = wrappingText("")
-    private val deviceWarningBar = banner(deviceWarningText, UIManager.getColor("Actions.Yellow")) {
-        deviceWarningDismissed = true
-    }.apply { isVisible = false }
-    private var deviceWarningDismissed = false
+    internal val deviceWarningBar: JPanel by lazy {
+        banner(deviceWarningText, UIManager.getColor("Actions.Yellow")) {
+            deviceWarningDismissed = true
+            deviceWarningBar.isVisible = false
+        }.apply { isVisible = false }
+    }
+    internal var deviceWarningDismissed = false
     private var testingDevices = false
 
     private val noticeText = wrappingText("")
-    private val noticeBar = banner(noticeText, UIManager.getColor("Actions.Red")) { recorder.clearNotice() }
-    private val privacyBar = banner(wrappingText(strings.privacyNotice), UIManager.getColor("Actions.Yellow")) {
-        feature.preferences = feature.preferences.copy(privacyNoticeDismissed = true)
+    internal val noticeBar: JPanel by lazy {
+        banner(noticeText, UIManager.getColor("Actions.Red")) {
+            recorder.clearNotice()
+            noticeBar.isVisible = false
+        }.apply { isVisible = false }
+    }
+    internal val privacyBar: JPanel by lazy {
+        banner(wrappingText(strings.privacyNotice), UIManager.getColor("Actions.Yellow")) {
+            feature.preferences = feature.preferences.copy(privacyNoticeDismissed = true)
+            privacyBar.isVisible = false
+        }
+    }
+
+    internal val autoTranslateCheck = JCheckBox(strings.autoTranslate, false).apply {
+        toolTipText = strings.autoTranslateTooltip
+        addActionListener {
+            feature.preferences = feature.preferences.copy(autoTranslate = isSelected)
+        }
     }
 
     private val sessionsModel = DefaultListModel<ConversationSession>()
@@ -226,7 +268,11 @@ class ConversationWindow(
             }
         })
     }
-    internal val transcriptOverlayPane = TranscriptOverlayPane(transcriptScroll, pausePill)
+    internal val transcriptOverlayPane = TranscriptOverlayPane(
+        transcriptScroll,
+        pausePill,
+        banners = listOf(privacyBar, deviceWarningBar, noticeBar)
+    )
     private val popup = HoverTranslationPopup(this, strings)
 
     /** Gate deciding whether transcript DOM updates are frozen while reading/hovering. */
@@ -281,6 +327,18 @@ class ConversationWindow(
             KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
             JComponent.WHEN_IN_FOCUSED_WINDOW
         )
+        addComponentListener(object : ComponentAdapter() {
+            private var lastW = -1
+            override fun componentResized(e: ComponentEvent) {
+                val w = width
+                val isWide = w >= 1000
+                val wasWide = lastW >= 1000
+                if (lastW < 0 || isWide != wasWide) {
+                    lastW = w
+                    relayoutAudioRow(w)
+                }
+            }
+        })
     }
 
     /** Brings the window up, refreshing devices and sessions. */
@@ -328,87 +386,94 @@ class ConversationWindow(
     }
 
     private fun buildMain(): JPanel = JPanel(BorderLayout()).apply {
-        // Device names run to 70 characters, and a combo box will not shrink below its widest item.
-        // A typical-length prototype sizes them instead, and "wmin" lets each give way further, so
-        // the pickers share whatever width the window has rather than overlapping or clipping.
         listOf(microphoneCombo, systemCombo).forEach { it.prototypeDisplayValue = DeviceItem(null, "SteelSeries Sonar - Chat (Virtual)") }
-        val pickers = shrinkable(MigLayout("fillx, insets 8 12 6 12, gap 10 6", "[trailing][grow,fill][trailing][grow,fill][trailing][grow,fill]")).apply {
-            // Row 1: Audio Devices with Mute, Test and Refresh buttons
-            add(JLabel(strings.microphone))
-            val micPanel = JPanel(BorderLayout(4, 0)).apply {
-                isOpaque = false
-                add(microphoneCombo, BorderLayout.CENTER)
-                add(micMuteButton, BorderLayout.EAST)
-            }
-            add(micPanel, "wmin 100, growx")
 
-            val callHeader = JPanel(FlowLayout(FlowLayout.TRAILING, 4, 0)).apply {
-                isOpaque = false
-                add(JLabel(strings.callAudio).apply { toolTipText = strings.callAudioTooltip })
-                add(deviceModeButton.apply {
-                    putClientProperty("JButton.buttonType", "toolBarButton")
-                    toolTipText = strings.captureModeTooltip
-                    margin = Insets(1, 4, 1, 4)
-                    font = font.deriveFont((font.size2D - 2f).coerceAtLeast(10f))
-                })
-                add(appModeButton.apply {
-                    putClientProperty("JButton.buttonType", "toolBarButton")
-                    toolTipText = strings.captureModeTooltip
-                    margin = Insets(1, 4, 1, 4)
-                    font = font.deriveFont((font.size2D - 2f).coerceAtLeast(10f))
-                })
-            }
-            add(callHeader)
-            val callPanel = JPanel(BorderLayout(4, 0)).apply {
-                isOpaque = false
-                add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, BorderLayout.CENTER)
-                add(callMuteButton, BorderLayout.EAST)
-            }
-            add(callPanel, "wmin 100, growx")
-
-            add(JLabel())
-            val testPanel = JPanel(FlowLayout(FlowLayout.TRAILING, 4, 0)).apply {
-                isOpaque = false
-                add(testDevicesButton)
-                add(refreshDevicesButton)
-            }
-            add(testPanel, "wrap")
-
-            // Row 2: Languages
-            add(JLabel(strings.myLanguage))
-            add(myLanguageCombo, "wmin 90, growx")
-            add(JLabel(strings.callLanguage))
-            add(callLanguageCombo, "wmin 90, growx")
-            add(JLabel(strings.translateTo))
-            add(targetCombo, "wmin 90, growx, wrap")
-        }
-        val speechRow = shrinkable(MigLayout("fillx, insets 0 12 4 12, gap 8", "[grow,fill][]")).apply {
-            add(speechLabel, "wmin 0")
-            add(speechSettingsButton)
-        }
-        val recordRow = shrinkable(MigLayout("fillx, insets 4 12 2 12, gap 10", "[][][][][]push[][]")).apply {
+        // Row 1 — session
+        val row1Session = shrinkable(MigLayout("fillx, insets 6 12 4 12, gap 8", "[][][][][grow,fill]push[][][][]")).apply {
             recordButton.putClientProperty("JButton.buttonType", "default")
             add(recordButton)
             add(stopButton)
             add(timerLabel.apply { font = font.deriveFont(font.size2D + 4f) })
             add(pendingLabel)
             add(retryFailedButton)
+            add(speechLabel, "wmin 0")
             add(microphoneLight, "wmin 0")
             add(systemLight, "wmin 0")
+            add(speechSettingsButton)
         }
-        val keepAudioRow = shrinkable(MigLayout("fillx, insets 0 12 6 12", "[][grow,fill][]")).apply {
+
+        // Row 2 — audio (ME, THEM, TRANSLATE blocks)
+        meGroup.apply {
+            isOpaque = false
+            layout = MigLayout("insets 0, gap 4", "[][grow,fill][grow,fill]")
+            val label = JLabel(strings.speakerMe.uppercase() + ":").apply { font = font.deriveFont(Font.BOLD) }
+            val micPanel = JPanel(BorderLayout(2, 0)).apply {
+                isOpaque = false
+                add(microphoneCombo, BorderLayout.CENTER)
+                add(micMuteButton, BorderLayout.EAST)
+            }
+            add(label)
+            add(micPanel, "wmin 80, growx")
+            add(myLanguageCombo, "wmin 70, growx")
+        }
+
+        themGroup.apply {
+            isOpaque = false
+            layout = MigLayout("insets 0, gap 4", "[][grow,fill][grow,fill]")
+            val label = JLabel(strings.speakerCall.uppercase() + ":").apply {
+                font = font.deriveFont(Font.BOLD)
+                toolTipText = strings.callAudioTooltip
+            }
+            val callPanel = JPanel(BorderLayout(2, 0)).apply {
+                isOpaque = false
+                add(systemCombo.apply { toolTipText = strings.callAudioTooltip }, BorderLayout.CENTER)
+                val modeAndMute = JPanel(FlowLayout(FlowLayout.TRAILING, 0, 0)).apply {
+                    isOpaque = false
+                    add(deviceModeButton.apply {
+                        putClientProperty("JButton.buttonType", "toolBarButton")
+                        toolTipText = strings.captureModeTooltip
+                        margin = Insets(1, 3, 1, 3)
+                        font = font.deriveFont((font.size2D - 2f).coerceAtLeast(10f))
+                    })
+                    add(appModeButton.apply {
+                        putClientProperty("JButton.buttonType", "toolBarButton")
+                        toolTipText = strings.captureModeTooltip
+                        margin = Insets(1, 3, 1, 3)
+                        font = font.deriveFont((font.size2D - 2f).coerceAtLeast(10f))
+                    })
+                    add(callMuteButton)
+                }
+                add(modeAndMute, BorderLayout.EAST)
+            }
+            add(label)
+            add(callPanel, "wmin 90, growx")
+            add(callLanguageCombo, "wmin 70, growx")
+        }
+
+        translateGroup.apply {
+            isOpaque = false
+            layout = MigLayout("insets 0, gap 4", "[][grow,fill][][][]")
+            val label = JLabel(strings.translateTo.uppercase() + ":").apply { font = font.deriveFont(Font.BOLD) }
+            add(label)
+            add(targetCombo, "wmin 80, growx")
+            add(autoTranslateCheck)
+            add(testDevicesButton)
+            add(refreshDevicesButton)
+        }
+
+        relayoutAudioRow(width.takeIf { it > 0 } ?: 1120)
+
+        // Row 3 — view & privacy options
+        val row3View = shrinkable(MigLayout("fillx, insets 2 12 4 12, gap 10", "[]push[][][]")).apply {
             add(keepAudioCheck, "wmin 0")
             add(chatLayoutCheck, "wmin 0")
             add(orderButton)
         }
+
         val top = JPanel(MigLayout("fillx, wrap 1, insets 0, gap 0", "[grow,fill]")).apply {
-            add(pickers)
-            add(speechRow)
-            add(recordRow)
-            add(keepAudioRow)
-            add(privacyBar)
-            add(deviceWarningBar)
-            add(noticeBar)
+            add(row1Session)
+            add(row2Audio, "gapleft 12, gapright 12, gaptop 2, gapbottom 2")
+            add(row3View)
         }
         add(top, BorderLayout.NORTH)
         transcriptInnerPanel.apply {
@@ -845,6 +910,7 @@ class ConversationWindow(
         keepAudioCheck.isSelected = preferences.keepAudio
         chatLayoutCheck.isSelected = preferences.chatLayout
         transcript.chatLayout = preferences.chatLayout
+        autoTranslateCheck.isSelected = preferences.autoTranslate
         isAppMode = preferences.systemAudioMode == "app"
         deviceModeButton.isSelected = !isAppMode
         appModeButton.isSelected = isAppMode

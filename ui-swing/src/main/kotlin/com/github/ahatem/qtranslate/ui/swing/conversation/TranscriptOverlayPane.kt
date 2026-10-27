@@ -14,15 +14,30 @@ import javax.swing.JScrollPane
  */
 class TranscriptOverlayPane(
     val transcriptScroll: JScrollPane,
-    val pill: JComponent
+    val pill: JComponent,
+    val banners: List<JComponent> = emptyList()
 ) : JLayeredPane() {
 
     init {
         isOpaque = false
         // Layer 0: normal component layer for scrollpane
         add(transcriptScroll, DEFAULT_LAYER)
-        // Layer 300: modal/popup layer so the pill sits clearly above the transcript contents
+        // Layer 300: modal/popup layer so the pill and banners sit clearly above the transcript contents
         add(pill, POPUP_LAYER)
+        banners.forEach { banner ->
+            add(banner, POPUP_LAYER)
+            banner.addComponentListener(object : java.awt.event.ComponentAdapter() {
+                override fun componentShown(e: java.awt.event.ComponentEvent?) {
+                    doLayout()
+                    repaint()
+                }
+
+                override fun componentHidden(e: java.awt.event.ComponentEvent?) {
+                    doLayout()
+                    repaint()
+                }
+            })
+        }
         layout = OverlayLayout()
 
         pill.addComponentListener(object : java.awt.event.ComponentAdapter() {
@@ -60,18 +75,29 @@ class TranscriptOverlayPane(
             // 1. Fill entire layered pane with the scrollpane
             transcriptScroll.setBounds(insets.left, insets.top, w, h)
 
-            // 2. Position pill over top edge of viewport (avoid covering vertical scrollbar)
+            val viewportBounds = transcriptScroll.viewport.bounds
+            val scrollBarW = if (transcriptScroll.verticalScrollBar.isVisible) transcriptScroll.verticalScrollBar.width else 0
+            val availW = (w - scrollBarW).coerceAtLeast(32)
+
+            // 2. Position visible banners stacked at the top edge of the viewport
+            var bannerY = insets.top + viewportBounds.y + 2
+            banners.forEach { banner ->
+                if (banner.isVisible) {
+                    val pref = banner.preferredSize
+                    val bannerW = availW - 12
+                    val bannerH = pref.height.coerceAtLeast(24)
+                    banner.setBounds(insets.left + viewportBounds.x + 6, bannerY, bannerW, bannerH)
+                    bannerY += bannerH + 4
+                }
+            }
+
+            // 3. Position pill over top edge of viewport (below any visible banners)
             val pillPref = pill.preferredSize
             val pillW = pillPref.width.coerceAtLeast(32)
             val pillH = pillPref.height.coerceAtLeast(20)
 
-            // The viewport bounds within transcriptScroll
-            val viewportBounds = transcriptScroll.viewport.bounds
-            val scrollBarW = if (transcriptScroll.verticalScrollBar.isVisible) transcriptScroll.verticalScrollBar.width else 0
-
-            val availW = (w - scrollBarW).coerceAtLeast(pillW)
             val pillX = insets.left + viewportBounds.x + (availW - pillW) / 2
-            val pillY = insets.top + viewportBounds.y + 6 // 6px padding from top edge
+            val pillY = if (banners.any { it.isVisible }) bannerY + 2 else insets.top + viewportBounds.y + 6
 
             pill.setBounds(pillX, pillY, pillW, pillH)
         }

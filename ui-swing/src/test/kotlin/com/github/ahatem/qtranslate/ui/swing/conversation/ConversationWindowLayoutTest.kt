@@ -2,10 +2,12 @@ package com.github.ahatem.qtranslate.ui.swing.conversation
 
 import com.github.ahatem.qtranslate.api.core.Logger
 import com.github.ahatem.qtranslate.core.conversation.AudioSource
+import com.github.ahatem.qtranslate.core.conversation.ConversationFeature
 import com.github.ahatem.qtranslate.core.conversation.ConversationSession
 import com.github.ahatem.qtranslate.core.conversation.LiveLine
 import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
 import com.github.ahatem.qtranslate.core.conversation.VerificationState
+import com.github.ahatem.qtranslate.core.conversation.WasapiLoopbackBackend
 import com.github.ahatem.qtranslate.core.localization.LanguageTomlParser
 import com.github.ahatem.qtranslate.core.localization.LocalizationManager
 import org.junit.jupiter.api.Test
@@ -35,6 +37,64 @@ class ConversationWindowLayoutTest {
         val tempDir = Files.createTempDirectory("conversation-layout-test").toFile()
         val manager = LocalizationManager(tempDir, LanguageTomlParser(), silentLogger)
         return ConversationStrings(manager)
+    }
+
+    @Test
+    fun `window layout at 780, 1000 and 1300 px LTR and RTL does not clip top controls`() {
+        SwingUtilities.invokeAndWait {
+            val appData = Files.createTempDirectory("qt-conv-layout-test").toFile()
+            val feature = ConversationFeature(
+                scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default),
+                activeServiceManager = com.github.ahatem.qtranslate.core.settings.data.ActiveServiceManager(
+                    kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
+                    kotlinx.coroutines.flow.MutableStateFlow(com.github.ahatem.qtranslate.core.settings.data.Configuration.DEFAULT)
+                ),
+                translateString = com.github.ahatem.qtranslate.core.main.domain.usecase.TranslateStringUseCase(
+                    com.github.ahatem.qtranslate.core.settings.data.ActiveServiceManager(
+                        kotlinx.coroutines.flow.MutableStateFlow(emptyMap()),
+                        kotlinx.coroutines.flow.MutableStateFlow(com.github.ahatem.qtranslate.core.settings.data.Configuration.DEFAULT)
+                    )
+                ),
+                appData = appData,
+                loggerFactory = object : com.github.ahatem.qtranslate.core.shared.logging.LoggerFactory { override fun getLogger(name: String) = silentLogger },
+                systemBackend = WasapiLoopbackBackend(powershell = null)
+            )
+            val localizer = LocalizationManager(appData, LanguageTomlParser(), silentLogger)
+            val languages = listOf(
+                com.github.ahatem.qtranslate.api.language.LanguageCode.AUTO,
+                com.github.ahatem.qtranslate.api.language.LanguageCode.ENGLISH,
+                com.github.ahatem.qtranslate.api.language.LanguageCode.ARABIC
+            )
+
+            listOf(false, true).forEach { isRtlMode ->
+                val window = ConversationWindow(
+                    feature = feature,
+                    strings = ConversationStrings(localizer),
+                    languages = { languages },
+                    defaultTarget = { com.github.ahatem.qtranslate.api.language.LanguageCode.ENGLISH },
+                    isRtl = { isRtlMode }
+                )
+                window.open()
+
+                listOf(780, 1000, 1300).forEach { w ->
+                    window.size = java.awt.Dimension(w, 600)
+                    window.validate()
+                    window.doLayout()
+
+                    // Ensure overlay banners can show and hide without clipping or crashing
+                    window.privacyBar.isVisible = true
+                    window.deviceWarningBar.isVisible = true
+                    window.noticeBar.isVisible = true
+                    window.validate()
+
+                    window.privacyBar.isVisible = false
+                    window.deviceWarningBar.isVisible = false
+                    window.noticeBar.isVisible = false
+                    window.validate()
+                }
+                window.dispose()
+            }
+        }
     }
 
     private fun layoutAll(innerPanel: JPanel, overlay: TranscriptOverlayPane, scrollPane: JScrollPane) {
@@ -87,6 +147,33 @@ class ConversationWindowLayoutTest {
 
             val boundsWithoutPill = scrollPane.viewport.bounds
             assertEquals(initialBounds, boundsWithoutPill, "Hiding pill must not change viewport bounds")
+
+            // Showing and closing overlay banners (privacy, warning, notice) does not change viewport bounds
+            val banner1 = JButton("Privacy banner").apply { isVisible = false }
+            val banner2 = JButton("Warning banner").apply { isVisible = false }
+            val banner3 = JButton("Notice banner").apply { isVisible = false }
+            val overlayWithBanners = TranscriptOverlayPane(scrollPane, pill, listOf(banner1, banner2, banner3))
+            val bannerContainer = JPanel(BorderLayout()).apply {
+                setBounds(0, 0, 600, 400)
+                add(overlayWithBanners, BorderLayout.CENTER)
+            }
+            layoutAll(bannerContainer, overlayWithBanners, scrollPane)
+            val boundsBaseline = scrollPane.viewport.bounds
+
+            banner1.isVisible = true
+            layoutAll(bannerContainer, overlayWithBanners, scrollPane)
+            assertEquals(boundsBaseline, scrollPane.viewport.bounds, "Showing privacy banner overlay must not change viewport bounds")
+
+            banner2.isVisible = true
+            banner3.isVisible = true
+            layoutAll(bannerContainer, overlayWithBanners, scrollPane)
+            assertEquals(boundsBaseline, scrollPane.viewport.bounds, "Showing warning and notice banner overlays must not change viewport bounds")
+
+            banner1.isVisible = false
+            banner2.isVisible = false
+            banner3.isVisible = false
+            layoutAll(bannerContainer, overlayWithBanners, scrollPane)
+            assertEquals(boundsBaseline, scrollPane.viewport.bounds, "Hiding all banner overlays must not change viewport bounds")
 
             // Pointer in empty space below cards must not count as hovering a card or block live-edge scroll
             val s1 = TranscriptSegment(id = "seg-1", source = AudioSource.MICROPHONE, startMillis = 1000, endMillis = 2000, text = "First card")
@@ -434,6 +521,28 @@ class ConversationWindowLayoutTest {
             layoutAll(innerPanel, overlay, scrollPane)
             view.restoreScrollAnchor(anchorChatToggleBack)
             assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen stability preserved when chatLayout is toggled on")
+
+            // Showing and closing overlay banners does not change anchored card screen Y
+            val b1 = JButton("Banner 1").apply { isVisible = false }
+            val b2 = JButton("Banner 2").apply { isVisible = false }
+            val overlayWithBannersTest = TranscriptOverlayPane(scrollPane, pill, listOf(b1, b2))
+            innerPanel.remove(overlay)
+            innerPanel.add(overlayWithBannersTest, BorderLayout.CENTER)
+            layoutAll(innerPanel, overlayWithBannersTest, scrollPane)
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0)
+
+            b1.isVisible = true
+            layoutAll(innerPanel, overlayWithBannersTest, scrollPane)
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen Y preserved when banner 1 is shown")
+
+            b2.isVisible = true
+            layoutAll(innerPanel, overlayWithBannersTest, scrollPane)
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen Y preserved when banner 2 is shown")
+
+            b1.isVisible = false
+            b2.isVisible = false
+            layoutAll(innerPanel, overlayWithBannersTest, scrollPane)
+            assertEquals(expectedScreenY, cardScreenY(view, scrollPane, innerPanel, cardXId), 1.0, "Screen Y preserved when banners are hidden")
         }
     }
 
