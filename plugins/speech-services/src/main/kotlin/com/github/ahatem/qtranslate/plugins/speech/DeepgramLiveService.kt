@@ -133,6 +133,7 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
         private val buffer = StringBuilder()
 
         override fun onOpen(webSocket: WebSocket) {
+            socket = webSocket
             ready.complete(Ok(Unit))
             keepAliveJob = sessionScope.launch {
                 while (isActive && !ended) {

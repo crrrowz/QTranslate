@@ -26,6 +26,11 @@ abstract class WebSocketLiveSession(
     protected val channel = Channel<LiveSpeechEvent>(Channel.UNLIMITED)
     override val events: Flow<LiveSpeechEvent> = channel.receiveAsFlow()
 
+    /**
+     * Set by each listener's onOpen as well as after buildAsync returns: onOpen runs before buildAsync
+     * completes, and anything sent from it through [enqueue] would otherwise be dropped.
+     */
+    @Volatile
     protected var socket: WebSocket? = null
     protected val ready = CompletableDeferred<Result<Unit, ServiceError>>()
     protected val closed = CompletableDeferred<Unit>()

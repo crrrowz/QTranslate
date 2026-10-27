@@ -109,6 +109,7 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
         private val buffer = StringBuilder()
 
         override fun onOpen(webSocket: WebSocket) {
+            socket = webSocket
             // Configure session for input audio transcription only (no assistant turn response generation)
             val config = """{"type":"session.update","session":{"modalities":["text"],"input_audio_format":"pcm16","turn_detection":{"type":"server_vad","threshold":0.5,"prefix_padding_ms":300,"silence_duration_ms":500,"create_response":false},"input_audio_transcription":{"model":"whisper-1"}}}"""
             enqueue { it.sendText(config, true) }
@@ -142,9 +143,9 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
         }
     }
 
-    private suspend fun connect(apiKey: String, model: String): Result<Unit, ServiceError> {
+    private suspend fun connect(apiKey: String, model: String, endpoint: String): Result<Unit, ServiceError> {
         val encodedModel = java.net.URLEncoder.encode(model, "UTF-8")
-        val uri = URI("wss://api.openai.com/v1/realtime?model=$encodedModel")
+        val uri = URI("$endpoint?model=$encodedModel")
         return try {
             socket = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
                 .newWebSocketBuilder()
@@ -160,15 +161,17 @@ class OpenAiRealtimeSession private constructor() : WebSocketLiveSession("OpenAI
     }
 
     companion object {
-        suspend fun open(apiKey: String, model: String): Result<LiveSpeechSession, ServiceError> {
+        private const val ENDPOINT = "wss://api.openai.com/v1/realtime"
+
+        suspend fun open(apiKey: String, model: String, endpoint: String = ENDPOINT): Result<LiveSpeechSession, ServiceError> {
             val session = OpenAiRealtimeSession()
-            session.connect(apiKey, model).getError()?.let { return Err(it) }
+            session.connect(apiKey, model, endpoint).getError()?.let { return Err(it) }
             return Ok(session)
         }
 
         suspend fun ping(apiKey: String, model: String): Result<Unit, ServiceError> {
             val session = OpenAiRealtimeSession()
-            val result = session.connect(apiKey, model)
+            val result = session.connect(apiKey, model, ENDPOINT)
             session.cancel()
             return result
         }
