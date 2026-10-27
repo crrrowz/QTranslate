@@ -254,9 +254,8 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
                 copySelectedTextToClipboard()
             }
         }
-        val menuMask = Toolkit.getDefaultToolkit().menuShortcutKeyMaskEx
-        inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_C, menuMask), "copy-selection")
         inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_C, KeyEvent.CTRL_DOWN_MASK), "copy-selection")
+        inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_C, KeyEvent.META_DOWN_MASK), "copy-selection")
         actionMap.put("copy-selection", copyAction)
     }
 
@@ -267,7 +266,7 @@ class TranscriptListView(private val strings: ConversationStrings) : JComponent(
         if (start >= end) return null
         val selected = textOf(start until end)
         if (selected.isEmpty()) return null
-        runCatching {
+        if (!java.awt.GraphicsEnvironment.isHeadless()) {
             Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(selected), null)
         }
         return selected
