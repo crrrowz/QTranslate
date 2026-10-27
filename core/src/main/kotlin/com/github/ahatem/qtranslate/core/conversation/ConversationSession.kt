@@ -40,12 +40,26 @@ data class SessionStream(
     val offsetMillis: Long = 0
 )
 
+/** Honest verification state of a live or settled transcript segment or word range. */
+@Serializable
+enum class VerificationState {
+    /** Live recognition in progress; not yet checked against audio. */
+    LIVE,
+    /** Checked by the accurate recognizer and matched the live text. */
+    VERIFIED,
+    /** Checked by the accurate recognizer and updated to fix differences. */
+    CORRECTED,
+    /** Check failed or no accurate recognizer is configured. */
+    UNVERIFIED
+}
+
 /** A recognised word; times are on the session timeline. */
 @Serializable
 data class TranscriptWord(
     val text: String,
     val startMillis: Long,
-    val endMillis: Long
+    val endMillis: Long,
+    val verificationState: VerificationState = VerificationState.LIVE
 )
 
 /**
@@ -70,7 +84,8 @@ data class TranscriptSegment(
     val failed: Boolean = false,
     val draft: Boolean = false,
     val confirmedText: String = "",
-    val confirmedWords: List<TranscriptWord> = emptyList()
+    val confirmedWords: List<TranscriptWord> = emptyList(),
+    val verificationState: VerificationState = VerificationState.LIVE
 )
 
 const val COALESCE_PAUSE_THRESHOLD_MILLIS = 2_000L

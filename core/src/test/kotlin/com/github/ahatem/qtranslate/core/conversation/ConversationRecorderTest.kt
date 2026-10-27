@@ -928,4 +928,86 @@ class ConversationRecorderTest {
         assertTrue(saved.segments.isNotEmpty(), "Utterance spoken while reconnecting must be saved as a segment on stop")
         assertTrue(saved.segments.any { it.text == "recovered utterance" || it.pending }, "Utterance must be captured on stop")
     }
+
+    @Test
+    fun `honest verification states mark NoService and Failed as UNVERIFIED and Done as VERIFIED or CORRECTED`() = runBlocking {
+        // 1. NoService -> UNVERIFIED (and rolling check does NOT confirm live text)
+        val mic1 = ScriptedDevice()
+        val live1 = ScriptedLive()
+        val recNoService = recorder(
+            mic = mic1,
+            system = ScriptedDevice(),
+            openLive = { Ok(live1) },
+            recognize = { null }
+        )
+        recNoService.start(options().copy(systemOutput = null))
+        waitUntil { recNoService.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+        awaitLive(mic1, live1)
+
+        val partialText = "one two three four five six seven eight nine ten"
+        repeat(11) {
+            mic1.push(tone(500))
+            delay(50)
+            live1.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial(partialText))
+        }
+        waitUntil { recNoService.state.value.live[AudioSource.MICROPHONE]?.verificationState == VerificationState.UNVERIFIED }
+        assertEquals("", recNoService.state.value.live[AudioSource.MICROPHONE]?.confirmedText, "NoService must never mark live words as confirmed")
+
+        live1.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final(partialText))
+        waitUntil { recNoService.state.value.session?.segments?.any { !it.draft } == true }
+        assertEquals(VerificationState.UNVERIFIED, recNoService.state.value.session!!.segments.single().verificationState)
+        recNoService.stop()
+
+        // 2. Failed -> UNVERIFIED
+        val mic2 = ScriptedDevice()
+        val live2 = ScriptedLive()
+        val recFailed = recorder(
+            mic = mic2,
+            system = ScriptedDevice(),
+            openLive = { Ok(live2) },
+            recognize = { Err(ServiceError.NetworkError("offline")) }
+        )
+        recFailed.start(options().copy(systemOutput = null))
+        waitUntil { recFailed.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+        awaitLive(mic2, live2)
+
+        mic2.push(tone(600))
+        waitUntil { mic2.chunks.isEmpty() }
+        live2.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("hello there"))
+        waitUntil { recFailed.state.value.session?.segments?.any { !it.draft } == true }
+        assertEquals(VerificationState.UNVERIFIED, recFailed.state.value.session!!.segments.single().verificationState)
+        recFailed.stop()
+
+        // 3. Done matching -> VERIFIED; Done differing -> CORRECTED
+        val mic3 = ScriptedDevice()
+        val live3 = ScriptedLive()
+        var responseText = "exact match"
+        val recDone = recorder(
+            mic = mic3,
+            system = ScriptedDevice(),
+            openLive = { Ok(live3) },
+            recognize = { Ok(SpeechRecognitionResponse(text = responseText)) }
+        )
+        recDone.start(options().copy(systemOutput = null))
+        waitUntil { recDone.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
+        awaitLive(mic3, live3)
+
+        mic3.push(tone(600))
+        waitUntil { mic3.chunks.isEmpty() }
+        live3.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("exact match"))
+        waitUntil { recDone.state.value.session?.segments?.any { !it.draft } == true }
+        assertEquals(VerificationState.VERIFIED, recDone.state.value.session!!.segments.first().verificationState)
+
+        // Wait >2s gap so second segment does not coalesce into the first
+        mic3.push(silence(2_500))
+        waitUntil { mic3.chunks.isEmpty() }
+        mic3.push(tone(600))
+        waitUntil { mic3.chunks.isEmpty() }
+        responseText = "corrected text"
+        live3.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Partial("rough draft"))
+        live3.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("rough draft"))
+        waitUntil { recDone.state.value.session?.segments?.count { !it.draft } == 2 }
+        assertEquals(VerificationState.CORRECTED, recDone.state.value.session!!.segments.last().verificationState)
+        recDone.stop()
+    }
 }
