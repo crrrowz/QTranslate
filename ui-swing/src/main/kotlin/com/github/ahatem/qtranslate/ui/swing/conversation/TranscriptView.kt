@@ -6,6 +6,7 @@ import com.github.ahatem.qtranslate.core.conversation.TranscriptSegment
 import com.github.ahatem.qtranslate.core.conversation.TranscriptWord
 import com.github.ahatem.qtranslate.core.conversation.VerificationState
 import com.github.ahatem.qtranslate.core.conversation.formatTimestamp
+import java.awt.AlphaComposite
 import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Component
@@ -72,8 +73,27 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     var spans: List<SegmentSpan> = emptyList()
         private set
 
-    /** Injectable clock for deterministic testing of correction highlight fade-out. */
+    /** Injectable clock for deterministic testing of correction highlight fade-out and render throttling. */
     var clock: () -> Long = System::currentTimeMillis
+
+    /** Number of full document rebuilds executed, exposed for testing calm rendering guarantees. */
+    var fullRenderCount: Int = 0
+        private set
+
+    /** Number of in-place single-card incremental text updates executed without wiping the document. */
+    var incrementalRenderCount: Int = 0
+        private set
+
+    private var lastRenderMillis: Long = -RENDER_THROTTLE_MS
+    private var pendingThrottledSession: ConversationSession? = null
+    private val renderThrottleTimer = Timer(RENDER_THROTTLE_MS.toInt()) { flushThrottledRender() }.apply {
+        isRepeats = false
+    }
+
+    private val cardFadeInStartMillis = mutableMapOf<String, Long>()
+    private val fadeInTimer = Timer(16) { checkFadeInProgress() }.apply {
+        isRepeats = true
+    }
 
     private val correctedFirstSeenMillis = mutableMapOf<String, Long>()
     private val correctionFadeTimer = Timer(250) { checkCorrectionHighlightFade() }.apply {
@@ -189,14 +209,64 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
     }
 
     /**
-     * Shows [session]. Skips the work when nothing visible changed, so the live session's frequent
-     * state updates (levels, timer) never disturb a selection or the scroll position.
+     * Shows [session]. Skips the work when nothing visible changed, throttles partial/draft updates
+     * to at most once every [RENDER_THROTTLE_MS] (~250 ms) while settled archive updates flush immediately,
+     * and updates a single changed card incrementally in place when card structure is unchanged.
      */
     fun render(session: ConversationSession?) {
         currentSession = session
         val key = session?.let { (it.id to it.segments) to newestFirst }
         if (key == renderedKey) return
+
+        val now = clock()
+        if (isPartialOnlyUpdate(session)) {
+            val elapsed = now - lastRenderMillis
+            if (elapsed < RENDER_THROTTLE_MS) {
+                pendingThrottledSession = session
+                if (isShowing && !renderThrottleTimer.isRunning) {
+                    renderThrottleTimer.initialDelay = (RENDER_THROTTLE_MS - elapsed).toInt().coerceAtLeast(1)
+                    renderThrottleTimer.restart()
+                }
+                return
+            }
+        }
+
+        pendingThrottledSession = null
+        if (renderThrottleTimer.isRunning) renderThrottleTimer.stop()
+        performRender(session, key, now)
+    }
+
+    /** Flushes any throttled partial update immediately. */
+    fun flushThrottledRender() {
+        val pending = pendingThrottledSession ?: return
+        pendingThrottledSession = null
+        val key = (pending.id to pending.segments) to newestFirst
+        if (key != renderedKey) {
+            performRender(pending, key, clock())
+        }
+    }
+
+    private fun isPartialOnlyUpdate(session: ConversationSession?): Boolean {
+        if (session == null || spans.isEmpty()) return false
+        val rawSegments = session.segments
+        val ordered = if (newestFirst) rawSegments.reversed() else rawSegments
+        if (ordered.size != spans.size) return false
+        var hasDraftDiff = false
+        for (i in ordered.indices) {
+            val newSeg = ordered[i]
+            val oldSeg = spans[i].segment
+            if (newSeg.id != oldSeg.id) return false
+            if (newSeg != oldSeg) {
+                if (!newSeg.draft || !oldSeg.draft) return false
+                hasDraftDiff = true
+            }
+        }
+        return hasDraftDiff
+    }
+
+    private fun performRender(session: ConversationSession?, key: Any?, now: Long) {
         renderedKey = key
+        lastRenderMillis = now
 
         val scrollPane = (parent?.parent as? JScrollPane)
         val viewport = scrollPane?.viewport
@@ -231,170 +301,118 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         val selRelStart = if (selSpan != null) selStart - selSpan.textStart else null
         val selRelEnd = if (selSpan != null) selEnd - selSpan.textStart else null
 
-        val doc = styledDocument
-        doc.remove(0, doc.length)
-        val built = ArrayList<SegmentSpan>()
-
         val rawSegments = session?.segments.orEmpty()
         val segments = if (newestFirst) rawSegments.reversed() else rawSegments
 
-        if (segments.isEmpty()) {
-            doc.insertString(0, strings.emptyHint, muted(italic = true))
-        }
-
-        val now = clock()
+        val doc = styledDocument
         var anyActiveCorrectionHighlight = false
 
-        segments.forEach { segment ->
-            if (doc.length > 0) doc.insertString(doc.length, "\n\n", null)
+        val built: List<SegmentSpan>
+        val incremental = tryIncrementalRender(doc, segments, now)
+        if (incremental != null) {
+            built = incremental.first
+            anyActiveCorrectionHighlight = incremental.second
+            incrementalRenderCount++
+        } else {
+            fullRenderCount++
+            val hadExistingSpans = spans.isNotEmpty()
+            val previousIds = spans.mapTo(HashSet()) { it.segment.id }
+            doc.remove(0, doc.length)
+            val fullBuilt = ArrayList<SegmentSpan>(segments.size)
 
-            val playStart = doc.length
-            val iconSize = (font.size - 2).coerceIn(12, 16)
-            val playIcon = FlatSVGIcon(Icons.PLAY, iconSize, iconSize).apply {
-                colorFilter = FlatSVGIcon.ColorFilter { sourceColor(segment.source) }
-            }
-            doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, playIcon) })
-            doc.insertString(doc.length, " ", null)
-            val playEnd = doc.length
-
-            val headerStart = doc.length
-            val speaker = if (segment.source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
-            doc.insertString(doc.length, "${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
-            val headerEnd = doc.length
-
-            var badgeStart = doc.length
-            var badgeEnd = badgeStart
-            val agreementPct = segment.agreement?.let { kotlin.math.round(it * 100.0).toInt().coerceIn(0, 100) }
-            if (agreementPct != null && (segment.verificationState == VerificationState.VERIFIED ||
-                    segment.verificationState == VerificationState.CORRECTED ||
-                    segment.confirmedText.isNotBlank())
-            ) {
-                doc.insertString(doc.length, "  ", null)
-                badgeStart = doc.length
-                doc.insertString(doc.length, strings.verifiedBadge(agreementPct), verifiedBadgeStyle())
-                badgeEnd = doc.length
-            } else if (!segment.draft && segment.verificationState == VerificationState.UNVERIFIED) {
-                doc.insertString(doc.length, "  ", null)
-                badgeStart = doc.length
-                doc.insertString(doc.length, strings.unverifiedBadge, unverifiedBadgeStyle())
-                badgeEnd = doc.length
+            if (segments.isEmpty()) {
+                doc.insertString(0, strings.emptyHint, muted(italic = true))
             }
 
-            val isLiveDraft = segment.id.startsWith("live-")
-            var retryStart = doc.length
-            var retryEnd = retryStart
-            var deleteStart = doc.length
-            var deleteEnd = deleteStart
-
-            if (!isLiveDraft) {
-                // Action buttons on the opposite side of the header row
-                doc.insertString(doc.length, "    ", null)
-                retryStart = doc.length
-                val retryIcon = FlatSVGIcon(Icons.RETRY, iconSize, iconSize).apply {
-                    colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Blue") ?: Color(0x389FD6) }
+            segments.forEach { segment ->
+                if (!segment.draft && hadExistingSpans && segment.id !in previousIds) {
+                    cardFadeInStartMillis.putIfAbsent(segment.id, now)
                 }
-                doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, retryIcon) })
+                if (doc.length > 0) doc.insertString(doc.length, "\n\n", null)
+
+                val playStart = doc.length
+                val iconSize = (font.size - 2).coerceIn(12, 16)
+                val playIcon = FlatSVGIcon(Icons.PLAY, iconSize, iconSize).apply {
+                    colorFilter = FlatSVGIcon.ColorFilter { sourceColor(segment.source) }
+                }
+                doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, playIcon) })
                 doc.insertString(doc.length, " ", null)
-                retryEnd = doc.length
+                val playEnd = doc.length
 
-                deleteStart = doc.length
-                val deleteIcon = FlatSVGIcon(Icons.DELETE, iconSize, iconSize).apply {
-                    colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Red") ?: Color(0xE05555) }
-                }
-                doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, deleteIcon) })
-                doc.insertString(doc.length, " ", null)
-                deleteEnd = doc.length
-            }
-            doc.insertString(doc.length, "\n", null)
+                val headerStart = doc.length
+                val speaker = if (segment.source == AudioSource.MICROPHONE) strings.speakerMe else strings.speakerCall
+                doc.insertString(doc.length, "${speaker.uppercase()} · ${formatTimestamp(segment.startMillis)}", header(segment.source))
+                val headerEnd = doc.length
 
-            val textStart = doc.length
-            when {
-                segment.pending -> {
-                    doc.insertString(doc.length, strings.transcribing, muted(italic = true))
+                var badgeStart = doc.length
+                var badgeEnd = badgeStart
+                val agreementPct = segment.agreement?.let { kotlin.math.round(it * 100.0).toInt().coerceIn(0, 100) }
+                if (agreementPct != null && (segment.verificationState == VerificationState.VERIFIED ||
+                        segment.verificationState == VerificationState.CORRECTED ||
+                        segment.confirmedText.isNotBlank())
+                ) {
+                    doc.insertString(doc.length, "  ", null)
+                    badgeStart = doc.length
+                    doc.insertString(doc.length, strings.verifiedBadge(agreementPct), verifiedBadgeStyle())
+                    badgeEnd = doc.length
+                } else if (!segment.draft && segment.verificationState == VerificationState.UNVERIFIED) {
+                    doc.insertString(doc.length, "  ", null)
+                    badgeStart = doc.length
+                    doc.insertString(doc.length, strings.unverifiedBadge, unverifiedBadgeStyle())
+                    badgeEnd = doc.length
                 }
-                segment.failed -> {
-                    doc.insertString(doc.length, strings.failedRetry, link())
-                }
-                segment.draft -> {
-                    val confirmed = segment.confirmedText
-                    val liveTail = when {
-                        confirmed.isBlank() -> segment.text
-                        segment.text.startsWith(confirmed, ignoreCase = true) -> segment.text.substring(confirmed.length).trimStart()
-                        else -> segment.text
-                    }
-                    if (confirmed.isNotBlank()) {
-                        val confirmedAttr = when (segment.verificationState) {
-                            VerificationState.UNVERIFIED -> muted(italic = false)
-                            else -> body()
-                        }
-                        doc.insertString(doc.length, confirmed, confirmedAttr)
-                        if (liveTail.isNotBlank()) {
-                            doc.insertString(doc.length, " ", null)
-                        }
-                    }
-                    if (liveTail.isNotBlank()) {
-                        doc.insertString(doc.length, liveTail, muted(italic = true))
-                    }
-                }
-                else -> {
-                    val baseAttr = when (segment.verificationState) {
-                        VerificationState.LIVE -> muted(italic = true)
-                        VerificationState.UNVERIFIED -> muted(italic = false)
-                        VerificationState.VERIFIED, VerificationState.CORRECTED -> body()
-                    }
-                    doc.insertString(doc.length, segment.text, baseAttr)
-                }
-            }
-            val textEnd = doc.length
-            val wordSpans = if (segment.pending || segment.failed) emptyList() else locateWords(segment, textStart)
-            wordSpans.forEach { (range, word) ->
-                val len = range.last - range.first + 1
-                if (len <= 0) return@forEach
-                when (word.verificationState) {
-                    VerificationState.CORRECTED -> {
-                        val key = "${segment.id}:${range.first - textStart}:${word.text}"
-                        val firstSeen = correctedFirstSeenMillis.getOrPut(key) { now }
-                        if (now - firstSeen < CORRECTION_HIGHLIGHT_MS) {
-                            doc.setCharacterAttributes(range.first, len, correctedStyle(), false)
-                            anyActiveCorrectionHighlight = true
-                        } else {
-                            doc.setCharacterAttributes(range.first, len, body(), false)
-                        }
-                    }
-                    VerificationState.UNVERIFIED -> {
-                        doc.setCharacterAttributes(range.first, len, muted(italic = false), false)
-                    }
-                    VerificationState.LIVE -> {
-                        val attr = muted(italic = true)
-                        if (isLowConfidenceLiveWord(word)) {
-                            StyleConstants.setUnderline(attr, true)
-                        }
-                        doc.setCharacterAttributes(range.first, len, attr, false)
-                    }
-                    VerificationState.VERIFIED -> {
-                        doc.setCharacterAttributes(range.first, len, body(), false)
-                    }
-                }
-            }
-            if (wordSpans.isEmpty() && segment.verificationState == VerificationState.CORRECTED && textEnd > textStart) {
-                val key = "${segment.id}:segment"
-                val firstSeen = correctedFirstSeenMillis.getOrPut(key) { now }
-                if (now - firstSeen < CORRECTION_HIGHLIGHT_MS) {
-                    doc.setCharacterAttributes(textStart, textEnd - textStart, correctedStyle(), false)
-                    anyActiveCorrectionHighlight = true
-                }
-            }
-            // Header and text together: a paragraph inserted after an Arabic line would otherwise
-            // inherit its right alignment, header included.
-            alignParagraph(doc, playStart, textEnd - playStart, segment.text, segment.source)
 
-            built += SegmentSpan(
-                segment, playStart, playEnd, headerStart, headerEnd,
-                retryStart, retryEnd, deleteStart, deleteEnd, textStart, textEnd,
-                wordSpans, badgeStart, badgeEnd
-            )
+                val isLiveDraft = segment.id.startsWith("live-")
+                var retryStart = doc.length
+                var retryEnd = retryStart
+                var deleteStart = doc.length
+                var deleteEnd = deleteStart
+
+                if (!isLiveDraft) {
+                    // Action buttons on the opposite side of the header row
+                    doc.insertString(doc.length, "    ", null)
+                    retryStart = doc.length
+                    val retryIcon = FlatSVGIcon(Icons.RETRY, iconSize, iconSize).apply {
+                        colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Blue") ?: Color(0x389FD6) }
+                    }
+                    doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, retryIcon) })
+                    doc.insertString(doc.length, " ", null)
+                    retryEnd = doc.length
+
+                    deleteStart = doc.length
+                    val deleteIcon = FlatSVGIcon(Icons.DELETE, iconSize, iconSize).apply {
+                        colorFilter = FlatSVGIcon.ColorFilter { UIManager.getColor("Actions.Red") ?: Color(0xE05555) }
+                    }
+                    doc.insertString(doc.length, " ", SimpleAttributeSet().apply { StyleConstants.setIcon(this, deleteIcon) })
+                    doc.insertString(doc.length, " ", null)
+                    deleteEnd = doc.length
+                }
+                doc.insertString(doc.length, "\n", null)
+
+                val textStart = doc.length
+                val (wordSpans, highlighted) = insertSegmentBody(doc, segment, textStart, now)
+                if (highlighted) anyActiveCorrectionHighlight = true
+                val textEnd = doc.length
+
+                // Header and text together: a paragraph inserted after an Arabic line would otherwise
+                // inherit its right alignment, header included.
+                alignParagraph(doc, playStart, textEnd - playStart, segment.text, segment.source)
+
+                fullBuilt += SegmentSpan(
+                    segment, playStart, playEnd, headerStart, headerEnd,
+                    retryStart, retryEnd, deleteStart, deleteEnd, textStart, textEnd,
+                    wordSpans, badgeStart, badgeEnd
+                )
+            }
+            built = fullBuilt
         }
         spans = built
+
+        if (cardFadeInStartMillis.values.any { now - it < CARD_FADE_IN_MS } && isShowing) {
+            if (!fadeInTimer.isRunning) fadeInTimer.start()
+        } else if (fadeInTimer.isRunning) {
+            fadeInTimer.stop()
+        }
 
         if (anyActiveCorrectionHighlight && isShowing) {
             if (!correctionFadeTimer.isRunning) correctionFadeTimer.start()
@@ -471,6 +489,203 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
     }
 
+    /**
+     * Attempts to update a single changed card's text range in place without wiping [doc].
+     * Returns the updated [SegmentSpan] list and whether any correction highlight is active,
+     * or null when a full document rebuild is required.
+     */
+    private fun tryIncrementalRender(
+        doc: StyledDocument,
+        segments: List<TranscriptSegment>,
+        now: Long
+    ): Pair<List<SegmentSpan>, Boolean>? {
+        if (spans.isEmpty() || segments.size != spans.size) return null
+        var changedIdx = -1
+        for (i in segments.indices) {
+            val newSeg = segments[i]
+            val oldSeg = spans[i].segment
+            if (newSeg.id != oldSeg.id || newSeg.source != oldSeg.source || newSeg.startMillis != oldSeg.startMillis) {
+                return null
+            }
+            if (newSeg != oldSeg) {
+                if (changedIdx >= 0) return null
+                // If header badge state changed, fall back to full render
+                if (expectedBadgeText(newSeg) != expectedBadgeText(oldSeg)) return null
+                changedIdx = i
+            }
+        }
+        if (changedIdx < 0) return null
+
+        val oldSpan = spans[changedIdx]
+        val newSeg = segments[changedIdx]
+        doc.remove(oldSpan.textStart, oldSpan.textEnd - oldSpan.textStart)
+        val (wordSpans, highlighted) = insertSegmentBody(doc, newSeg, oldSpan.textStart, now, atOffset = true)
+        val newTextEnd = oldSpan.textStart + renderedBodyLength(newSeg)
+        val delta = newTextEnd - oldSpan.textEnd
+        alignParagraph(doc, oldSpan.playStart, newTextEnd - oldSpan.playStart, newSeg.text, newSeg.source)
+
+        val updated = ArrayList<SegmentSpan>(spans.size)
+        for (i in spans.indices) {
+            val s = spans[i]
+            when {
+                i < changedIdx -> updated += s
+                i == changedIdx -> updated += SegmentSpan(
+                    newSeg,
+                    s.playStart, s.playEnd, s.headerStart, s.headerEnd,
+                    s.retryStart, s.retryEnd, s.deleteStart, s.deleteEnd,
+                    s.textStart, newTextEnd, wordSpans, s.badgeStart, s.badgeEnd
+                )
+                else -> updated += SegmentSpan(
+                    s.segment,
+                    s.playStart + delta, s.playEnd + delta,
+                    s.headerStart + delta, s.headerEnd + delta,
+                    s.retryStart + delta, s.retryEnd + delta,
+                    s.deleteStart + delta, s.deleteEnd + delta,
+                    s.textStart + delta, s.textEnd + delta,
+                    s.words.map { (r, w) -> ((r.first + delta)..(r.last + delta)) to w },
+                    s.badgeStart + delta, s.badgeEnd + delta
+                )
+            }
+        }
+        return updated to highlighted
+    }
+
+    private fun expectedBadgeText(segment: TranscriptSegment): String? {
+        val agreementPct = segment.agreement?.let { kotlin.math.round(it * 100.0).toInt().coerceIn(0, 100) }
+        return if (agreementPct != null && (segment.verificationState == VerificationState.VERIFIED ||
+                segment.verificationState == VerificationState.CORRECTED ||
+                segment.confirmedText.isNotBlank())
+        ) {
+            strings.verifiedBadge(agreementPct)
+        } else if (!segment.draft && segment.verificationState == VerificationState.UNVERIFIED) {
+            strings.unverifiedBadge
+        } else null
+    }
+
+    private fun renderedBodyLength(segment: TranscriptSegment): Int = when {
+        segment.pending -> strings.transcribing.length
+        segment.failed -> strings.failedRetry.length
+        segment.draft -> {
+            val confirmed = segment.confirmedText
+            val liveTail = when {
+                confirmed.isBlank() -> segment.text
+                segment.text.startsWith(confirmed, ignoreCase = true) -> segment.text.substring(confirmed.length).trimStart()
+                else -> segment.text
+            }
+            when {
+                confirmed.isNotBlank() && liveTail.isNotBlank() -> confirmed.length + 1 + liveTail.length
+                confirmed.isNotBlank() -> confirmed.length
+                else -> liveTail.length
+            }
+        }
+        else -> segment.text.length
+    }
+
+    private fun insertSegmentBody(
+        doc: StyledDocument,
+        segment: TranscriptSegment,
+        textStart: Int,
+        now: Long,
+        atOffset: Boolean = false
+    ): Pair<List<Pair<IntRange, TranscriptWord>>, Boolean> {
+        var cursor = if (atOffset) textStart else doc.length
+        fun insert(str: String, attrs: SimpleAttributeSet?) {
+            doc.insertString(cursor, str, attrs)
+            cursor += str.length
+        }
+        when {
+            segment.pending -> insert(strings.transcribing, muted(italic = true))
+            segment.failed -> insert(strings.failedRetry, link())
+            segment.draft -> {
+                val confirmed = segment.confirmedText
+                val liveTail = when {
+                    confirmed.isBlank() -> segment.text
+                    segment.text.startsWith(confirmed, ignoreCase = true) -> segment.text.substring(confirmed.length).trimStart()
+                    else -> segment.text
+                }
+                if (confirmed.isNotBlank()) {
+                    val confirmedAttr = when (segment.verificationState) {
+                        VerificationState.UNVERIFIED -> muted(italic = false)
+                        else -> body()
+                    }
+                    insert(confirmed, confirmedAttr)
+                    if (liveTail.isNotBlank()) {
+                        insert(" ", null)
+                    }
+                }
+                if (liveTail.isNotBlank()) {
+                    insert(liveTail, muted(italic = true))
+                }
+            }
+            else -> {
+                val baseAttr = when (segment.verificationState) {
+                    VerificationState.LIVE -> muted(italic = true)
+                    VerificationState.UNVERIFIED -> muted(italic = false)
+                    VerificationState.VERIFIED, VerificationState.CORRECTED -> body()
+                }
+                insert(segment.text, baseAttr)
+            }
+        }
+        val textEnd = cursor
+        val wordSpans = if (segment.pending || segment.failed) emptyList() else locateWords(segment, textStart)
+        var anyActiveCorrectionHighlight = false
+        wordSpans.forEach { (range, word) ->
+            val len = range.last - range.first + 1
+            if (len <= 0) return@forEach
+            when (word.verificationState) {
+                VerificationState.CORRECTED -> {
+                    val key = "${segment.id}:${range.first - textStart}:${word.text}"
+                    val firstSeen = correctedFirstSeenMillis.getOrPut(key) { now }
+                    if (now - firstSeen < CORRECTION_HIGHLIGHT_MS) {
+                        doc.setCharacterAttributes(range.first, len, correctedStyle(), false)
+                        anyActiveCorrectionHighlight = true
+                    } else {
+                        doc.setCharacterAttributes(range.first, len, body(), false)
+                    }
+                }
+                VerificationState.UNVERIFIED -> {
+                    doc.setCharacterAttributes(range.first, len, muted(italic = false), false)
+                }
+                VerificationState.LIVE -> {
+                    val attr = muted(italic = true)
+                    if (isLowConfidenceLiveWord(word)) {
+                        StyleConstants.setUnderline(attr, true)
+                    }
+                    doc.setCharacterAttributes(range.first, len, attr, false)
+                }
+                VerificationState.VERIFIED -> {
+                    doc.setCharacterAttributes(range.first, len, body(), false)
+                }
+            }
+        }
+        if (wordSpans.isEmpty() && segment.verificationState == VerificationState.CORRECTED && textEnd > textStart) {
+            val key = "${segment.id}:segment"
+            val firstSeen = correctedFirstSeenMillis.getOrPut(key) { now }
+            if (now - firstSeen < CORRECTION_HIGHLIGHT_MS) {
+                doc.setCharacterAttributes(textStart, textEnd - textStart, correctedStyle(), false)
+                anyActiveCorrectionHighlight = true
+            }
+        }
+        return wordSpans to anyActiveCorrectionHighlight
+    }
+
+    /** Returns the current fade-in alpha (`0.15f..1.0f`) for a newly settled archive card over [CARD_FADE_IN_MS] (~150 ms). */
+    fun cardAlpha(segmentId: String, nowMillis: Long = clock()): Float {
+        val started = cardFadeInStartMillis[segmentId] ?: return 1f
+        val elapsed = (nowMillis - started).coerceAtLeast(0L)
+        if (elapsed >= CARD_FADE_IN_MS) return 1f
+        return (0.15f + 0.85f * (elapsed.toFloat() / CARD_FADE_IN_MS.toFloat())).coerceIn(0.15f, 1f)
+    }
+
+    private fun checkFadeInProgress() {
+        val now = clock()
+        val anyFading = cardFadeInStartMillis.values.any { now - it < CARD_FADE_IN_MS }
+        repaint()
+        if (!anyFading && fadeInTimer.isRunning) {
+            fadeInTimer.stop()
+        }
+    }
+
     override fun paintComponent(g: Graphics) {
         val g2 = g.create() as Graphics2D
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
@@ -496,10 +711,20 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
         }
         val latestBorderColor = if (isDark) Color(245, 190, 45, 220) else Color(215, 160, 20, 220)
 
+        val now = clock()
+        val origComposite = g2.composite
+
         // Draw individual cards behind each segment span
         spans.forEachIndexed { index, span ->
             val topBox = runCatching { modelToView2D(span.playStart) }.getOrNull() ?: return@forEachIndexed
             val bottomBox = runCatching { modelToView2D(span.textEnd) }.getOrNull() ?: return@forEachIndexed
+
+            val alpha = cardAlpha(span.segment.id, now)
+            if (alpha < 1f) {
+                g2.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha)
+            } else {
+                g2.composite = origComposite
+            }
 
             val isLatest = index == 0
             val cardBg = if (isLatest) latestCardBg else defaultCardBg
@@ -523,6 +748,7 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
             g2.color = borderColor
             g2.drawRoundRect(x, y, w, h, 10, 10)
         }
+        g2.composite = origComposite
 
         g2.dispose()
         super.paintComponent(g)
@@ -772,6 +998,8 @@ class TranscriptView(private val strings: ConversationStrings) : JTextPane() {
 
     companion object {
         const val CORRECTION_HIGHLIGHT_MS = 3_000L
+        const val RENDER_THROTTLE_MS = 250L
+        const val CARD_FADE_IN_MS = 150L
         const val LOW_CONFIDENCE_THRESHOLD = 0.6
 
         /** True when [word] is in LIVE state and has a reported recognizer confidence below [LOW_CONFIDENCE_THRESHOLD]. */

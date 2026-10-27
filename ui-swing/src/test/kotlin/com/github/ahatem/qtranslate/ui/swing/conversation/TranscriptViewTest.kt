@@ -380,4 +380,111 @@ class TranscriptViewTest {
         val disabledSys = TranscriptView.cardHorizontalBounds(AudioSource.SYSTEM, 600, chatLayout = false, rtl = false)
         assertEquals(disabledMic, disabledSys, "When chatLayout is false, both speakers span the full width")
     }
+
+    @Test
+    fun `50 partial events within 1s cause at most 5 full renders while settles flush immediately`() {
+        val view = TranscriptView(strings())
+        var now = 1_000L
+        view.clock = { now }
+        view.newestFirst = false
+        view.setSize(600, 400)
+
+        val baseSeg = TranscriptSegment(
+            id = "seg-settled",
+            source = AudioSource.MICROPHONE,
+            startMillis = 0L,
+            endMillis = 800L,
+            text = "Initial settled card",
+            draft = false
+        )
+        val liveSeg = TranscriptSegment(
+            id = "seg-draft",
+            source = AudioSource.SYSTEM,
+            startMillis = 1000L,
+            endMillis = 1000L,
+            text = "word0",
+            draft = true
+        )
+        val initialSession = ConversationSession(id = "s", title = "T", createdAt = 0L, segments = listOf(baseSeg, liveSeg))
+        view.render(initialSession)
+        assertEquals(1, view.fullRenderCount)
+
+        // Fire 50 partial events across 1,000 ms (one every 20 ms)
+        for (i in 1..50) {
+            now += 20L
+            val updatedLive = liveSeg.copy(text = "word0 " + (1..i).joinToString(" ") { "w$it" })
+            view.render(initialSession.withSegment(updatedLive))
+        }
+        view.flushThrottledRender()
+
+        val totalRenders = view.fullRenderCount + view.incrementalRenderCount
+        assertTrue(view.fullRenderCount <= 5, "Expected <= 5 full renders for 50 partials in 1s, was ${view.fullRenderCount}")
+        assertTrue(totalRenders <= 6, "Expected throttled renders <= 6 in 1s (including initial), was $totalRenders")
+        assertTrue(view.incrementalRenderCount >= 3, "Partial updates should use incremental single-card rendering")
+
+        // A settled archive card flushes immediately even within the 250ms throttle window, and fades in over 150ms
+        now += 10L
+        val newlySettled = TranscriptSegment(
+            id = "seg-new-settled",
+            source = AudioSource.MICROPHONE,
+            startMillis = 2500L,
+            endMillis = 3200L,
+            settledAtMillis = 3200L,
+            text = "Settled immediately",
+            draft = false
+        )
+        view.render(initialSession.withSegment(newlySettled))
+        val docText = view.styledDocument.getText(0, view.styledDocument.length)
+        assertTrue(docText.contains("Settled immediately"), "Settled segment must flush immediately without waiting for throttle")
+
+        // Verify 150ms fade-in alpha progression for the newly added archive card
+        assertEquals(0.15f, view.cardAlpha("seg-new-settled", now), 0.01f)
+        assertTrue(view.cardAlpha("seg-new-settled", now + 75L) in 0.5f..0.65f)
+        assertEquals(1.0f, view.cardAlpha("seg-new-settled", now + 150L), 0.01f)
+    }
+
+    @Test
+    fun `incremental single-card update shifts subsequent span offsets and keeps hit testing accurate`() {
+        val view = TranscriptView(strings())
+        var now = 5_000L
+        view.clock = { now }
+        view.newestFirst = false
+        view.setSize(600, 400)
+
+        val seg1 = TranscriptSegment(
+            id = "seg-1",
+            source = AudioSource.MICROPHONE,
+            startMillis = 1000L,
+            endMillis = 2000L,
+            settledAtMillis = 2000L,
+            text = "short",
+            draft = true
+        )
+        val seg2 = TranscriptSegment(
+            id = "seg-2",
+            source = AudioSource.SYSTEM,
+            startMillis = 3000L,
+            endMillis = 4000L,
+            settledAtMillis = 4000L,
+            text = "second card target",
+            words = listOf(TranscriptWord("second", 3000L, 3400L), TranscriptWord("card", 3450L, 3700L), TranscriptWord("target", 3750L, 4000L)),
+            draft = false
+        )
+        val session1 = ConversationSession(id = "s", title = "T", createdAt = 0L, segments = listOf(seg1, seg2))
+        view.render(session1)
+        assertEquals(1, view.fullRenderCount)
+        assertEquals(0, view.incrementalRenderCount)
+
+        // Advance past throttle window and update seg1 with longer text -> triggers incremental render
+        now += 300L
+        val seg1Longer = seg1.copy(text = "much longer first card text now")
+        view.render(session1.withSegment(seg1Longer))
+
+        assertEquals(1, view.fullRenderCount, "Must not perform a full rebuild when only one card's text changed")
+        assertEquals(1, view.incrementalRenderCount, "Must perform an incremental update")
+
+        val span2 = view.spans[1]
+        assertEquals("second card target", view.textOf(span2.textStart until span2.textEnd))
+        assertEquals("target", view.textOf(span2.words[2].first))
+    }
 }
