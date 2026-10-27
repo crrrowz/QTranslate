@@ -85,6 +85,7 @@ class OpenAiRealtimeSession private constructor(
     private var speechDetectedInCurrentTurn: Boolean = false
     private var consecutiveSilentSamples: Long = 0L
     private var currentTurnSamples: Long = 0L
+    private var unvoicedSilentSamples: Long = 0L
 
     override fun sendAudio(pcm: ByteArray) {
         if (ended || pcm.isEmpty()) return
@@ -100,12 +101,22 @@ class OpenAiRealtimeSession private constructor(
         val rms = calculateRms(resampled)
         val isSpeech = rms >= MIN_SPEECH_RMS
 
-        currentTurnSamples += numSamples
         if (isSpeech) {
             speechDetectedInCurrentTurn = true
             consecutiveSilentSamples = 0L
+            unvoicedSilentSamples = 0L
+            currentTurnSamples += numSamples
         } else if (speechDetectedInCurrentTurn) {
             consecutiveSilentSamples += numSamples
+            currentTurnSamples += numSamples
+        } else {
+            unvoicedSilentSamples += numSamples
+            val unvoicedSilenceMs = (unvoicedSilentSamples * 1000L) / RESAMPLED_SAMPLE_RATE
+            if (unvoicedSilenceMs >= SILENCE_BUFFER_CLEAR_THRESHOLD_MS && uncommittedAudioBytes > 0) {
+                enqueue { it.sendText("""{"type":"input_audio_buffer.clear"}""", true) }
+                uncommittedAudioBytes = 0L
+                unvoicedSilentSamples = 0L
+            }
         }
 
         val silenceDurationMs = (consecutiveSilentSamples * 1000L) / RESAMPLED_SAMPLE_RATE
@@ -127,11 +138,12 @@ class OpenAiRealtimeSession private constructor(
         speechDetectedInCurrentTurn = false
         consecutiveSilentSamples = 0L
         currentTurnSamples = 0L
+        unvoicedSilentSamples = 0L
     }
 
     override suspend fun finish() {
         if (ended) return
-        if (uncommittedAudioBytes > 0) {
+        if (speechDetectedInCurrentTurn && uncommittedAudioBytes > 0) {
             enqueue { it.sendText("""{"type":"input_audio_buffer.commit"}""", true) }
             uncommittedAudioBytes = 0L
         }
@@ -247,6 +259,9 @@ class OpenAiRealtimeSession private constructor(
 
         /** Minimum RMS threshold to distinguish voiced speech from background silence (~-50 dBFS). */
         const val MIN_SPEECH_RMS = 250.0
+
+        /** Threshold of silence before any speech at which uncommitted audio buffer is cleared (~3 s). */
+        const val SILENCE_BUFFER_CLEAR_THRESHOLD_MS = 3_000L
 
         suspend fun open(
             apiKey: String,

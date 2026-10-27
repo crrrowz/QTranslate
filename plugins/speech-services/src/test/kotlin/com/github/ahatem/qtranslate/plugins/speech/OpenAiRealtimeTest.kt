@@ -459,6 +459,120 @@ class OpenAiRealtimeTest {
     }
 
     @Test
+    fun `silence-only session then finish does not commit`() = runBlocking {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val receivedFrames = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val serverThread = thread(isDaemon = true) {
+            server.accept().use { client ->
+                client.soTimeout = 4_000
+                val input = DataInputStream(client.getInputStream())
+                val output = client.getOutputStream()
+                val wsKey = generateSequence { readHttpLine(input) }.takeWhile { it.isNotEmpty() }.toList()
+                    .first { it.startsWith("Sec-WebSocket-Key:", ignoreCase = true) }.substringAfter(':').trim()
+                val accept = Base64.getEncoder().encodeToString(
+                    MessageDigest.getInstance("SHA-1").digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray())
+                )
+                output.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: $accept\r\n\r\n".toByteArray())
+                output.flush()
+
+                val ready = """{"type":"session.created"}""".toByteArray()
+                output.write(byteArrayOf(0x81.toByte(), ready.size.toByte()) + ready)
+                output.flush()
+
+                runCatching {
+                    while (true) {
+                        val frame = readClientTextFrame(input)
+                        receivedFrames.add(frame)
+                    }
+                }
+            }
+        }
+
+        val session = OpenAiRealtimeSession.open(
+            apiKey = "test-key",
+            model = "gpt-live-transcribe",
+            endpoint = "ws://127.0.0.1:${server.localPort}/v1/realtime"
+        ).get()
+        assertNotNull(session)
+
+        // Send 2 seconds of silence
+        for (i in 0 until 20) {
+            session.sendAudio(ByteArray(1600 * 2)) // 100ms
+        }
+
+        // Call finish()
+        session.finish()
+        serverThread.join(5_000)
+        server.close()
+
+        val commitCount = receivedFrames.count { it.contains("\"type\":\"input_audio_buffer.commit\"") }
+        assertEquals(0, commitCount, "Expected 0 commits when finish() called after silence only: $receivedFrames")
+    }
+
+    @Test
+    fun `long silence before speech does not prematurely cut the turn`() = runBlocking {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val receivedFrames = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val serverThread = thread(isDaemon = true) {
+            server.accept().use { client ->
+                client.soTimeout = 6_000
+                val input = DataInputStream(client.getInputStream())
+                val output = client.getOutputStream()
+                val wsKey = generateSequence { readHttpLine(input) }.takeWhile { it.isNotEmpty() }.toList()
+                    .first { it.startsWith("Sec-WebSocket-Key:", ignoreCase = true) }.substringAfter(':').trim()
+                val accept = Base64.getEncoder().encodeToString(
+                    MessageDigest.getInstance("SHA-1").digest((wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray())
+                )
+                output.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: $accept\r\n\r\n".toByteArray())
+                output.flush()
+
+                val ready = """{"type":"session.created"}""".toByteArray()
+                output.write(byteArrayOf(0x81.toByte(), ready.size.toByte()) + ready)
+                output.flush()
+
+                runCatching {
+                    while (true) {
+                        val frame = readClientTextFrame(input)
+                        receivedFrames.add(frame)
+                    }
+                }
+            }
+        }
+
+        val session = OpenAiRealtimeSession.open(
+            apiKey = "test-key",
+            model = "gpt-live-transcribe",
+            endpoint = "ws://127.0.0.1:${server.localPort}/v1/realtime"
+        ).get()
+        assertNotNull(session)
+
+        // 20s of silence (20 chunks of 1s each)
+        for (i in 0 until 20) {
+            session.sendAudio(ByteArray(16000 * 2))
+        }
+
+        // 2s of continuous speech (2 chunks of 1s each)
+        session.sendAudio(generateSinePcm16(frequencyHz = 440.0, durationMs = 1000))
+        session.sendAudio(generateSinePcm16(frequencyHz = 440.0, durationMs = 1000))
+
+        // 700ms of silence
+        for (i in 0 until 7) {
+            session.sendAudio(ByteArray(1600 * 2))
+        }
+
+        kotlinx.coroutines.delay(400)
+        session.cancel()
+        serverThread.join(5_000)
+        server.close()
+
+        val commitCount = receivedFrames.count { it.contains("\"type\":\"input_audio_buffer.commit\"") }
+        assertEquals(1, commitCount, "Expected exactly 1 commit after 20s silence then speech then silence: $receivedFrames")
+
+        val clearCount = receivedFrames.count { it.contains("\"type\":\"input_audio_buffer.clear\"") }
+        assertTrue(clearCount > 0, "Expected periodic clear events during 20s of leading silence: $receivedFrames")
+    }
+
+    @Test
     fun `two turns emit two Final events`() = runBlocking {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val serverThread = thread(isDaemon = true) {
