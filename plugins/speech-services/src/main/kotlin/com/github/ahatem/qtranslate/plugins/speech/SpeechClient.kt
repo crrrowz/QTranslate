@@ -288,10 +288,11 @@ class SpeechClient(
             // Strip surrounding quotes
             text = text.trim('"', '“', '”', '\'', '`').trim()
 
-            // Refuse obvious non-transcripts (model apologizing or explaining instead of transcribing)
+            // Refuse obvious non-transcripts specifically about transcription refusal / failure,
+            // without rejecting spoken utterances like "I can't hear you" or "as an AI researcher"
             val nonTranscriptPatterns = listOf(
                 "i cannot transcribe", "i can't transcribe", "i am unable to transcribe",
-                "i'm unable to transcribe", "as an ai", "i cannot hear", "i can't hear",
+                "i'm unable to transcribe", "cannot transcribe audio", "unable to transcribe audio",
                 "cannot process audio", "unable to process audio"
             )
             if (nonTranscriptPatterns.any { text.startsWith(it, ignoreCase = true) }) {

@@ -181,7 +181,14 @@ class SpeechClientTest {
         val result = client.transcribe(SpeechRecognitionRequest(clip)).get()
         assertEquals("Hello world", result?.text)
 
-        val excuseHttp = FakeUploads(listOf(Ok("""{"choices":[{"message":{"content":"I cannot transcribe audio files as an AI."}}]}""")))
+        // Real spoken speech starting with "I can't hear you" must NOT be refused
+        val speechHttp = FakeUploads(listOf(Ok("""{"choices":[{"message":{"content":"I can't hear you, can you repeat?"}}]}""")))
+        val speechClient = client(speechHttp, SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://x/v1", model = "m"))
+        val speechResult = speechClient.transcribe(SpeechRecognitionRequest(clip)).get()
+        assertEquals("I can't hear you, can you repeat?", speechResult?.text)
+
+        // Model refusal about transcription capability must be rejected
+        val excuseHttp = FakeUploads(listOf(Ok("""{"choices":[{"message":{"content":"I cannot transcribe audio files."}}]}""")))
         val excuseClient = client(excuseHttp, SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://x/v1", model = "m"))
         val excuseError = excuseClient.transcribe(SpeechRecognitionRequest(clip)).getError()
         assertTrue(excuseError is ServiceError.ValidationError)
