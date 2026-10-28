@@ -358,7 +358,13 @@ class SpeechClient(
             return SpeechRecognitionResponse(
                 text = best?.transcript.orEmpty().trim(),
                 detectedLanguage = channel?.detectedLanguage?.takeIf { it.isNotBlank() }?.let(::LanguageCode),
-                words = best?.words.orEmpty().toRecognized { Triple(it.punctuatedWord ?: it.word, it.start, it.end) }
+                words = best?.words.orEmpty().mapNotNull { w ->
+                    val text = w.punctuatedWord ?: w.word
+                    if (text.isBlank()) return@mapNotNull null
+                    val startMillis = (w.start * 1000).toLong().coerceAtLeast(0)
+                    val endMillis = (w.end * 1000).toLong().coerceAtLeast(startMillis)
+                    RecognizedWord(text.trim(), startMillis, endMillis, w.confidence)
+                }
             )
         }
 

@@ -108,4 +108,22 @@ class SpeechSettingsTest {
 
         kotlin.test.assertEquals(enKeys, arKeys, "en.toml and ar.toml key sets must be identical")
     }
+
+    @Test
+    fun `R7 - SpeechProvider DROPDOWN_OPTIONS matches enum entries in order`() {
+        val expected = SpeechProvider.entries.joinToString(",") { it.label }
+        kotlin.test.assertEquals(expected, SpeechProvider.DROPDOWN_OPTIONS)
+    }
+
+    @Test
+    fun `R7 - LIVE_ENGINE_OPTIONS matches expected options in order`() {
+        val expected = listOf(LIVE_OFF, LIVE_VOSK_BUILTIN, LIVE_DEEPGRAM, LIVE_OPENAI).joinToString(",")
+        kotlin.test.assertEquals(expected, LIVE_ENGINE_OPTIONS)
+    }
+
+    @Test
+    fun `P10 - unknown saved provider label maps to NONE to prevent cloud data leakage`() {
+        val unknown = SpeechProvider.fromLabel("RetiredOrUnknownProvider")
+        kotlin.test.assertEquals(SpeechProvider.NONE, unknown)
+    }
 }

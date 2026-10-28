@@ -14,9 +14,14 @@ import com.github.michaelbull.result.Result
 /**
  * Live speech recognition router service.
  *
- * Dispatches to the chosen engine: in-process built-in Vosk (offline),
- * Deepgram live streaming, or OpenAI Realtime streaming.
+ * Routes incoming live speech sessions to the user-selected live engine:
+ * in-process built-in Vosk (offline), Deepgram live streaming, or OpenAI Realtime streaming.
+ *
+ * Note: Keeps key = "vosk-live" for backwards compatibility so saved active-service
+ * selections and user configuration continue resolving without migration breakage (R6).
  */
+typealias LiveSpeechRouterService = VoskLiveService
+
 class VoskLiveService(
     private val settings: () -> SpeechSettings,
     private val builtinService: LiveSpeechRecognizer? = null,

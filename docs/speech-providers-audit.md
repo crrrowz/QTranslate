@@ -68,22 +68,22 @@
 | P7 | Deepgram live: "تلقائي" = `language=multi`. هذا يشتغل ويا موديلات معينة بس، ولغات محدودة. ماكو تحذير إذا الموديل أو اللغة (مثلاً العربي) ما مدعومة. *(تم الإصلاح بفحص دعم الموديل لـ multi بالوثائق الرسمية بـ Task 9)* | `DeepgramLiveService.kt:80-89` |
 | P8 | Deepgram live: العنوان `wss://api.deepgram.com` مكتوب ثابت، ويهمل Server URL (منطقة EU أو سيرفر خاص). وخطأ الاتصال يطلع عام ("Could not connect")، وتضيع حالة 401 (مفتاح غلط) أو 400 (موديل غلط). *(تم الإصلاح باستخدام Server URL واستخراج رموز HTTP 401/400 برسائل واضحة بـ Task 9)* | `DeepgramLiveService.kt:174-187` |
 | P9 | Custom: الموديل الافتراضي `whisper-1`، وهذا ما موجود بأغلب السيرفرات المحلية. الأصح يكون إلزامي، أو ينقرأ من `/models`. *(تم الإصلاح بطلب اسم الموديل لـ Custom في configurationError و testConnection بـ Task 9)* | `SpeechProvider.kt:68-73` |
-| P10 | `SpeechProvider.fromLabel` يرجع **Groq** بصمت إذا ما عرف الاسم. يعني لو اسم مزود تغيّر بتحديث، إعدادات المستخدم تتحول لمزود سحابي، والصوت يطلع لبرا بدون علمه. | `SpeechProvider.kt:86` |
-| P11 | Deepgram (الدقيق): ثقة الكلمات (`confidence`) ما تنقرأ (`DeepgramWord` ما بيه الحقل)، بس بالمباشر تنقرأ. ملف الحالة يگول إنها مدعومة. | `SpeechDTOs.kt:62-68` |
-| P12 | `isLocal` يعتبر `192.168.*` و `10.*` شبكة محلية، بس ما يعتبر `172.16–31.*`. *(تم الإصلاح بـ fc9ad272)* | `SpeechSettings.kt:283-285` |
+| P10 | `SpeechProvider.fromLabel` يرجع **Groq** بصمت إذا ما عرف الاسم. يعني لو اسم مزود تغيّر بتحديث، إعدادات المستخدم تتحول لمزود سحابي، والصوت يطلع لبرا بدون علمه. *(تم الإصلاح بالرجوع إلى None بأمان بـ Task 10)* | `SpeechProvider.kt:86` |
+| P11 | Deepgram (الدقيق): ثقة الكلمات (`confidence`) ما تنقرأ (`DeepgramWord` ما بيه الحقل)، بس بالمباشر تنقرأ. ملف الحالة يگول إنها مدعومة. *(تم الإصلاح بقراءة confidence وتمريرها لـ RecognizedWord بـ Task 10)* | `SpeechDTOs.kt:62-68` |
+| P12 | `isLocal` يعتبر `192.168.*` و `10.*` شبكة محلية، بس ما يعتبر `172.16–31.*`. *(تم الإصلاح بـ fc9ad272، وإضافة فحص IPv6 loopback و ULA بـ Task 10)* | `SpeechSettings.kt:283-285` |
 | P13 | Audio chat model: النص يتنظف بس من علامات التنصيص. إذا الموديل رد بـ "Transcript: ..." أو بشرح، ينكتب كما هو. *(تم الإصلاح بتنظيف البادئات والأكواد fences ورفض الاعتذارات والشروحات كأخطاء بـ Task 9)* | `SpeechClient.kt:213` |
 
 ### تقليل الكود (كود ميت أو مكرر)
 
 | # | الشي | الحالة |
 |---|---|---|
-| R1 | `SpeechProvider.supportsBatch / supportsRealtime / supportsWordTimings / supportsLanguageDetection` | **ما ينقرأ بأي مكان.** يا ينحذف، يا ينستخدم فعلاً (مثلاً `supportsWordTimings` يقرر يطلب `verbose_json` أو لا، وهذا يحل P3). |
-| R2 | `enum LiveEngine` كله، ويا `LiveEngine.DROPDOWN_OPTIONS` | **ما ينستخدم.** نسخة ثانية من `LIVE_ENGINE_OPTIONS`. |
-| R3 | `SpeechSettings.liveEnabled` | ينستخدم **بالاختبارات بس**، والتشغيل الفعلي يقرر بـ `VoskLiveService.openSession`. فالمنطق مكتوب مرتين وممكن يختلفون. |
-| R4 | `LIVE_VOSK` (اسم ثاني لـ `LIVE_VOSK_BUILTIN`) | ينستخدم بالاختبارات بس. |
+| R1 | `SpeechProvider.supportsBatch / supportsRealtime / supportsWordTimings / supportsLanguageDetection` | *(تم حذف الأعلام غير المستخدمة والاحتفاظ بـ supportsWordTimings فقط بـ Task 10)* |
+| R2 | `enum LiveEngine` كله، ويا `LiveEngine.DROPDOWN_OPTIONS` | *(تم حذفه بالكامل لعدم استخدامه بـ Task 10)* |
+| R3 | `SpeechSettings.liveEnabled` | *(محفوظ ومطابق لاختبارات الهجرة)* |
+| R4 | `LIVE_VOSK` (اسم ثاني لـ `LIVE_VOSK_BUILTIN`) | *(تم حذفه وتوحيد الاسم بـ LIVE_VOSK_BUILTIN بـ Task 10)* |
 | R5 | `DeepgramLiveSession` و `OpenAiRealtimeSession` | نفس الـ listener (تجميع النص، و onClose، و onError)، ونفس `connect`، ونفس `ping`. ينقلون لـ `WebSocketLiveSession`، ويختفي خطأ P1 من مكان واحد. |
-| R6 | `VoskLiveService` | الاسم مضلل: هو موجّه لكل المحركات المباشرة (Vosk و Deepgram و OpenAI). يتغير اسم الكلاس بس، ويبقى `key = "vosk-live"` حتى ما تنكسر الإعدادات المحفوظة. |
-| R7 | `SpeechProvider.DROPDOWN_OPTIONS` | نسخة يدوية من أسماء المزودات (لازم تبقى `const`). الاختبار `every dropdown option maps to its provider` يغطي اتجاه واحد بس. يحتاج يتأكد إنهم متطابقين بالاتجاهين وبنفس الترتيب. |
+| R6 | `VoskLiveService` | *(تم توثيق دوره كـ LiveSpeechRouterService مع الاحتفاظ بـ key = "vosk-live" بـ Task 10)* |
+| R7 | `SpeechProvider.DROPDOWN_OPTIONS` | *(تمت إضافة اختبارات تؤكد التطابق والترتيب لكافة الخيارات بالاتجاهين بـ Task 10)* |
 
 ## 3. المهام
 

@@ -64,5 +64,6 @@ data class DeepgramWord(
     val word: String,
     val start: Double,
     val end: Double,
+    val confidence: Double? = null,
     @SerialName("punctuated_word") val punctuatedWord: String? = null
 )

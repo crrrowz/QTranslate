@@ -13,7 +13,6 @@ const val LIVE_OFF = "Off"
 const val LIVE_VOSK_BUILTIN = "Vosk (built-in)"
 const val LIVE_DEEPGRAM = "Deepgram (live)"
 const val LIVE_OPENAI = "OpenAI Realtime"
-const val LIVE_VOSK = LIVE_VOSK_BUILTIN
 const val LIVE_ENGINE_OPTIONS = "$LIVE_OFF,$LIVE_VOSK_BUILTIN,$LIVE_DEEPGRAM,$LIVE_OPENAI"
 
 const val MODE_LOCAL = "Local only"
@@ -331,8 +330,11 @@ data class SpeechSettings(
         return null
     }
 
-    private fun isLocal(host: String): Boolean =
-        host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" ||
-            host.endsWith(".local") || host.startsWith("192.168.") || host.startsWith("10.") ||
-            Regex("""^172\.(1[6-9]|2\d|3[01])\.""").containsMatchIn(host)
+    private fun isLocal(host: String): Boolean {
+        val clean = host.trim().removeSurrounding("[", "]").lowercase()
+        return clean == "localhost" || clean == "127.0.0.1" || clean == "::1" ||
+            clean.endsWith(".local") || clean.startsWith("192.168.") || clean.startsWith("10.") ||
+            Regex("""^172\.(1[6-9]|2\d|3[01])\.""").containsMatchIn(clean) ||
+            clean.startsWith("fc00:") || clean.startsWith("fd") || clean == "::"
+    }
 }

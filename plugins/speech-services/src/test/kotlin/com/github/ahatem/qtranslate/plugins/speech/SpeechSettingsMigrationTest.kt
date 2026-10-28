@@ -31,11 +31,6 @@ class SpeechSettingsMigrationTest {
     }
 
     @Test
-    fun `legacy LIVE_VOSK constant matches LIVE_VOSK_BUILTIN`() {
-        assertEquals(LIVE_VOSK_BUILTIN, LIVE_VOSK)
-    }
-
-    @Test
     fun `migration rules map legacy combinations to mode`() {
         // Vosk + provider -> Hybrid
         assertEquals(MODE_HYBRID, SpeechPlugin.migrateSpeechMode(null, "Vosk (local server)", "Groq"))
@@ -51,7 +46,7 @@ class SpeechSettingsMigrationTest {
         // Saved mode is preserved
         assertEquals(MODE_LOCAL, SpeechPlugin.migrateSpeechMode(MODE_LOCAL, LIVE_VOSK_BUILTIN, "Groq"))
         assertEquals(MODE_CLOUD, SpeechPlugin.migrateSpeechMode(MODE_CLOUD, LIVE_VOSK_BUILTIN, "Groq"))
-        assertEquals(MODE_HYBRID, SpeechPlugin.migrateSpeechMode(MODE_HYBRID, LIVE_OFF, "None"))
+        assertEquals(MODE_HYBRID, SpeechPlugin.migrateSpeechMode(MODE_HYBRID, LIVE_OFF, SpeechProvider.NONE.label))
     }
 
     @Test
