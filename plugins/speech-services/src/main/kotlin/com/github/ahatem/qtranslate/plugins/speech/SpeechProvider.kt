@@ -55,7 +55,7 @@ enum class SpeechProvider(
         "https://api.openai.com/v1", "whisper-1", true,
         "platform.openai.com > API keys",
         supportsBatch = true, supportsRealtime = true, supportsWordTimings = true, supportsLanguageDetection = true,
-        knownModels = listOf("whisper-1", "gpt-transcribe", "gpt-live-transcribe")
+        knownModels = listOf("whisper-1", "gpt-transcribe")
     ),
     DEEPGRAM(
         "Deepgram", SpeechProtocol.DEEPGRAM,
@@ -83,7 +83,7 @@ enum class SpeechProvider(
         "", "", false,
         "whatever the gateway expects",
         supportsBatch = true, supportsRealtime = false, supportsWordTimings = false, supportsLanguageDetection = true,
-        knownModels = listOf("gpt-4o", "chatgpt-4o-latest")
+        knownModels = listOf("gpt-audio-1.5")
     );
 
     companion object {

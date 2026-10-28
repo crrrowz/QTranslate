@@ -105,7 +105,7 @@ data class SpeechSettings(
             "Deepgram: nova-3). Required for Custom and Audio chat model.",
         type = SettingType.DROPDOWN,
         editable = true,
-        options = "whisper-large-v3-turbo,whisper-large-v3,whisper-1,gpt-transcribe,gpt-live-transcribe,nova-3,nova-2,gpt-4o",
+        options = "whisper-large-v3-turbo,whisper-large-v3,whisper-1,gpt-transcribe,nova-3,nova-2,gpt-audio-1.5",
         group = "accurate",
         showIf = "provider=Groq,OpenAI,Deepgram,Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible),Local Whisper server",
         order = 40
