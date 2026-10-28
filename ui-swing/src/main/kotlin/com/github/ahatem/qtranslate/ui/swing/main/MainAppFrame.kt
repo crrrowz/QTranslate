@@ -32,6 +32,9 @@ import com.github.ahatem.qtranslate.ui.swing.dictionary.buildQuickDictionaryDial
 import com.github.ahatem.qtranslate.ui.swing.imagesearch.ImageSearchDialog
 import com.github.ahatem.qtranslate.ui.swing.imagesearch.buildImageSearchDialogState
 import com.github.ahatem.qtranslate.ui.swing.document.DocumentTranslationDialog
+import com.github.ahatem.qtranslate.ui.swing.conversation.ConversationStrings
+import com.github.ahatem.qtranslate.ui.swing.conversation.ConversationWindow
+import com.github.ahatem.qtranslate.core.conversation.ConversationFeature
 import com.github.ahatem.qtranslate.ui.swing.document.DocumentTranslationStrings
 import com.github.ahatem.qtranslate.ui.swing.history.HistoryDialog
 import com.github.ahatem.qtranslate.ui.swing.history.buildHistoryDialogState
@@ -95,6 +98,8 @@ class MainAppFrame(
      * own application-level shutdown itself: it only reports that the user asked to exit.
      */
     private val onApplicationExit: (Size, Position) -> Unit = { _, _ -> },
+    /** Conversation Sessions; null hides its menu entries. */
+    private val conversationFeature: ConversationFeature? = null,
     /**
      * True when this process was launched from the Windows startup registration (#226).
      *
@@ -115,6 +120,24 @@ class MainAppFrame(
     private val historyDialog by lazy { HistoryDialog(this) }
     private val dictionaryDialog by lazy { DictionaryDialog(this, iconManager) }
     private val loadingIndicator by lazy { LoadingIndicator(this) }
+
+    private val conversationWindow by lazy {
+        conversationFeature?.let { feature ->
+            ConversationWindow(
+                feature = feature,
+                strings = ConversationStrings(localizer),
+                languages = { mainStore.state.value.availableLanguages },
+                defaultTarget = { mainStore.state.value.targetLanguage },
+                isRtl = { localizer.isRtl },
+                onOpenSpeechSettings = { runOnUi { openSettingsDialog(page = SettingsPage.PLUGINS) } }
+            )
+        }
+    }
+
+    private fun showConversations() = runOnUi { conversationWindow?.open() }
+
+    private val conversationsMenuLabel: String
+        get() = if (conversationFeature == null) "" else localizer.getString("main_window_main_menu.conversations")
 
     private val documentTranslationDialog by lazy {
         DocumentTranslationDialog(
@@ -1099,6 +1122,7 @@ class MainAppFrame(
             onRecognizeText = { openSnippingTool() },
             onShowHistory = { showHistoryDialog() },
             onTranslateDocument = { documentTranslationDialog.open() },
+            onShowConversations = { showConversations() },
             onShowSettings = { openSettingsDialog() },
             onShowHowToUse = { openUrl("https://github.com/ahatem/QTranslate/wiki") },
             onShowAboutQTranslate = { onShowAboutDialog() },
@@ -1161,6 +1185,7 @@ class MainAppFrame(
             recognizeText = localizer.getString("system_tray_menu.recognize_text"),
             history = localizer.getString("system_tray_menu.history"),
             translateDocument = localizer.getString("main_window_main_menu.translate_document"),
+            conversations = conversationsMenuLabel,
             settings = localizer.getString("main_window_main_menu.settings"),
             help = localizer.getString("main_window_main_menu.help_submenu"),
             howToUse = localizer.getString("main_window_main_menu.how_to_use"),
@@ -1239,6 +1264,7 @@ class MainAppFrame(
             imageSearch = localizer.getString("system_tray_menu.image_search"),
             textRecognition = localizer.getString("system_tray_menu.recognize_text"),
             translateDocument = localizer.getString("main_window_main_menu.translate_document"),
+            conversations = conversationsMenuLabel,
             history = localizer.getString("system_tray_menu.history"),
             textSelection = localizer.getString("settings_general.selection_group"),
             selectionBehaviorOff = localizer.getString("settings_general.selection_behavior_off"),
@@ -1256,6 +1282,7 @@ class MainAppFrame(
             onShowImageSearch = { showImageSearchDialog() },
             onRecognizeText = { openSnippingTool() },
             onTranslateDocument = { documentTranslationDialog.open() },
+            onShowConversations = { showConversations() },
             onShowHistory = { showHistoryDialog() },
             onSelectionBehaviorChanged = { behavior ->
                 settingsStore.dispatch(
@@ -1544,13 +1571,22 @@ class MainAppFrame(
     }
 
     /** Opens Settings with the correct orientation. Shared by the menu and the Ctrl+Comma binding. */
-    private fun openSettingsDialog(openToServices: Boolean = false) {
+    private enum class SettingsPage { DEFAULT, SERVICES, PLUGINS }
+
+    private fun openSettingsDialog(
+        openToServices: Boolean = false,
+        page: SettingsPage = if (openToServices) SettingsPage.SERVICES else SettingsPage.DEFAULT
+    ) {
         val dialog = createSettingsDialog()
         dialog.applyComponentOrientation(
             if (localizer.isRtl) ComponentOrientation.RIGHT_TO_LEFT
             else ComponentOrientation.LEFT_TO_RIGHT
         )
-        if (openToServices) dialog.showServicesPage()
+        when (page) {
+            SettingsPage.SERVICES -> dialog.showServicesPage()
+            SettingsPage.PLUGINS -> dialog.showPluginsPage()
+            SettingsPage.DEFAULT -> Unit
+        }
         dialog.isVisible = true
     }
 
