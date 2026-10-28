@@ -55,35 +55,35 @@ enum class SpeechProvider(
         "https://api.openai.com/v1", "whisper-1", true,
         "platform.openai.com > API keys",
         supportsBatch = true, supportsRealtime = true, supportsWordTimings = true, supportsLanguageDetection = true,
-        knownModels = listOf("whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe")
+        knownModels = listOf("whisper-1", "gpt-transcribe", "gpt-live-transcribe")
     ),
     DEEPGRAM(
         "Deepgram", SpeechProtocol.DEEPGRAM,
         "https://api.deepgram.com/v1", "nova-3", true,
         "console.deepgram.com > API Keys",
         supportsBatch = true, supportsRealtime = true, supportsWordTimings = true, supportsLanguageDetection = true,
-        knownModels = listOf("nova-3", "nova-2", "nova-2-general", "enhanced")
+        knownModels = listOf("nova-3", "nova-2", "enhanced", "base")
     ),
     LOCAL(
         "Local Whisper server", SpeechProtocol.OPENAI_COMPATIBLE,
         "http://localhost:8000/v1", "Systran/faster-whisper-large-v3", false,
         "usually none",
         supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true,
-        knownModels = listOf("Systran/faster-whisper-large-v3", "whisper-1")
+        knownModels = listOf("Systran/faster-whisper-large-v3", "Systran/faster-whisper-medium", "whisper-large-v3")
     ),
     CUSTOM(
         "Custom (OpenAI-compatible)", SpeechProtocol.OPENAI_COMPATIBLE,
         "", "", false,
         "whatever the server expects",
         supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true,
-        knownModels = listOf("whisper-1")
+        knownModels = listOf("whisper-1", "whisper-large-v3")
     ),
     CHAT_MODEL(
         "Audio chat model (OpenAI-compatible)", SpeechProtocol.CHAT_AUDIO,
         "", "", false,
         "whatever the gateway expects",
         supportsBatch = true, supportsRealtime = false, supportsWordTimings = false, supportsLanguageDetection = true,
-        knownModels = listOf("gpt-4o-audio-preview", "gemini-2.0-flash", "gemini-1.5-flash")
+        knownModels = listOf("gpt-4o", "chatgpt-4o-latest")
     );
 
     companion object {
