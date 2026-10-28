@@ -78,8 +78,11 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             VoskLiveService({ settings }, builtin, deepgramLive, openAiRealtime)
         )
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO).also { pluginScope = it }
-        scope.launch {
-            builtin.preloadModel(settings.voskBuiltinModel)
+        // D1: Only preload if not in Cloud only mode AND liveEngine is built-in Vosk
+        if (settings.mode != MODE_CLOUD && settings.liveEngine == LIVE_VOSK_BUILTIN) {
+            scope.launch {
+                builtin.preloadModel(settings.voskBuiltinModel)
+            }
         }
         return Ok(Unit)
     }
@@ -120,8 +123,11 @@ class SpeechPlugin : Plugin<SpeechSettings> {
         this.settings = cleaned
 
         if (cleaned.voskBuiltinModel != oldModel) {
-            pluginScope?.launch {
-                builtinService?.preloadModel(cleaned.voskBuiltinModel)
+            builtinService?.onSelectedModelChanged(cleaned.voskBuiltinModel)
+            if (cleaned.mode != MODE_CLOUD && cleaned.liveEngine == LIVE_VOSK_BUILTIN) {
+                pluginScope?.launch {
+                    builtinService?.preloadModel(cleaned.voskBuiltinModel)
+                }
             }
         }
         return Ok(Unit)

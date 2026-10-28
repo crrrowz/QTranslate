@@ -634,7 +634,7 @@ class VoskModelManager(
             VoskModel(
                 name = "vosk-model-en-us-0.22-lgraph",
                 language = "en",
-                label = "English (US) large ~128MB",
+                label = "English (US) large ~128MB (~1GB RAM)",
                 sizeBytes = 128 * 1024 * 1024L,
                 url = "https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip",
                 isLarge = true
@@ -650,7 +650,7 @@ class VoskModelManager(
             VoskModel(
                 name = "vosk-model-ar-0.22-linto-1.1.0",
                 language = "ar",
-                label = "Arabic large ~1.3GB",
+                label = "Arabic large ~1.3GB (~3GB RAM)",
                 sizeBytes = 1_377_395_170L,
                 url = "https://alphacephei.com/vosk/models/vosk-model-ar-0.22-linto-1.1.0.zip",
                 isLarge = true

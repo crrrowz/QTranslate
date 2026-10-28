@@ -280,6 +280,71 @@ class VoskBuiltinServiceTest {
     }
 
     @Test
+    fun `onSelectedModelChanged unloads unselected models unless in use by active session`() = runBlocking {
+        val manager = VoskModelManager({ tempDir })
+        val m1 = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs(); writeFakeModelFiles(this) }
+        val m2 = File(manager.modelsDirectory, "vosk-model-small-de-0.15").apply { mkdirs(); writeFakeModelFiles(this) }
+
+        val createdModels = mutableMapOf<String, FakeModelHandle>()
+        val service = VoskBuiltinService(
+            modelManager = manager,
+            settings = { SpeechSettings(voskBuiltinModel = "vosk-model-small-en-us-0.15") },
+            modelFactory = { dir -> FakeModelHandle().also { createdModels[dir.name] = it } }
+        )
+
+        // Open live session using model 1
+        val session1 = service.openSession(LanguageCode("en")).get()
+        assertNotNull(session1)
+        assertTrue(service.isModelInUse("vosk-model-small-en-us-0.15"))
+
+        // Preload model 2
+        service.preloadModel("vosk-model-small-de-0.15")
+        assertEquals(2, service.cachedModelCount)
+
+        // Switching selected model to model 3:
+        // Model 2 is not in use and not selected -> unloaded!
+        // Model 1 is in use by session1 -> NOT unloaded!
+        service.onSelectedModelChanged("vosk-model-small-fr-0.22")
+
+        assertTrue(service.isModelCached("vosk-model-small-en-us-0.15"), "In-use model must NOT be unloaded")
+        assertFalse(service.isModelCached("vosk-model-small-de-0.15"), "Unselected idle model must be unloaded")
+        assertTrue(createdModels["vosk-model-small-de-0.15"]?.closed?.get() == true)
+
+        // Close session 1
+        session1.finish()
+        assertFalse(service.isModelInUse("vosk-model-small-en-us-0.15"))
+
+        // Now switching model unloads model 1
+        service.onSelectedModelChanged("vosk-model-small-fr-0.22")
+        assertFalse(service.isModelCached("vosk-model-small-en-us-0.15"))
+    }
+
+    @Test
+    fun `native library loading failures report platform unsupported message`() = runBlocking {
+        val manager = VoskModelManager({ tempDir })
+        val m1 = File(manager.modelsDirectory, "vosk-model-small-en-us-0.15").apply { mkdirs(); writeFakeModelFiles(this) }
+
+        val service = VoskBuiltinService(
+            modelManager = manager,
+            settings = { SpeechSettings(voskBuiltinModel = "vosk-model-small-en-us-0.15") },
+            modelFactory = { throw UnsatisfiedLinkError("Cannot load libvosk.so") }
+        )
+
+        val err = service.openSession(LanguageCode("en")).getError()
+        assertNotNull(err)
+        assertTrue(err.message.contains("Built-in Vosk is not supported on this platform"))
+
+        val damagedService = VoskBuiltinService(
+            modelManager = manager,
+            settings = { SpeechSettings(voskBuiltinModel = "vosk-model-small-en-us-0.15") },
+            modelFactory = { throw RuntimeException("Failed to read model files") }
+        )
+        val damagedErr = damagedService.openSession(LanguageCode("en")).getError()
+        assertNotNull(damagedErr)
+        assertTrue(damagedErr.message.contains("the model files look damaged - delete and download it again"))
+    }
+
+    @Test
     fun `finish timeout releases recognizer and shuts down worker`() = runBlocking {
         val recognizer = FakeRecognizerHandle()
         val session = VoskBuiltinSession(recognizer)

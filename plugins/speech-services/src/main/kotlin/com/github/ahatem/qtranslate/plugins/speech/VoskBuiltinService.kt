@@ -113,26 +113,83 @@ override fun isModelInstalled(language: LanguageCode): Boolean =
 
     private val modelLock = Any()
     private val modelCache = LinkedHashMap<String, VoskModelHandle>()
+    private val inUseCounts = HashMap<String, Int>()
+    private val modelLoadingLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
 
     internal val cachedModelCount: Int get() = synchronized(modelLock) { modelCache.size }
     internal fun isModelCached(name: String): Boolean = synchronized(modelLock) { modelCache.containsKey(name) }
+    internal fun isModelInUse(name: String): Boolean = synchronized(modelLock) { (inUseCounts[name] ?: 0) > 0 }
 
-    private fun getOrLoadModelLocked(modelName: String, modelDir: File): VoskModelHandle {
-        val existing = modelCache[modelName]
-        if (existing != null) {
-            // Re-insert to mark as most recently used in LRU order
-            modelCache.remove(modelName)
-            modelCache[modelName] = existing
-            return existing
+    fun onSelectedModelChanged(selectedModel: String) {
+        synchronized(modelLock) {
+            val iterator = modelCache.entries.iterator()
+            while (iterator.hasNext()) {
+                val (name, handle) = iterator.next()
+                val inUse = (inUseCounts[name] ?: 0) > 0
+                if (name != selectedModel && !inUse) {
+                    iterator.remove()
+                    runCatching { handle.close() }
+                }
+            }
         }
-        // Keep at most 2 models loaded concurrently to bound RAM footprint
-        while (modelCache.size >= 2) {
-            val toEvict = modelCache.keys.firstOrNull { it != modelName } ?: break
-            modelCache.remove(toEvict)?.let { runCatching { it.close() } }
+    }
+
+    private fun getOrLoadModel(modelName: String, modelDir: File): VoskModelHandle {
+        // Fast path: already cached
+        synchronized(modelLock) {
+            val existing = modelCache[modelName]
+            if (existing != null) {
+                modelCache.remove(modelName)
+                modelCache[modelName] = existing
+                return existing
+            }
         }
-        val loaded = modelFactory(modelDir)
-        modelCache[modelName] = loaded
-        return loaded
+
+        // Slow path: per-model lock (D3: does not block other models or clip transcription)
+        val perModelLock = modelLoadingLocks.computeIfAbsent(modelName) { Any() }
+        synchronized(perModelLock) {
+            synchronized(modelLock) {
+                val existing = modelCache[modelName]
+                if (existing != null) return existing
+            }
+
+            val loaded = try {
+                modelFactory(modelDir)
+            } catch (t: Throwable) {
+                throw wrapNativeLoadError(t, modelDir)
+            }
+
+            synchronized(modelLock) {
+                // Keep at most 2 models loaded concurrently; do not evict in-use models
+                while (modelCache.size >= 2) {
+                    val toEvict = modelCache.keys.firstOrNull { it != modelName && (inUseCounts[it] ?: 0) == 0 } ?: break
+                    modelCache.remove(toEvict)?.let { runCatching { it.close() } }
+                }
+                modelCache[modelName] = loaded
+                return loaded
+            }
+        }
+    }
+
+    private class VoskModelException(val error: ServiceError) : RuntimeException(error.message, error.cause)
+
+    private fun wrapNativeLoadError(t: Throwable, modelDir: File): Throwable {
+        val osName = System.getProperty("os.name") ?: "unknown OS"
+        val osArch = System.getProperty("os.arch") ?: "unknown arch"
+        val error = when (t) {
+            is VoskModelException -> return t
+            is UnsatisfiedLinkError, is LinkageError ->
+                ServiceError.ServiceUnavailableError(
+                    "Built-in Vosk is not supported on this platform ($osName $osArch). Please use Cloud or a local Whisper server.",
+                    t
+                )
+            else ->
+                ServiceError.ServiceUnavailableError(
+                    "Vosk model '${modelDir.name}' failed to load: the model files look damaged - delete and download it again.",
+                    t
+                )
+        }
+        return VoskModelException(error)
     }
 
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
@@ -150,16 +207,30 @@ override fun isModelInstalled(language: LanguageCode): Boolean =
 
         val recognizer = try {
             withContext(Dispatchers.IO) {
-                synchronized(modelLock) {
-                    val modelHandle = getOrLoadModelLocked(modelDir.name, modelDir)
-                    modelHandle.createRecognizer(SAMPLE_RATE)
-                }
+                val modelHandle = getOrLoadModel(modelDir.name, modelDir)
+                modelHandle.createRecognizer(SAMPLE_RATE)
             }
         } catch (t: Throwable) {
-            return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t))
+            val err = (t as? VoskModelException)?.error ?: ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t)
+            return Err(err)
         }
 
-        return Ok(VoskBuiltinSession(recognizer, lang = lang))
+        synchronized(modelLock) {
+            inUseCounts[modelDir.name] = (inUseCounts[modelDir.name] ?: 0) + 1
+        }
+
+        return Ok(
+            VoskBuiltinSession(
+                recognizer = recognizer,
+                lang = lang,
+                onClose = {
+                    synchronized(modelLock) {
+                        val count = (inUseCounts[modelDir.name] ?: 1) - 1
+                        if (count <= 0) inUseCounts.remove(modelDir.name) else inUseCounts[modelDir.name] = count
+                    }
+                }
+            )
+        )
     }
 
     /**
@@ -181,13 +252,12 @@ override fun isModelInstalled(language: LanguageCode): Boolean =
 
         val recognizer = try {
             withContext(Dispatchers.IO) {
-                synchronized(modelLock) {
-                    val modelHandle = getOrLoadModelLocked(modelDir.name, modelDir)
-                    modelHandle.createRecognizer(SAMPLE_RATE)
-                }
+                val modelHandle = getOrLoadModel(modelDir.name, modelDir)
+                modelHandle.createRecognizer(SAMPLE_RATE)
             }
         } catch (t: Throwable) {
-            return Err(ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t))
+            val err = (t as? VoskModelException)?.error ?: ServiceError.ServiceUnavailableError("Failed to initialize Vosk recognizer: ${t.message}", t)
+            return Err(err)
         }
 
         return try {
@@ -216,9 +286,7 @@ override fun isModelInstalled(language: LanguageCode): Boolean =
         val modelDir = modelManager.findModelForLanguage(lang, modelName)
         if (modelDir != null && modelDir.isDirectory && modelDir.list()?.isNotEmpty() == true) {
             try {
-                synchronized(modelLock) {
-                    getOrLoadModelLocked(modelDir.name, modelDir)
-                }
+                getOrLoadModel(modelDir.name, modelDir)
             } catch (_: Throwable) {
                 // Ignore background preload failures
             }
@@ -262,7 +330,8 @@ override fun isModelInstalled(language: LanguageCode): Boolean =
 class VoskBuiltinSession(
     private val recognizer: VoskRecognizerHandle,
     scope: CoroutineScope? = null,
-    private val lang: String? = null
+    private val lang: String? = null,
+    private val onClose: (() -> Unit)? = null
 ) : LiveSpeechSession {
     private val ownedExecutor: ExecutorService? = if (scope == null) {
         Executors.newSingleThreadExecutor { runnable ->
@@ -340,6 +409,7 @@ class VoskBuiltinSession(
         eventChannel.close()
         runCatching { recognizer.close() }
         ownedExecutor?.shutdown()
+        onClose?.invoke()
     }
 
     private fun emitPartial(jsonString: String) {
