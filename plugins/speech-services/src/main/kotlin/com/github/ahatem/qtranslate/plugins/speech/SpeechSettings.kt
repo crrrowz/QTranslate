@@ -186,7 +186,7 @@ data class SpeechSettings(
         val baseLabel = model?.label ?: modelName
         val installed = modelManager?.isInstalled(modelName) == true
         return if (installed) {
-            "$baseLabel ✓ (installed)"
+            SpeechLocalization.get("installed_marker", baseLabel)
         } else {
             baseLabel
         }
@@ -198,13 +198,13 @@ data class SpeechSettings(
     }
 
     fun downloadSelectedModelLabel(): String {
-        val manager = modelManager ?: return "Download Model"
+        val manager = modelManager ?: return SpeechLocalization.get("download_model_button")
         val downloading = manager.currentlyDownloadingModel()
         return if (downloading != null) {
             val label = VoskModelManager.MODELS_BY_NAME[downloading]?.label ?: downloading
-            "Downloading ($label)..."
+            SpeechLocalization.get("downloading_model_label", label)
         } else {
-            "Download Model"
+            SpeechLocalization.get("download_model_button")
         }
     }
 

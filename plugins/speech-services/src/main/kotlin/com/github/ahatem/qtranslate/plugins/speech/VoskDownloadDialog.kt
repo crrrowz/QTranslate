@@ -45,21 +45,16 @@ class VoskDownloadController {
     }
 
     /**
-     * Waits efficiently while [isPaused] is true, without busy-spinning CPU.
-     * Returns false if cancelled or if wait timed out.
+     * Waits efficiently while [isPaused] is true, without busy-spinning CPU,
+     * until resume() or cancel() is called.
+     * Returns false if cancelled or interrupted.
      */
-    fun waitIfPaused(maxWaitMillis: Long = 300_000L): Boolean {
+    fun waitIfPaused(): Boolean {
         if (!isPaused.get() || isCancelled.get()) return !isCancelled.get()
-        val deadline = System.currentTimeMillis() + maxWaitMillis
         synchronized(pauseLock) {
             while (isPaused.get() && !isCancelled.get()) {
-                val remaining = deadline - System.currentTimeMillis()
-                if (remaining <= 0) {
-                    cancel()
-                    return false
-                }
                 try {
-                    pauseLock.wait(remaining.coerceAtMost(1_000L))
+                    pauseLock.wait()
                 } catch (e: InterruptedException) {
                     cancel()
                     Thread.currentThread().interrupt()

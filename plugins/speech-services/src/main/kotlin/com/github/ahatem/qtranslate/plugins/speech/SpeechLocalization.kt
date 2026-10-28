@@ -22,7 +22,11 @@ internal object SpeechLocalization {
         "done" to "Done! Model installed successfully.",
         "error" to "Error: %s",
         "remaining_sec" to "%ds remaining",
-        "remaining_min_sec" to "%dm %ds remaining"
+        "remaining_min_sec" to "%dm %ds remaining",
+        "disk_space_error" to "Not enough free disk space to download and extract '%s'. Required: ~%s, available: %s.",
+        "installed_marker" to "%s ✓ (installed)",
+        "download_model_button" to "Download Model",
+        "downloading_model_label" to "Downloading (%s)..."
     )
 
     private val arabicStrings = mapOf(
@@ -41,7 +45,11 @@ internal object SpeechLocalization {
         "done" to "اكتمل التنزيل! تم تثبيت النموذج بنجاح.",
         "error" to "خطأ: %s",
         "remaining_sec" to "متبقي %d ثانية",
-        "remaining_min_sec" to "متبقي %d دقيقة و %d ثانية"
+        "remaining_min_sec" to "متبقي %d دقيقة و %d ثانية",
+        "disk_space_error" to "لا توجد مساحة كافية على القرص لتنزيل وفك ضغط '%s'. المطلوب: ~%s، المتوفر: %s.",
+        "installed_marker" to "%s ✓ (منصّب)",
+        "download_model_button" to "تنزيل النموذج",
+        "downloading_model_label" to "جارٍ التنزيل (%s)..."
     )
 
     fun get(key: String): String {

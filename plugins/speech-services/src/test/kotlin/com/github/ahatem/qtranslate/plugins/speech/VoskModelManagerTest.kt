@@ -277,6 +277,46 @@ class VoskModelManagerTest {
     }
 
     @Test
+    fun `controller waitIfPaused blocks until resume without busy wait`() {
+        val controller = VoskDownloadController()
+        controller.pause()
+
+        var waitResult: Boolean? = null
+        val waitThread = kotlin.concurrent.thread {
+            waitResult = controller.waitIfPaused()
+        }
+
+        // Wait brief period to confirm thread is actually waiting and hasn't returned
+        Thread.sleep(150)
+        assertNull(waitResult, "waitIfPaused should block while paused")
+
+        // Resume controller -> thread should unblock and return true
+        controller.resume()
+        waitThread.join(3_000)
+
+        assertEquals(true, waitResult, "waitIfPaused should return true after resume")
+    }
+
+    @Test
+    fun `controller waitIfPaused unblocks on cancel and returns false`() {
+        val controller = VoskDownloadController()
+        controller.pause()
+
+        var waitResult: Boolean? = null
+        val waitThread = kotlin.concurrent.thread {
+            waitResult = controller.waitIfPaused()
+        }
+
+        Thread.sleep(150)
+        assertNull(waitResult)
+
+        controller.cancel()
+        waitThread.join(3_000)
+
+        assertEquals(false, waitResult, "waitIfPaused should return false after cancel")
+    }
+
+    @Test
     fun `atomic install cleans up extracting temp folder on invalid structure`() {
         val manager = VoskModelManager(dataDirectory = { tempDir })
         val badZip = File(tempDir, "bad.zip")
