@@ -63,6 +63,12 @@ No Docker, Python, or extra background processes are required.
 - **Cloud only**: Transcribes line by line through your chosen cloud provider.
 - **Hybrid**: Shows instant live text from Vosk, and refines each finished line with the accurate provider.
 
+**Important local model notes:**
+- **Model requirements & missing models**: When running offline or with Vosk live text, a model must be installed for each spoken language in the session. Languages without an installed model are tagged as `(model not installed)` in the language dropdowns. If you start a recording without a required model, QTranslate warns you and offers to open Speech settings.
+- **RAM usage**: Small models (e.g. `small-en-us ~40MB`, `small-de ~45MB`) take ~150MB RAM and run smoothly on any machine. Large models (e.g. `ar-0.22-linto ~1.3GB`) require ~1.8GB–3GB RAM. Choose small models on memory-constrained systems.
+- **Recovering damaged models**: If a download or extraction was interrupted, the model status will indicate `incomplete, delete and download again`. Simply click **Delete Model** in Speech settings and then click **Download Model** to reinstall cleanly.
+- **"Auto" language in local mode**: Unlike cloud models, local Vosk does not perform multi-language auto-detection on the fly. In offline mode, "Auto" uses the selected model's language (or the system language when available). If a session uses a different language and a matching model is installed, QTranslate switches to it automatically.
+
 ### 2. The call's audio
 
 On Windows, the **Call audio** picker lists your output devices, and QTranslate records what each one

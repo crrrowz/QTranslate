@@ -367,7 +367,7 @@ class VoskModelManager(
         try {
             SwingUtilities.invokeAndWait {
                 val chooser = javax.swing.JFileChooser().apply {
-                    dialogTitle = "Select Vosk Model (ZIP or Folder)"
+                    dialogTitle = SpeechLocalization.get("import_chooser_title")
                     fileSelectionMode = javax.swing.JFileChooser.FILES_AND_DIRECTORIES
                     fileFilter = javax.swing.filechooser.FileNameExtensionFilter("Vosk Model Archive (*.zip)", "zip")
                 }
@@ -379,28 +379,28 @@ class VoskModelManager(
                 }
             }
         } catch (e: Exception) {
-            return "Failed to open file chooser: ${e.message}"
+            return SpeechLocalization.get("import_failed", e.message ?: e.toString())
         }
 
-        val file = selectedFile ?: return "Model import cancelled."
+        val file = selectedFile ?: return SpeechLocalization.get("import_cancelled")
         return importModelFromFile(file).fold(
-            success = { dir -> "Successfully imported model '${dir.name}' into persistent storage." },
-            failure = { error -> "Import failed: ${error.message}" }
+            success = { dir -> SpeechLocalization.get("import_success", dir.name) },
+            failure = { error -> SpeechLocalization.get("import_failed", error.message) }
         )
     }
 
     /** Message for the settings "Delete Model" action. */
     fun deleteAction(modelName: String): String {
         val model = MODELS_BY_NAME[modelName]
-            ?: return "Unknown model '$modelName'."
+            ?: return SpeechLocalization.get("delete_unknown_model", modelName)
         if (!isInstalled(model.name)) {
-            return "Model '${model.label}' is not downloaded on this machine."
+            return SpeechLocalization.get("delete_not_installed", model.label)
         }
         val deleted = deleteModel(model.name)
         return if (deleted) {
-            "Model '${model.label}' has been successfully deleted from your computer."
+            SpeechLocalization.get("delete_success", model.label)
         } else {
-            "Failed to delete model '${model.label}'. Please check file permissions."
+            SpeechLocalization.get("delete_failed", model.label)
         }
     }
 
@@ -416,16 +416,16 @@ class VoskModelManager(
             val isIncomplete = localDir.isIncompleteModelDir() || persistentDir.isIncompleteModelDir()
 
             val statusStr = when {
-                isInst -> "✓ Installed and ready to use"
-                isIncomplete -> "incomplete, delete and download again"
-                else -> "✗ Not downloaded yet"
+                isInst -> SpeechLocalization.get("status_installed")
+                isIncomplete -> SpeechLocalization.get("status_incomplete")
+                else -> SpeechLocalization.get("status_not_downloaded")
             }
-            sb.append("Selected model: ${selected.label}\nStatus: $statusStr\n\n")
+            sb.append(SpeechLocalization.get("status_selected_header", selected.label, statusStr))
         }
         if (installed.isEmpty()) {
-            sb.append("No built-in Vosk models downloaded yet.\nChoose a model from the dropdown and click 'Download Model'.")
+            sb.append(SpeechLocalization.get("status_no_models"))
         } else {
-            sb.append("Installed Vosk models (${installed.size}):\n")
+            sb.append(SpeechLocalization.get("status_installed_header", installed.size))
             installed.forEach { dir ->
                 val info = MODELS_BY_NAME[dir.name]
                 val desc = info?.label ?: dir.name

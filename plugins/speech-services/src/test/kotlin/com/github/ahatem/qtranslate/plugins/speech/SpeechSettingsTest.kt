@@ -14,6 +14,10 @@ class SpeechSettingsTest {
         assertNull(error("http://172.31.255.1:8000/v1"))
         assertNotNull(error("http://172.32.0.1:8000/v1"))
         assertNotNull(error("http://172.15.0.1:8000/v1"))
+
+        // IPv6 loopback and ULA (Unique Local Address fc00::/7)
+        assertNull(error("http://[::1]:8000/v1"))
+        assertNull(error("http://[fd12:3456:789a::1]:8000/v1"))
     }
 
     @Test
@@ -75,5 +79,33 @@ class SpeechSettingsTest {
             liveApiKey = "explicit-dg-key"
         )
         kotlin.test.assertEquals("explicit-dg-key", explicitSettings.effectiveLiveApiKey)
+    }
+
+    @Test
+    fun `E2 - DROPDOWN_OPTIONS matches AVAILABLE_MODELS names in order without gaps`() {
+        val expected = VoskModelManager.AVAILABLE_MODELS.joinToString(",") { it.name }
+        kotlin.test.assertEquals(expected, VoskModelManager.DROPDOWN_OPTIONS)
+    }
+
+    @Test
+    fun `B7 - all localization keys exist in both en and ar bundles`() {
+        val enStream = javaClass.getResourceAsStream("/localization/en.toml")
+        val arStream = javaClass.getResourceAsStream("/localization/ar.toml")
+        kotlin.test.assertNotNull(enStream, "en.toml should be present")
+        kotlin.test.assertNotNull(arStream, "ar.toml should be present")
+
+        fun parseKeys(input: java.io.InputStream): Set<String> {
+            return input.bufferedReader().useLines { lines ->
+                lines.map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("[") && it.contains("=") }
+                    .map { it.substringBefore("=").trim() }
+                    .toSet()
+            }
+        }
+
+        val enKeys = parseKeys(enStream)
+        val arKeys = parseKeys(arStream)
+
+        kotlin.test.assertEquals(enKeys, arKeys, "en.toml and ar.toml key sets must be identical")
     }
 }
