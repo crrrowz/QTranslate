@@ -583,6 +583,7 @@ class DynamicPluginSettingsDialog(
 
             is DropdownSetting -> {
                 val cb = JComboBox(setting.options.toTypedArray()).apply {
+                    isEditable = setting.isEditable
                     val instance = settingsInstance
                     if (instance != null) {
                         val rendererMethod = runCatching {
@@ -613,7 +614,21 @@ class DynamicPluginSettingsDialog(
                 cb.addItemListener { e ->
                     if (e.stateChange == ItemEvent.SELECTED) onAnyFieldChanged()
                 }
-                SettingComponent(placeholder, cb) { cb.selectedItem?.toString() ?: "" }
+                if (setting.isEditable) {
+                    val editorComp = cb.editor.editorComponent as? JTextComponent
+                    editorComp?.document?.addDocumentListener(object : DocumentListener {
+                        override fun insertUpdate(e: DocumentEvent?) = onAnyFieldChanged()
+                        override fun removeUpdate(e: DocumentEvent?) = onAnyFieldChanged()
+                        override fun changedUpdate(e: DocumentEvent?) = onAnyFieldChanged()
+                    })
+                }
+                SettingComponent(placeholder, cb) {
+                    if (cb.isEditable) {
+                        (cb.editor.editorComponent as? JTextComponent)?.text ?: cb.selectedItem?.toString() ?: ""
+                    } else {
+                        cb.selectedItem?.toString() ?: ""
+                    }
+                }
             }
 
             is FilePathSetting, is DirectoryPathSetting -> {

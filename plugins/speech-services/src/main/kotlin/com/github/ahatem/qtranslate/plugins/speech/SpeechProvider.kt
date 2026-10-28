@@ -32,53 +32,65 @@ enum class SpeechProvider(
     val supportsBatch: Boolean = true,
     val supportsRealtime: Boolean = false,
     val supportsWordTimings: Boolean = true,
-    val supportsLanguageDetection: Boolean = true
+    val supportsLanguageDetection: Boolean = true,
+    val knownModels: List<String> = emptyList()
 ) {
     /** No accurate recognizer: the live text is the transcript. Nothing is sent anywhere. */
     NONE(
         "None (live text only)", SpeechProtocol.OPENAI_COMPATIBLE,
         "", "", false,
         "not needed",
-        supportsBatch = false, supportsRealtime = false, supportsWordTimings = false, supportsLanguageDetection = false
+        supportsBatch = false, supportsRealtime = false, supportsWordTimings = false, supportsLanguageDetection = false,
+        knownModels = emptyList()
     ),
     GROQ(
         "Groq", SpeechProtocol.OPENAI_COMPATIBLE,
         "https://api.groq.com/openai/v1", "whisper-large-v3-turbo", true,
         "console.groq.com > API Keys",
-        supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true
+        supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true,
+        knownModels = listOf("whisper-large-v3-turbo", "whisper-large-v3")
     ),
     OPENAI(
         "OpenAI", SpeechProtocol.OPENAI_COMPATIBLE,
         "https://api.openai.com/v1", "whisper-1", true,
         "platform.openai.com > API keys",
-        supportsBatch = true, supportsRealtime = true, supportsWordTimings = true, supportsLanguageDetection = true
+        supportsBatch = true, supportsRealtime = true, supportsWordTimings = true, supportsLanguageDetection = true,
+        knownModels = listOf("whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe")
     ),
     DEEPGRAM(
         "Deepgram", SpeechProtocol.DEEPGRAM,
         "https://api.deepgram.com/v1", "nova-3", true,
         "console.deepgram.com > API Keys",
-        supportsBatch = true, supportsRealtime = true, supportsWordTimings = true, supportsLanguageDetection = true
+        supportsBatch = true, supportsRealtime = true, supportsWordTimings = true, supportsLanguageDetection = true,
+        knownModels = listOf("nova-3", "nova-2", "nova-2-general", "enhanced")
     ),
     LOCAL(
         "Local Whisper server", SpeechProtocol.OPENAI_COMPATIBLE,
         "http://localhost:8000/v1", "Systran/faster-whisper-large-v3", false,
         "usually none",
-        supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true
+        supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true,
+        knownModels = listOf("Systran/faster-whisper-large-v3", "whisper-1")
     ),
     CUSTOM(
         "Custom (OpenAI-compatible)", SpeechProtocol.OPENAI_COMPATIBLE,
-        "", "whisper-1", false,
+        "", "", false,
         "whatever the server expects",
-        supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true
+        supportsBatch = true, supportsRealtime = false, supportsWordTimings = true, supportsLanguageDetection = true,
+        knownModels = listOf("whisper-1")
     ),
     CHAT_MODEL(
         "Audio chat model (OpenAI-compatible)", SpeechProtocol.CHAT_AUDIO,
         "", "", false,
         "whatever the gateway expects",
-        supportsBatch = true, supportsRealtime = false, supportsWordTimings = false, supportsLanguageDetection = true
+        supportsBatch = true, supportsRealtime = false, supportsWordTimings = false, supportsLanguageDetection = true,
+        knownModels = listOf("gpt-4o-audio-preview", "gemini-2.0-flash", "gemini-1.5-flash")
     );
 
     companion object {
+        /** All distinct suggested models across providers for editable dropdown default options. */
+        val ALL_SUGGESTED_MODELS: List<String> = entries.flatMap { it.knownModels }.distinct()
+        val ALL_SUGGESTED_MODELS_STRING: String = ALL_SUGGESTED_MODELS.joinToString(",")
+
         /** The `options` string of the provider dropdown, in display order. */
         const val DROPDOWN_OPTIONS =
             "None (live text only),Groq,OpenAI,Deepgram,Local Whisper server,Custom (OpenAI-compatible),Audio chat model (OpenAI-compatible)"

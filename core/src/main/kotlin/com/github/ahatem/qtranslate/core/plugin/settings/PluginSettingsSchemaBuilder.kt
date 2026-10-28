@@ -103,6 +103,7 @@ internal class PluginSettingsSchemaBuilder(
             defaultValue   = annotation.defaultValue,
             validation     = annotation.validation,
             options        = annotation.options,
+            editable       = annotation.editable,
             group          = annotation.group,
             showIf         = showIf,
             minValue       = annotation.minValue.takeUnless { it.isNaN() },

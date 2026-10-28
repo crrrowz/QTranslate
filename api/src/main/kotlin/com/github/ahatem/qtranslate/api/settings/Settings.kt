@@ -76,6 +76,12 @@ public annotation class Setting(
     val options: String = "",
 
     /**
+     * For [SettingType.DROPDOWN] fields — if `true`, the combobox is editable, allowing the user
+     * to pick from suggested [options] or enter a custom value. Defaults to `false`.
+     */
+    val editable: Boolean = false,
+
+    /**
      * An optional regex pattern used to validate [SettingType.TEXT] or [SettingType.PASSWORD]
      * fields before saving. The core will reject the save and highlight the field if the
      * current value does not match.
