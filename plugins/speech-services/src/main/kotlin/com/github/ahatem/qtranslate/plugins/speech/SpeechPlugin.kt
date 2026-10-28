@@ -10,6 +10,7 @@ import com.github.ahatem.qtranslate.api.plugin.SupportedLanguages
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionRequest
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionResponse
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognizer
+import com.github.ahatem.qtranslate.api.speech.VerificationCapability
 import com.github.michaelbull.result.Err
 import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
@@ -175,8 +176,13 @@ class SpeechRecognitionService(
     private val client: SpeechClient,
     private val builtinLive: VoskBuiltinService? = null,
     private val settings: () -> SpeechSettings
-) : SpeechRecognizer {
+) : SpeechRecognizer, VerificationCapability {
     override val metadata: ServiceMetadata get() = ServiceMetadata(requiresConfiguration = true)
+    override val isIndependentVerifier: Boolean
+        get() {
+            val current = settings()
+            return current.mode != MODE_LOCAL && current.speechProvider != SpeechProvider.NONE
+        }
     override val key: String = "speech"
     override val version: String = "1.0.0"
     override val iconPath: String = "assets/speech.svg"

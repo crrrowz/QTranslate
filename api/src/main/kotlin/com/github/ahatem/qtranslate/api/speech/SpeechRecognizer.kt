@@ -30,6 +30,22 @@ public interface SpeechRecognizer : Service {
 }
 
 /**
+ * Optional capability for a [SpeechRecognizer] indicating whether it provides independent verification
+ * of spoken audio when paired with live recognition.
+ *
+ * When `false` (e.g. in Local only mode where both live recognition and batch transcription use the
+ * same local Vosk model), rolling verification is skipped to avoid dishonest self-verification badges
+ * and unnecessary duplicate CPU work.
+ */
+public interface VerificationCapability {
+    /**
+     * Whether this recognizer provides an independent verification source.
+     * Defaults to true for remote/cloud providers.
+     */
+    public val isIndependentVerifier: Boolean get() = true
+}
+
+/**
  * One utterance to transcribe.
  *
  * @param audio    The recorded clip.
