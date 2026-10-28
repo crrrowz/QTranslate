@@ -29,6 +29,17 @@ public interface LiveSpeechRecognizer : Service {
 }
 
 /**
+ * Optional capability for a speech recognizer that relies on a catalogue of downloadable offline models.
+ */
+public interface ModelCatalogueCapability {
+    /** All languages offered in the model catalogue, regardless of download state. */
+    public val catalogueLanguages: Set<LanguageCode> get() = emptySet()
+
+    /** Whether an offline model for [language] is currently installed and ready for transcription. */
+    public fun isModelInstalled(language: LanguageCode): Boolean = true
+}
+
+/**
  * One live recognition session.
  *
  * Audio is always 16-bit little-endian PCM, mono, at 16 kHz, in chunks of any size. Times in

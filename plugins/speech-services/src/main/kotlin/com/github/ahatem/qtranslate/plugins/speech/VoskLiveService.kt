@@ -6,6 +6,7 @@ import com.github.ahatem.qtranslate.api.plugin.ServiceMetadata
 import com.github.ahatem.qtranslate.api.plugin.SupportedLanguages
 import com.github.ahatem.qtranslate.api.speech.LiveSpeechRecognizer
 import com.github.ahatem.qtranslate.api.speech.LiveSpeechSession
+import com.github.ahatem.qtranslate.api.speech.ModelCatalogueCapability
 import com.github.michaelbull.result.Err
 import com.github.michaelbull.result.Ok
 import com.github.michaelbull.result.Result
@@ -21,10 +22,15 @@ class VoskLiveService(
     private val builtinService: LiveSpeechRecognizer? = null,
     private val deepgramService: LiveSpeechRecognizer? = null,
     private val openAiService: LiveSpeechRecognizer? = null
-) : LiveSpeechRecognizer {
+) : LiveSpeechRecognizer, ModelCatalogueCapability {
     constructor(settings: () -> SpeechSettings) : this(settings, null, null, null)
 
     override val metadata: ServiceMetadata get() = ServiceMetadata(requiresConfiguration = true)
+    override val catalogueLanguages: Set<LanguageCode>
+        get() = (builtinService as? ModelCatalogueCapability)?.catalogueLanguages ?: emptySet()
+
+    override fun isModelInstalled(language: LanguageCode): Boolean =
+        (builtinService as? ModelCatalogueCapability)?.isModelInstalled(language) ?: true
     override val key: String = "vosk-live"
     override val name: String
         get() = when (settings().liveEngine) {

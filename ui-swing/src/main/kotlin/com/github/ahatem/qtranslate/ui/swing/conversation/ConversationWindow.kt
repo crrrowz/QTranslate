@@ -810,6 +810,30 @@ class ConversationWindow(
         }
         val myLanguage = myLanguageCombo.selectedItem as? LanguageCode ?: LanguageCode.AUTO
         val callLanguage = callLanguageCombo.selectedItem as? LanguageCode ?: LanguageCode.AUTO
+
+        // C6: Pre-recording check for missing offline models in Local only / Vosk live mode
+        val missingLangs = listOf(myLanguage, callLanguage)
+            .filter { it != LanguageCode.AUTO && !feature.isModelInstalled(it) }
+            .distinct()
+        if (missingLangs.isNotEmpty()) {
+            val names = missingLangs.joinToString(", ") { it.getDisplayName() }
+            val options = arrayOf(strings.speechSettings, strings.cancel, strings.record)
+            val choice = JOptionPane.showOptionDialog(
+                this,
+                strings.missingModelWarning(names),
+                strings.title,
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                options,
+                options[0]
+            )
+            when (choice) {
+                0 -> { onOpenSpeechSettings(); return }
+                1, JOptionPane.CLOSED_OPTION -> return
+                else -> Unit // 2: record anyway
+            }
+        }
         feature.preferences = feature.preferences.copy(
             microphoneId = microphone?.id,
             systemOutputId = system?.id,
@@ -914,6 +938,7 @@ class ConversationWindow(
         is RecorderNotice.DeviceLost -> strings.noticeDeviceLost(sourceName(notice.source), notice.message.trimEnd('.'))
         is RecorderNotice.SaveFailed -> strings.noticeSaveFailed(notice.message.trimEnd('.'))
         is RecorderNotice.LiveFailed -> strings.noticeLiveFailed(sourceName(notice.source), notice.message.trimEnd('.'))
+        is RecorderNotice.LiveUnavailable -> strings.noticeLiveUnavailable(sourceName(notice.source), notice.message.trimEnd('.'))
         RecorderNotice.EchoDetected -> strings.noticeEchoDetected
     }
 
@@ -942,12 +967,14 @@ class ConversationWindow(
 
         val translationAvailable = languages().filter { it != LanguageCode.AUTO }
         val speechAvailable = feature.speechLanguages()?.filter { it != LanguageCode.AUTO }
-        val spokenAvailable = speechAvailable ?: translationAvailable
-        val renderer = LanguageRenderer()
+        val catalogue = feature.catalogueLanguages()?.filter { it != LanguageCode.AUTO }
+        val spokenAvailable = catalogue ?: speechAvailable ?: translationAvailable
+        val spokenRenderer = LanguageRenderer(checkModelInstalled = true)
+        val targetRenderer = LanguageRenderer(checkModelInstalled = false)
         val spokenChoices = (listOf(LanguageCode.AUTO) + spokenAvailable).toTypedArray()
         fun JComboBox<LanguageCode>.fill(tag: String) {
             model = DefaultComboBoxModel(spokenChoices)
-            this.renderer = renderer
+            this.renderer = spokenRenderer
             selectedItem = LanguageCode(tag).takeIf { it == LanguageCode.AUTO || it in spokenAvailable } ?: LanguageCode.AUTO
         }
         fillingLanguages = true
@@ -955,7 +982,7 @@ class ConversationWindow(
             myLanguageCombo.fill(preferences.spokenLanguage)
             callLanguageCombo.fill(preferences.callLanguage)
             targetCombo.model = DefaultComboBoxModel(translationAvailable.toTypedArray())
-            targetCombo.renderer = renderer
+            targetCombo.renderer = targetRenderer
             targetCombo.selectedItem = preferences.targetLanguage?.let(::LanguageCode)?.takeIf { it in translationAvailable }
                 ?: defaultTarget().takeIf { it in translationAvailable } ?: translationAvailable.firstOrNull()
         } finally {
@@ -1734,11 +1761,17 @@ class ConversationWindow(
         }
     }
 
-    private inner class LanguageRenderer : DefaultListCellRenderer() {
+    private inner class LanguageRenderer(private val checkModelInstalled: Boolean = false) : DefaultListCellRenderer() {
         override fun getListCellRendererComponent(
             list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean
         ): Component {
-            val label = (value as? LanguageCode)?.getDisplayName(autoDetectLabel = strings.autoDetect) ?: value
+            val lang = value as? LanguageCode
+            val baseLabel = lang?.getDisplayName(autoDetectLabel = strings.autoDetect) ?: value.toString()
+            val label = if (checkModelInstalled && lang != null && lang != LanguageCode.AUTO && !feature.isModelInstalled(lang)) {
+                strings.modelNotInstalledTag(baseLabel)
+            } else {
+                baseLabel
+            }
             return super.getListCellRendererComponent(list, label, index, isSelected, cellHasFocus)
         }
     }

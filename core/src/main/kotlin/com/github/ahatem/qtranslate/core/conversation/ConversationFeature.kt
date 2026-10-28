@@ -84,7 +84,11 @@ class ConversationFeature(
         openLive = { language ->
             activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)?.openSession(language)
         },
-        isPlaybackActive = ::isPlaybackActive
+        isPlaybackActive = ::isPlaybackActive,
+        isIndependentVerifier = {
+            val service = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)
+            (service as? com.github.ahatem.qtranslate.api.speech.VerificationCapability)?.isIndependentVerifier ?: true
+        }
     )
 
     val translations = TranslationCache(scope, { text, target -> translateString(text, target) })
@@ -102,7 +106,11 @@ class ConversationFeature(
     /** The active speech service's name, e.g. "Speech Recognition (Groq)", or null when none is. */
     val speechServiceName: String?
         get() = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)?.name
-            ?.takeUnless { it.contains("None (live text only)") || it.contains("Vosk offline") }
+            ?.takeUnless {
+                val service = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)
+                val isIndependent = (service as? com.github.ahatem.qtranslate.api.speech.VerificationCapability)?.isIndependentVerifier ?: true
+                !isIndependent
+            }
 
     /** The active live recognizer's name, or null. Whether it is actually set up shows when recording starts. */
     val liveServiceName: String?
@@ -121,6 +129,24 @@ class ConversationFeature(
             else -> null
         }
         return liveLangs ?: batchLangs
+    }
+
+    /** Full catalogue of languages supported by the engine, including uninstalled downloadable models. */
+    fun catalogueLanguages(): Set<LanguageCode>? {
+        val liveService = activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)
+        val speechService = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)
+        val liveCat = (liveService as? com.github.ahatem.qtranslate.api.speech.ModelCatalogueCapability)?.catalogueLanguages
+        val speechCat = (speechService as? com.github.ahatem.qtranslate.api.speech.ModelCatalogueCapability)?.catalogueLanguages
+        return (liveCat ?: speechCat)?.takeIf { it.isNotEmpty() }
+    }
+
+    /** Whether an offline model is installed for [language]. */
+    fun isModelInstalled(language: LanguageCode): Boolean {
+        val liveService = activeServiceManager.getActiveService<LiveSpeechRecognizer>(ServiceRole.LIVE_SPEECH_RECOGNIZER)
+        val speechService = activeServiceManager.getActiveService<SpeechRecognizer>(ServiceRole.SPEECH_RECOGNIZER)
+        val liveCheck = (liveService as? com.github.ahatem.qtranslate.api.speech.ModelCatalogueCapability)?.isModelInstalled(language)
+        val speechCheck = (speechService as? com.github.ahatem.qtranslate.api.speech.ModelCatalogueCapability)?.isModelInstalled(language)
+        return (liveCheck ?: speechCheck) ?: true
     }
 
     fun microphones(): List<AudioDevice> = microphoneBackend.inputDevices()

@@ -1,6 +1,7 @@
 package com.github.ahatem.qtranslate.core.conversation
 
 import com.github.ahatem.qtranslate.api.core.Logger
+import com.github.ahatem.qtranslate.api.language.LanguageCode
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
 import com.github.ahatem.qtranslate.api.speech.RecognizedWord
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionRequest
@@ -82,6 +83,7 @@ class ConversationRecorderTest {
         system: ScriptedDevice,
         openLive: OpenLive = { null },
         isPlaybackActive: () -> Boolean = { false },
+        isIndependentVerifier: () -> Boolean = { true },
         recognize: Recognize
     ) = ConversationRecorder(
         scope = scope,
@@ -91,7 +93,8 @@ class ConversationRecorderTest {
         recognize = recognize,
         logger = logger,
         openLive = openLive,
-        isPlaybackActive = isPlaybackActive
+        isPlaybackActive = isPlaybackActive,
+        isIndependentVerifier = isIndependentVerifier
     )
 
     /**
@@ -206,6 +209,52 @@ class ConversationRecorderTest {
         mic.push(tone(1_000) + silence(1_000))
         waitUntil { recorder.state.value.session?.segments?.any { it.text == "clip text" } == true }
         assertEquals(null, recorder.state.value.notice)
+        recorder.stop()
+    }
+
+    @Test
+    fun `missing model configuration error shows visible notice`() = runBlocking {
+        val mic = ScriptedDevice()
+        val recorder = recorder(mic, ScriptedDevice(),
+            openLive = { Err(ServiceError.ConfigurationError("No model installed for language 'ar'")) }) {
+            Ok(SpeechRecognitionResponse("clip text"))
+        }
+        recorder.start(options().copy(systemOutput = null, microphoneLanguage = LanguageCode("ar")))
+        waitUntil { recorder.state.value.notice is RecorderNotice.LiveUnavailable }
+        val notice = recorder.state.value.notice as RecorderNotice.LiveUnavailable
+        assertEquals(AudioSource.MICROPHONE, notice.source)
+        assertTrue(notice.message.contains("No model installed"))
+        recorder.stop()
+    }
+
+    @Test
+    fun `non-independent verifier in local mode skips verification and settles as UNVERIFIED`() = runBlocking {
+        val mic = ScriptedDevice()
+        val live = ScriptedLive()
+        var transcribeCalled = false
+        val recorder = recorder(
+            mic = mic,
+            system = ScriptedDevice(),
+            openLive = { Ok(live) },
+            isIndependentVerifier = { false },
+            recognize = {
+                transcribeCalled = true
+                Ok(SpeechRecognitionResponse("accurate text"))
+            }
+        )
+
+        recorder.start(options().copy(systemOutput = null))
+        awaitLive(mic, live)
+        mic.push(tone(800))
+        live.channel.send(com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent.Final("local spoken text"))
+
+        waitUntil { recorder.state.value.session?.segments?.singleOrNull()?.draft == false }
+        val seg = recorder.state.value.session!!.segments.single()
+
+        assertEquals("local spoken text", seg.text)
+        assertEquals(VerificationState.UNVERIFIED, seg.verificationState)
+        assertEquals(null, seg.agreement)
+        kotlin.test.assertFalse(transcribeCalled, "Rolling/settle verification must be skipped when verifier is not independent")
         recorder.stop()
     }
 

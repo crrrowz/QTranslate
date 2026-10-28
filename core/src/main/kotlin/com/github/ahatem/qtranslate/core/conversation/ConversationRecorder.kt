@@ -50,6 +50,9 @@ sealed interface RecorderNotice {
     /** The live recognizer dropped out; recording carries on without live text while it reconnects. */
     data class LiveFailed(val source: AudioSource, val message: String) : RecorderNotice
 
+    /** The live recognizer is unconfigured or has no model for the chosen language. */
+    data class LiveUnavailable(val source: AudioSource, val message: String) : RecorderNotice
+
     /** Microphone audio is bleeding into the call track (sidetone / loopback). */
     data object EchoDetected : RecorderNotice
 }
@@ -125,7 +128,9 @@ class ConversationRecorder(
     /** The active live recognizer, if any. Without one, speech is cut at pauses and sent as clips. */
     private val openLive: OpenLive = { null },
     /** True while in-app playback is active, so recorded audio is muted to prevent acoustic/loopback feedback. */
-    private val isPlaybackActive: () -> Boolean = { false }
+    private val isPlaybackActive: () -> Boolean = { false },
+    /** Whether the speech recognizer provides independent verification (false in local mode to avoid self-verification). */
+    private val isIndependentVerifier: () -> Boolean = { true }
 ) {
     private val transcriber = SegmentTranscriber(recognize)
 
@@ -801,13 +806,22 @@ class ConversationRecorder(
                         logger.info("Live recognition active for $source")
                     },
                     failure = { error ->
+                        liveUnavailable = true
+                        liveStatus = LiveRecognitionStatus.OFF
+                        updateLiveStatus()
+                        synchronized(liveLock) {
+                            flushUnsentBufferToSegmenter()
+                            segmenter.flush()?.let(::announce)
+                        }
                         if (error is ServiceError.ConfigurationError) {
-                            liveUnavailable = true
-                            liveStatus = LiveRecognitionStatus.OFF
-                            updateLiveStatus()
-                            synchronized(liveLock) {
-                                flushUnsentBufferToSegmenter()
-                                segmenter.flush()?.let(::announce)
+                            val msg = error.message
+                            val isModelOrLanguageMissing = msg.contains("model", ignoreCase = true) ||
+                                msg.contains("language", ignoreCase = true)
+                            val isSilent = !isModelOrLanguageMissing ||
+                                msg.contains("no accurate provider", ignoreCase = true) ||
+                                msg.contains("live text is off", ignoreCase = true)
+                            if (!isSilent) {
+                                _state.update { it.copy(notice = RecorderNotice.LiveUnavailable(source, msg)) }
                             }
                         } else {
                             liveFailed(error.message)
@@ -878,8 +892,9 @@ class ConversationRecorder(
                         )
                     }
 
-                    val shouldVerify = (unverifiedMillis >= ROLLING_VERIFICATION_MIN_MILLIS && unverifiedWordCount >= ROLLING_VERIFICATION_MIN_WORDS) ||
-                        (unverifiedMillis >= ROLLING_VERIFICATION_MAX_MILLIS && unverifiedWordCount > 0)
+                    val isVerifier = isIndependentVerifier()
+                    val shouldVerify = isVerifier && ((unverifiedMillis >= ROLLING_VERIFICATION_MIN_MILLIS && unverifiedWordCount >= ROLLING_VERIFICATION_MIN_WORDS) ||
+                        (unverifiedMillis >= ROLLING_VERIFICATION_MAX_MILLIS && unverifiedWordCount > 0))
 
                     if (shouldVerify && (verificationJob == null || verificationJob?.isActive == false)) {
                         val sliceStartMillis = toSessionMillis(checkpointStart)
@@ -1139,7 +1154,14 @@ class ConversationRecorder(
             }
 
             val tailDurationMillis = (endSample - combinedAudioStartSample) * 1000 / PcmStream.SAMPLE_RATE
-            if (hasConfirmed && candidate == null && (tailDurationMillis < 200 || tailLiveText.isBlank())) {
+            if (!isIndependentVerifier()) {
+                // In Local only mode, do not self-verify with the same offline engine; settle directly as UNVERIFIED
+                scope.launch {
+                    updateSession {
+                        applySegment(it, segmentToApply.copy(draft = false, verificationState = VerificationState.UNVERIFIED, agreement = null))
+                    }
+                }
+            } else if (hasConfirmed && candidate == null && (tailDurationMillis < 200 || tailLiveText.isBlank())) {
                 val settledState = if (currentVerificationState == VerificationState.LIVE) VerificationState.VERIFIED else currentVerificationState
                 scope.launch { updateSession { applySegment(it, segmentToApply.copy(draft = false, verificationState = settledState)) } }
             } else {

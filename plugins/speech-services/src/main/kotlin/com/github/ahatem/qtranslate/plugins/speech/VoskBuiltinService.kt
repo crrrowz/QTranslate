@@ -7,6 +7,7 @@ import com.github.ahatem.qtranslate.api.plugin.SupportedLanguages
 import com.github.ahatem.qtranslate.api.speech.LiveSpeechEvent
 import com.github.ahatem.qtranslate.api.speech.LiveSpeechRecognizer
 import com.github.ahatem.qtranslate.api.speech.LiveSpeechSession
+import com.github.ahatem.qtranslate.api.speech.ModelCatalogueCapability
 import com.github.ahatem.qtranslate.api.speech.RecognizedWord
 import com.github.michaelbull.result.Err
 import com.github.michaelbull.result.Ok
@@ -87,23 +88,28 @@ class VoskBuiltinService(
     private val settings: () -> SpeechSettings,
     private val modelFactory: (File) -> VoskModelHandle = { dir ->
         org.vosk.LibVosk.setLogLevel(org.vosk.LogLevel.WARNINGS)
-        RealVoskModelHandle(org.vosk.Model(dir.absolutePath))
+    RealVoskModelHandle(org.vosk.Model(dir.absolutePath))
+}
+) : LiveSpeechRecognizer, ModelCatalogueCapability {
+override val metadata = ServiceMetadata(requiresConfiguration = false)
+override val key: String = "vosk-builtin"
+override val name: String = "Vosk (built-in)"
+override val version: String = "1.0.0"
+override val iconPath: String = "assets/speech.svg"
+override val supportedLanguages: SupportedLanguages
+    get() {
+        val installed = modelManager.listInstalledModels()
+        val langs = installed.mapNotNull { dir ->
+            VoskModelManager.MODELS_BY_NAME[dir.name]?.language
+        }.distinct().map(::LanguageCode).toSet()
+        return SupportedLanguages.Specific(langs)
     }
-) : LiveSpeechRecognizer {
-    override val metadata = ServiceMetadata(requiresConfiguration = false)
-    override val key: String = "vosk-builtin"
-    override val name: String = "Vosk (built-in)"
-    override val version: String = "1.0.0"
-    override val iconPath: String = "assets/speech.svg"
-    override val supportedLanguages: SupportedLanguages
-        get() {
-            val installed = modelManager.listInstalledModels()
-            val langs = installed.mapNotNull { dir ->
-                VoskModelManager.MODELS_BY_NAME[dir.name]?.language
-            }.distinct().map(::LanguageCode).toSet()
-            return if (langs.isNotEmpty()) SupportedLanguages.Specific(langs)
-            else SupportedLanguages.Specific(setOf(LanguageCode.ENGLISH))
-        }
+
+override val catalogueLanguages: Set<LanguageCode>
+    get() = VoskModelManager.AVAILABLE_MODELS.map { LanguageCode(it.language) }.toSet()
+
+override fun isModelInstalled(language: LanguageCode): Boolean =
+    modelManager.findModelForLanguage(language.tag) != null
 
     private val modelLock = Any()
     private val modelCache = LinkedHashMap<String, VoskModelHandle>()
