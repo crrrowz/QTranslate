@@ -87,6 +87,11 @@ class DynamicPluginSettingsDialogTest {
             val active = mgr.currentlyDownloadingModel()
             return if (active != null) "Downloading: $active..." else "Download Model"
         }
+
+        fun selectedModelDisplayLabel(name: String): String {
+            val mgr = manager ?: return name
+            return if (mgr.isInstalled(name)) "$name (installed)" else name
+        }
     }
 
     @Test
@@ -174,6 +179,16 @@ class DynamicPluginSettingsDialogTest {
             assertTrue(downloadBtn!!.isVisible, "Download button must become visible after selecting uninstalled model B")
             assertTrue(downloadBtn!!.isEnabled, "Download button must be enabled for Model B while Model A downloads")
             assertEquals("Downloading: model-a...", downloadBtn!!.text)
+
+            // Test custom display label rendered in combo
+            @Suppress("UNCHECKED_CAST")
+            val renderer = modelCombo?.renderer as? javax.swing.ListCellRenderer<Any?>
+            assertNotNull(renderer)
+            val dummyList = javax.swing.JList<Any?>()
+            val componentA = renderer.getListCellRendererComponent(dummyList, "model-a", 0, false, false) as javax.swing.JLabel
+            assertEquals("model-a (installed)", componentA.text)
+            val componentB = renderer.getListCellRendererComponent(dummyList, "model-b", 1, false, false) as javax.swing.JLabel
+            assertEquals("model-b", componentB.text)
         }
 
         // Clean up

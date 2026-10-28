@@ -174,6 +174,17 @@ data class SpeechSettings(
         return !manager.isInstalled(voskBuiltinModel)
     }
 
+    fun voskBuiltinModelDisplayLabel(modelName: String): String {
+        val model = VoskModelManager.MODELS_BY_NAME[modelName]
+        val baseLabel = model?.label ?: modelName
+        val installed = modelManager?.isInstalled(modelName) == true
+        return if (installed) {
+            "$baseLabel ✓ (installed)"
+        } else {
+            baseLabel
+        }
+    }
+
     fun downloadSelectedModelEnabled(): Boolean {
         val manager = modelManager ?: return true
         return !manager.isDownloading(voskBuiltinModel)

@@ -2,6 +2,7 @@ package com.github.ahatem.qtranslate.ui.swing.settings.panels
 
 import com.formdev.flatlaf.util.UIScale
 import com.github.ahatem.qtranslate.ui.swing.shared.util.clearBorder
+import com.github.ahatem.qtranslate.ui.swing.shared.widgets.DisplayValueRenderer
 import com.github.ahatem.qtranslate.api.plugin.PluginSettings
 import com.github.ahatem.qtranslate.core.localization.LocalizationManager
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
@@ -582,6 +583,27 @@ class DynamicPluginSettingsDialog(
 
             is DropdownSetting -> {
                 val cb = JComboBox(setting.options.toTypedArray()).apply {
+                    val instance = settingsInstance
+                    if (instance != null) {
+                        val rendererMethod = runCatching {
+                            instance::class.java.getDeclaredMethod(setting.propertyName + "DisplayLabel", String::class.java)
+                        }.getOrNull()
+                        if (rendererMethod != null) {
+                            rendererMethod.isAccessible = true
+                            renderer = DisplayValueRenderer<String>(
+                                text = { option ->
+                                    if (option == null) "" else {
+                                        runCatching { rendererMethod.invoke(instance, option) as? String }
+                                            .onFailure { e ->
+                                                System.err.println("DynamicPluginSettingsDialog: displayLabel for '${setting.propertyName}' failed: ${e.message}")
+                                            }
+                                            .getOrNull() ?: option
+                                    }
+                                }
+                            )
+                        }
+                    }
+
                     selectedItem = setting.currentValue
                     preferredSize = null
                     maximumSize = Dimension(Int.MAX_VALUE, preferredSize?.height ?: 28)
