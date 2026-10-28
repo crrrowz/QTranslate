@@ -187,6 +187,27 @@ class VoskModelManager(
         return false
     }
 
+    /**
+     * Infers the language tag (e.g. "ar", "en", "de") for a given model directory.
+     * Looks for model-info.json first, then known catalogue models, then name pattern (E1).
+     */
+    fun inferLanguageFromModelDir(dir: File): String {
+        val meta = File(dir, "model-info.json")
+        if (meta.isFile) {
+            val content = runCatching { meta.readText() }.getOrNull().orEmpty()
+            val match = Regex(""""language"\s*:\s*"([^"]+)"""").find(content)
+            if (match != null) return match.groupValues[1].lowercase()
+        }
+        val known = MODELS_BY_NAME[dir.name]
+        if (known != null) return known.language
+
+        // Regex pattern: vosk-model[-small]-<lang>-... or vosk-model-<lang>
+        val match = Regex("""vosk-model(?:-small)?-([a-z]{2,3}(?:-[a-z]{2})?)""", RegexOption.IGNORE_CASE).find(dir.name)
+        if (match != null) return match.groupValues[1].lowercase()
+
+        return "unknown"
+    }
+
     fun listInstalledModels(): List<File> {
         val localList = if (modelsDirectory.exists() && modelsDirectory.isDirectory) {
             modelsDirectory.listFiles { file -> file.isValidModelDir() }?.toList() ?: emptyList()
@@ -218,8 +239,8 @@ class VoskModelManager(
             val preferredDir = File(modelsDirectory, preferredModelName).takeIf { it.isValidModelDir() }
                 ?: File(persistentModelsDirectory, preferredModelName).takeIf { it.isValidModelDir() }
             if (preferredDir != null) {
-                val info = MODELS_BY_NAME[preferredModelName]
-                if (info == null || isAuto || info.language == lang) {
+                val preferredLang = inferLanguageFromModelDir(preferredDir)
+                if (isAuto || preferredLang == lang || preferredLang.startsWith(lang)) {
                     return preferredDir
                 }
             }
@@ -227,32 +248,35 @@ class VoskModelManager(
 
         val installed = listInstalledModels()
         if (isAuto) {
+            // C5: If preferred model is installed, use its language for Auto
+            if (!preferredModelName.isNullOrBlank()) {
+                val preferredDir = File(modelsDirectory, preferredModelName).takeIf { it.isValidModelDir() }
+                    ?: File(persistentModelsDirectory, preferredModelName).takeIf { it.isValidModelDir() }
+                if (preferredDir != null) return preferredDir
+            }
+
             // Check if an installed model matches the system locale language first
             val systemLang = java.util.Locale.getDefault().language.lowercase()
             if (systemLang.isNotEmpty()) {
                 val sysModel = installed.firstOrNull { dir ->
-                    val info = MODELS_BY_NAME[dir.name]
-                    info?.language == systemLang || dir.name.contains("-$systemLang-") || dir.name.endsWith("-$systemLang")
+                    inferLanguageFromModelDir(dir) == systemLang
                 }
                 if (sysModel != null) return sysModel
             }
 
             // Otherwise prioritize English model if installed
             val enModel = installed.firstOrNull { dir ->
-                val info = MODELS_BY_NAME[dir.name]
-                info?.language == "en" || dir.name.contains("-en-") || dir.name.endsWith("-en")
+                inferLanguageFromModelDir(dir) == "en"
             }
             if (enModel != null) return enModel
 
-            // Otherwise pick the first installed model alphabetically
             return installed.minByOrNull { it.name }
         }
 
-        val matchingInstalled = installed.firstOrNull { dir ->
-            val info = MODELS_BY_NAME[dir.name]
-            info?.language == lang || dir.name.contains("-$lang-") || dir.name.endsWith("-$lang")
+        return installed.firstOrNull { dir ->
+            val inferred = inferLanguageFromModelDir(dir)
+            inferred == lang || inferred.startsWith(lang)
         }
-        return matchingInstalled
     }
 
     /**
@@ -739,6 +763,16 @@ class VoskModelManager(
 
         val MODELS_BY_NAME: Map<String, VoskModel> = AVAILABLE_MODELS.associateBy { it.name }
         const val DEFAULT_MODEL_NAME = "vosk-model-small-en-us-0.15"
+
+        /**
+         * E3: Default to the catalogue's small model for the system language when one exists,
+         * otherwise English small.
+         */
+        fun defaultModelForSystem(systemLang: String = java.util.Locale.getDefault().language.lowercase()): String {
+            val matchingSmall = AVAILABLE_MODELS.firstOrNull { it.language == systemLang && !it.isLarge }
+                ?: AVAILABLE_MODELS.firstOrNull { it.language == systemLang }
+            return matchingSmall?.name ?: DEFAULT_MODEL_NAME
+        }
 
         const val DROPDOWN_OPTIONS: String =
             "vosk-model-small-en-us-0.15,vosk-model-en-us-0.22-lgraph,vosk-model-ar-mgb2-0.4,vosk-model-ar-0.22-linto-1.1.0,vosk-model-small-de-0.15,vosk-model-small-fr-0.22,vosk-model-small-es-0.42,vosk-model-small-it-0.22,vosk-model-small-ru-0.22,vosk-model-small-tr-0.3,vosk-model-small-pt-0.3,vosk-model-small-ja-0.22,vosk-model-small-cn-0.22,vosk-model-small-uk-v3-nano"

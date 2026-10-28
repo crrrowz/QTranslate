@@ -54,7 +54,7 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             apiKey = context.secrets.get(KEY_API_KEY).orEmpty(),
             model = context.settings.getString(KEY_MODEL).orEmpty(),
             liveEngine = if (resolvedMode == MODE_LOCAL && rawLiveEngine == LIVE_OFF) LIVE_VOSK_BUILTIN else rawLiveEngine,
-            voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.DEFAULT_MODEL_NAME,
+            voskBuiltinModel = context.settings.getString(KEY_VOSK_BUILTIN_MODEL) ?: VoskModelManager.defaultModelForSystem(),
             liveModel = context.settings.getString(KEY_LIVE_MODEL).orEmpty(),
             liveApiKey = context.secrets.get(KEY_LIVE_API_KEY).orEmpty()
         ).apply {

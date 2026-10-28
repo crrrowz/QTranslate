@@ -127,7 +127,7 @@ data class SpeechSettings(
     @field:Setting(
         label = "Built-in model",
         description = "Model for built-in Vosk engine. Click 'Download Model' to fetch it from alphacephei.com.",
-        type = SettingType.DROPDOWN,
+        editable = true,
         options = VoskModelManager.DROPDOWN_OPTIONS,
         defaultValue = VoskModelManager.DEFAULT_MODEL_NAME,
         group = "live",
@@ -185,8 +185,14 @@ data class SpeechSettings(
 
     fun voskBuiltinModelDisplayLabel(modelName: String): String {
         val model = VoskModelManager.MODELS_BY_NAME[modelName]
-        val baseLabel = model?.label ?: modelName
         val installed = modelManager?.isInstalled(modelName) == true
+        val baseLabel = if (model != null) {
+            model.label
+        } else {
+            val dir = java.io.File(modelManager?.modelsDirectory, modelName)
+            val lang = modelManager?.inferLanguageFromModelDir(dir) ?: "custom"
+            "$modelName ($lang)"
+        }
         return if (installed) {
             SpeechLocalization.get("installed_marker", baseLabel)
         } else {

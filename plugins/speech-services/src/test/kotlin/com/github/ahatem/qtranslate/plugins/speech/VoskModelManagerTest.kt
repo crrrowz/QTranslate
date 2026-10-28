@@ -159,6 +159,29 @@ class VoskModelManagerTest {
     }
 
     @Test
+    fun `inferLanguageFromModelDir extracts language from pattern or model-info json`() {
+        val manager = VoskModelManager(dataDirectory = { tempDir })
+
+        val standardDir = File(manager.modelsDirectory, "vosk-model-small-ja-0.22").apply { mkdirs() }
+        assertEquals("ja", manager.inferLanguageFromModelDir(standardDir))
+
+        val customDir = File(manager.modelsDirectory, "my-custom-model").apply { mkdirs() }
+        File(customDir, "model-info.json").writeText("""{"language":"es","description":"custom spanish"}""")
+        assertEquals("es", manager.inferLanguageFromModelDir(customDir))
+
+        val fallbackDir = File(manager.modelsDirectory, "unrecognized").apply { mkdirs() }
+        assertEquals("unknown", manager.inferLanguageFromModelDir(fallbackDir))
+    }
+
+    @Test
+    fun `defaultModelForSystem selects small catalogue model for system locale`() {
+        assertEquals("vosk-model-small-de-0.15", VoskModelManager.defaultModelForSystem("de"))
+        assertEquals("vosk-model-small-fr-0.22", VoskModelManager.defaultModelForSystem("fr"))
+        assertEquals("vosk-model-ar-mgb2-0.4", VoskModelManager.defaultModelForSystem("ar"))
+        assertEquals("vosk-model-small-en-us-0.15", VoskModelManager.defaultModelForSystem("unknown"))
+    }
+
+    @Test
     fun `model manager detects installed models and resolves for language`() {
         val isolatedDir = File(tempDir, "isolated").apply { mkdirs() }
         val manager = VoskModelManager(dataDirectory = { tempDir }, persistentDirectoryProvider = { isolatedDir })
