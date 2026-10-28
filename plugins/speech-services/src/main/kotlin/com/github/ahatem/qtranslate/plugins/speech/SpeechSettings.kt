@@ -158,6 +158,9 @@ data class SpeechSettings(
     @Transient
     var modelManager: VoskModelManager? = null
 
+    @Transient
+    var onModelSelectionApplied: ((String) -> Unit)? = null
+
     @PluginAction(
         label = "Download Model",
         group = "live",
@@ -166,7 +169,11 @@ data class SpeechSettings(
     )
     fun downloadSelectedModel(): String? {
         val manager = modelManager ?: return "Model manager not initialized."
-        return manager.downloadAction(voskBuiltinModel)
+        val result = manager.downloadAction(voskBuiltinModel)
+        if (manager.isInstalled(voskBuiltinModel)) {
+            onModelSelectionApplied?.invoke(voskBuiltinModel)
+        }
+        return result
     }
 
     fun downloadSelectedModelVisible(): Boolean {
@@ -212,10 +219,7 @@ data class SpeechSettings(
         return manager.importModelInteractive()
     }
 
-    fun importModelVisible(): Boolean {
-        val manager = modelManager ?: return true
-        return !manager.isInstalled(voskBuiltinModel)
-    }
+    fun importModelVisible(): Boolean = true
 
     @PluginAction(
         label = "Delete Model",

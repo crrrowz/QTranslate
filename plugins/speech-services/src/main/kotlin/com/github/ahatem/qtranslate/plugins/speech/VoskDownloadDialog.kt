@@ -23,10 +23,52 @@ class VoskDownloadController {
     val isPaused = AtomicBoolean(false)
     val isCancelled = AtomicBoolean(false)
     val isFinished = AtomicBoolean(false)
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+    private val pauseLock: java.lang.Object = java.lang.Object()
 
-    fun pause() { isPaused.set(true) }
-    fun resume() { isPaused.set(false) }
-    fun cancel() { isCancelled.set(true) }
+    fun pause() {
+        isPaused.set(true)
+    }
+
+    fun resume() {
+        isPaused.set(false)
+        synchronized(pauseLock) {
+            pauseLock.notifyAll()
+        }
+    }
+
+    fun cancel() {
+        isCancelled.set(true)
+        synchronized(pauseLock) {
+            pauseLock.notifyAll()
+        }
+    }
+
+    /**
+     * Waits efficiently while [isPaused] is true, without busy-spinning CPU.
+     * Returns false if cancelled or if wait timed out.
+     */
+    fun waitIfPaused(maxWaitMillis: Long = 300_000L): Boolean {
+        if (!isPaused.get() || isCancelled.get()) return !isCancelled.get()
+        val deadline = System.currentTimeMillis() + maxWaitMillis
+        synchronized(pauseLock) {
+            while (isPaused.get() && !isCancelled.get()) {
+                val remaining = deadline - System.currentTimeMillis()
+                if (remaining <= 0) {
+                    cancel()
+                    return false
+                }
+                try {
+                    pauseLock.wait(remaining.coerceAtMost(1_000L))
+                } catch (e: InterruptedException) {
+                    cancel()
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+        }
+        return !isCancelled.get()
+    }
 }
 
 /**

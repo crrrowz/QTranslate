@@ -437,8 +437,8 @@ class VoskModelManager(
 
             while (!controller.isCancelled.get() && (totalLength <= 0 || downloaded < totalLength)) {
                 if (controller.isPaused.get()) {
-                    Thread.sleep(200)
-                    continue
+                    val resumed = controller.waitIfPaused()
+                    if (!resumed) break
                 }
 
                 downloaded = if (partFile.exists()) partFile.length() else 0L
@@ -566,6 +566,15 @@ class VoskModelManager(
 
         if (isDownloading(model.name)) {
             return "Model '${model.label}' is already being downloaded."
+        }
+
+        // A6: Check free disk space before downloading (~2.5x archive size)
+        val requiredBytes = (model.sizeBytes * 2.5).toLong()
+        val usableBytes = modelsDirectory.usableSpace
+        if (usableBytes > 0 && usableBytes < requiredBytes) {
+            val reqMb = requiredBytes / (1024 * 1024)
+            val availMb = usableBytes / (1024 * 1024)
+            return SpeechLocalization.get("disk_space_error", model.label, "${reqMb}MB", "${availMb}MB")
         }
 
         val controller = VoskDownloadController()

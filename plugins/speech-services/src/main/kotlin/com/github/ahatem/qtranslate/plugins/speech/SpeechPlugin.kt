@@ -58,6 +58,12 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             liveApiKey = context.secrets.get(KEY_LIVE_API_KEY).orEmpty()
         ).apply {
             this.modelManager = this@SpeechPlugin.modelManager
+            this.onModelSelectionApplied = { appliedModel ->
+                pluginScope?.launch {
+                    context.settings.put(KEY_VOSK_BUILTIN_MODEL, appliedModel)
+                }
+                this@SpeechPlugin.settings.voskBuiltinModel = appliedModel
+            }
         }
         return Ok(Unit)
     }
@@ -90,6 +96,12 @@ class SpeechPlugin : Plugin<SpeechSettings> {
             liveApiKey = settings.liveApiKey.trim()
         ).apply {
             this.modelManager = this@SpeechPlugin.modelManager
+            this.onModelSelectionApplied = { appliedModel ->
+                pluginScope?.launch {
+                    context.settings.put(KEY_VOSK_BUILTIN_MODEL, appliedModel)
+                }
+                this@SpeechPlugin.settings.voskBuiltinModel = appliedModel
+            }
         }
         // A missing key is fine to save (the user may add it later); an unusable URL is not.
         cleaned.urlError()?.let { return Err(ServiceError.ValidationError(it.message)) }
@@ -164,7 +176,7 @@ class SpeechRecognitionService(
     private val builtinLive: VoskBuiltinService? = null,
     private val settings: () -> SpeechSettings
 ) : SpeechRecognizer {
-    override val metadata: ServiceMetadata get() = ServiceMetadata(requiresConfiguration = settings().mode == MODE_CLOUD)
+    override val metadata: ServiceMetadata get() = ServiceMetadata(requiresConfiguration = true)
     override val key: String = "speech"
     override val version: String = "1.0.0"
     override val iconPath: String = "assets/speech.svg"
