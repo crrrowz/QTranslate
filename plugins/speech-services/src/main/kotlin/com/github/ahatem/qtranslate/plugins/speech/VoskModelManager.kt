@@ -51,6 +51,8 @@ class VoskModelManager(
 
     fun isDownloading(modelName: String): Boolean = activeDownloads.contains(modelName)
 
+    fun currentlyDownloadingModel(): String? = activeDownloads.firstOrNull()
+
     val modelsDirectory: File
         get() = File(dataDirectory(), "vosk-models").apply { if (!exists()) mkdirs() }
 

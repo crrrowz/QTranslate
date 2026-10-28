@@ -174,6 +174,22 @@ data class SpeechSettings(
         return !manager.isInstalled(voskBuiltinModel)
     }
 
+    fun downloadSelectedModelEnabled(): Boolean {
+        val manager = modelManager ?: return true
+        return !manager.isDownloading(voskBuiltinModel)
+    }
+
+    fun downloadSelectedModelLabel(): String {
+        val manager = modelManager ?: return "Download Model"
+        val downloading = manager.currentlyDownloadingModel()
+        return if (downloading != null) {
+            val label = VoskModelManager.MODELS_BY_NAME[downloading]?.label ?: downloading
+            "Downloading ($label)..."
+        } else {
+            "Download Model"
+        }
+    }
+
     @PluginAction(
         label = "Import Model",
         group = "live",

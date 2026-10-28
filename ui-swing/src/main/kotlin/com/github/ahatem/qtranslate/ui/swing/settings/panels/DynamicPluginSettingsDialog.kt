@@ -317,6 +317,8 @@ class DynamicPluginSettingsDialog(
         var copy = runCatching {
             val ctor = instance::class.java.getDeclaredConstructor().apply { isAccessible = true }
             ctor.newInstance()
+        }.onFailure { e ->
+            System.err.println("DynamicPluginSettingsDialog: constructor createWorkingCopy failed: ${e.message}")
         }.getOrNull()
 
         if (copy == null) {
@@ -329,6 +331,8 @@ class DynamicPluginSettingsDialog(
                     args[paramCount - 2] = -1
                     copyDefault.invoke(null, *args) as? PluginSettings.Configurable
                 } else null
+            }.onFailure { e ->
+                System.err.println("DynamicPluginSettingsDialog: copy\$default createWorkingCopy failed: ${e.message}")
             }.getOrNull()
         }
 
@@ -342,6 +346,8 @@ class DynamicPluginSettingsDialog(
                 runCatching {
                     field.isAccessible = true
                     field.set(target, field.get(instance))
+                }.onFailure { e ->
+                    System.err.println("DynamicPluginSettingsDialog: failed to copy field '${field.name}': ${e.message}")
                 }
             }
             clazz = clazz.superclass
@@ -361,6 +367,8 @@ class DynamicPluginSettingsDialog(
                         c = c.superclass
                     }
                 }
+            }.onFailure { e ->
+                System.err.println("DynamicPluginSettingsDialog: failed to apply on-screen value for '$propName': ${e.message}")
             }
         }
 
@@ -701,11 +709,49 @@ class DynamicPluginSettingsDialog(
                 }.getOrNull()
                 if (predicateMethod != null) {
                     predicateMethod.isAccessible = true
-                    runCatching { predicateMethod.invoke(actionInstance) as? Boolean }.getOrNull() ?: true
+                    runCatching { predicateMethod.invoke(actionInstance) as? Boolean }
+                        .onFailure { e ->
+                            System.err.println("DynamicPluginSettingsDialog: predicate '${action.methodName}Visible' failed: ${e.message}")
+                        }
+                        .getOrNull() ?: true
                 } else true
             } else true
 
+            val predicateEnabled = if (actionInstance != null) {
+                val enabledMethod = runCatching {
+                    actionInstance::class.java.getDeclaredMethod(action.methodName + "Enabled")
+                }.getOrNull()
+                if (enabledMethod != null) {
+                    enabledMethod.isAccessible = true
+                    runCatching { enabledMethod.invoke(actionInstance) as? Boolean }
+                        .onFailure { e ->
+                            System.err.println("DynamicPluginSettingsDialog: predicate '${action.methodName}Enabled' failed: ${e.message}")
+                        }
+                        .getOrNull() ?: true
+                } else null
+            } else null
+
+            if (actionInstance != null) {
+                val labelMethod = runCatching {
+                    actionInstance::class.java.getDeclaredMethod(action.methodName + "Label")
+                }.getOrNull()
+                if (labelMethod != null) {
+                    labelMethod.isAccessible = true
+                    val customLabel = runCatching { labelMethod.invoke(actionInstance) as? String }
+                        .onFailure { e ->
+                            System.err.println("DynamicPluginSettingsDialog: label '${action.methodName}Label' failed: ${e.message}")
+                        }
+                        .getOrNull()
+                    if (customLabel != null) {
+                        btn.text = customLabel
+                    }
+                }
+            }
+
             btn.isVisible = ruleVisible && predicateVisible
+            if (predicateEnabled != null) {
+                btn.isEnabled = predicateEnabled
+            }
         }
 
         // Force layout update
@@ -937,6 +983,12 @@ class DynamicPluginSettingsDialog(
         onSave(values)
         dispose()
     }
+
+    fun getActionButton(actionMethodName: String): JButton? =
+        actionButtons.entries.firstOrNull { it.key.methodName == actionMethodName }?.value
+
+    fun getComponent(propertyName: String): JComponent? =
+        components[propertyName]?.component
 
     private fun applyErrorHighlight(comp: JComponent?) {
         val target = firstInputComponent(comp) ?: return
