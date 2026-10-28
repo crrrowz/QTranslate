@@ -93,7 +93,10 @@ class DeepgramLiveService(
             val normalizedModel = model.lowercase()
             if (lang == null || lang == "auto") {
                 if (MULTI_SUPPORTED_MODELS.none { normalizedModel.startsWith(it) }) {
-                    return ServiceError.ConfigurationError(SpeechLocalization.get("deepgram_unsupported_multi", model))
+                    return ServiceError.ConfigurationError(
+                        SpeechLocalization.get("deepgram_unsupported_multi", model),
+                        reason = ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
+                    )
                 }
             }
             return null

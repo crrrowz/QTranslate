@@ -815,12 +815,8 @@ class ConversationRecorder(
                         }
                         if (error is ServiceError.ConfigurationError) {
                             val msg = error.message
-                            val isModelOrLanguageMissing = msg.contains("model", ignoreCase = true) ||
-                                msg.contains("language", ignoreCase = true)
-                            val isSilent = !isModelOrLanguageMissing ||
-                                msg.contains("no accurate provider", ignoreCase = true) ||
-                                msg.contains("live text is off", ignoreCase = true)
-                            if (!isSilent) {
+                            val shouldShowNotice = error.reason == ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
+                            if (shouldShowNotice) {
                                 _state.update { it.copy(notice = RecorderNotice.LiveUnavailable(source, msg)) }
                             }
                         } else {

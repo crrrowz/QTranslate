@@ -94,9 +94,19 @@ public sealed class ServiceError {
      */
     public data class ConfigurationError(
         override val message: String,
-        override val cause: Throwable? = null
+        override val cause: Throwable? = null,
+        val reason: Reason = Reason.GENERIC
     ) : ServiceError() {
         override val isRetryable: Boolean = false
+
+        /** Typed reason categorising configuration failures without parsing human-readable text. */
+        public enum class Reason {
+            GENERIC,
+            /** A required offline model (or language model) is not installed on disk. */
+            MODEL_NOT_INSTALLED,
+            /** The engine or feature is disabled in settings, or no provider was configured. */
+            FEATURE_DISABLED
+        }
     }
 
     /**

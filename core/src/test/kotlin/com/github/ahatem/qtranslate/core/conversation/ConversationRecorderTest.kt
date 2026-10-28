@@ -203,7 +203,9 @@ class ConversationRecorderTest {
     fun `an unconfigured live recognizer falls back to cutting at pauses, silently`() = runBlocking {
         val mic = ScriptedDevice()
         val recorder = recorder(mic, ScriptedDevice(),
-            openLive = { Err(ServiceError.ConfigurationError("no live server set")) }) { Ok(SpeechRecognitionResponse("clip text")) }
+            openLive = { Err(ServiceError.ConfigurationError("Live text is off in Settings", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED)) }) {
+            Ok(SpeechRecognitionResponse("clip text"))
+        }
         recorder.start(options().copy(systemOutput = null))
         waitUntil { recorder.state.value.streams[AudioSource.MICROPHONE]?.state == StreamState.LIVE }
         mic.push(tone(1_000) + silence(1_000))
@@ -213,17 +215,40 @@ class ConversationRecorderTest {
     }
 
     @Test
-    fun `missing model configuration error shows visible notice`() = runBlocking {
+    fun `missing model configuration error shows visible notice even when message is in Arabic`() = runBlocking {
         val mic = ScriptedDevice()
+        val arabicMessage = "لا يوجد نموذج كلام منصّب للغة العربية"
         val recorder = recorder(mic, ScriptedDevice(),
-            openLive = { Err(ServiceError.ConfigurationError("No model installed for language 'ar'")) }) {
+            openLive = {
+                Err(
+                    ServiceError.ConfigurationError(
+                        message = arabicMessage,
+                        reason = ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
+                    )
+                )
+            }) {
             Ok(SpeechRecognitionResponse("clip text"))
         }
         recorder.start(options().copy(systemOutput = null, microphoneLanguage = LanguageCode("ar")))
         waitUntil { recorder.state.value.notice is RecorderNotice.LiveUnavailable }
         val notice = recorder.state.value.notice as RecorderNotice.LiveUnavailable
         assertEquals(AudioSource.MICROPHONE, notice.source)
-        assertTrue(notice.message.contains("No model installed"))
+        assertEquals(arabicMessage, notice.message)
+        recorder.stop()
+    }
+
+    @Test
+    fun `other runtime error still delegates to liveFailed and attempts reconnect`() = runBlocking {
+        val mic = ScriptedDevice()
+        val recorder = recorder(mic, ScriptedDevice(),
+            openLive = { Err(ServiceError.NetworkError("WebSocket connection refused")) }) {
+            Ok(SpeechRecognitionResponse("clip text"))
+        }
+        recorder.start(options().copy(systemOutput = null))
+        waitUntil { recorder.state.value.notice is RecorderNotice.LiveFailed }
+        val notice = recorder.state.value.notice as RecorderNotice.LiveFailed
+        assertEquals(AudioSource.MICROPHONE, notice.source)
+        assertTrue(notice.message.contains("WebSocket connection refused"))
         recorder.stop()
     }
 
