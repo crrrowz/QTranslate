@@ -15,6 +15,7 @@ import com.github.michaelbull.result.getError
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -169,9 +170,59 @@ class SpeechClientTest {
         assertEquals("http://gw:20128/v1/models", http.requests[0].url)
         assertEquals("Bearer k", http.requests[0].headers["Authorization"])
         assertEquals("http://gw:20128/v1/chat/completions", http.requests[1].url)
+    }
 
-        val wrong = client(FakeUploads(listOf(listing)), settings.copy(model = "gemini-typo")).testConnection().getError()
-        assertTrue(wrong is ServiceError.ConfigurationError && "groq/whisper-large-v3-turbo" in wrong.message, "lists what is offered")
+    @Test
+    fun `testConnection reports key rejected on 401`() = runBlocking {
+        val http = FakeUploads(listOf(Err(ServiceError.AuthenticationError("HTTP 401 Unauthorized"))))
+        val settings = SpeechSettings(provider = "OpenAI", apiKey = "bad-key", model = "whisper-1")
+        val err = client(http, settings).testConnection().getError()
+        assertNotNull(err)
+        assertTrue(err is ServiceError.AuthenticationError)
+        assertEquals(SpeechLocalization.get("test_key_rejected"), err.message)
+    }
+
+    @Test
+    fun `testConnection reports model unknown when listing excludes it`() = runBlocking {
+        val listing = Ok("""{"data":[{"id":"whisper-1"}]}""")
+        val http = FakeUploads(listOf(listing))
+        val settings = SpeechSettings(provider = "OpenAI", apiKey = "key", model = "nonexistent-model")
+        val err = client(http, settings).testConnection().getError()
+        assertNotNull(err)
+        assertTrue(err.message.contains("nonexistent-model"))
+    }
+
+    @Test
+    fun `testConnection reports model does not accept audio when clip upload fails with modality error`() = runBlocking {
+        val listing = Ok("""{"data":[{"id":"text-only-model"}]}""")
+        val clipErr = Err(ServiceError.ValidationError("The model 'text-only-model' does not support audio modality."))
+        val http = FakeUploads(listOf(listing, clipErr))
+        val settings = SpeechSettings(provider = "OpenAI", apiKey = "key", model = "text-only-model")
+        val err = client(http, settings).testConnection().getError()
+        assertNotNull(err)
+        assertEquals(SpeechLocalization.get("test_model_not_audio", "text-only-model"), err.message)
+    }
+
+    @Test
+    fun `testConnection reports server unreachable on network error`() = runBlocking {
+        val http = FakeUploads(listOf(Err(ServiceError.NetworkError("Connection refused"))))
+        val settings = SpeechSettings(provider = "OpenAI", apiKey = "key", model = "whisper-1")
+        val err = client(http, settings).testConnection().getError()
+        assertNotNull(err)
+        assertTrue(err is ServiceError.NetworkError)
+        assertTrue(err.message.contains("Connection refused"))
+    }
+
+    @Test
+    fun `non-format 400 error is not retried in plain json`() = runBlocking {
+        val http = FakeUploads(listOf(
+            Err(ServiceError.ValidationError("File size exceeds 25MB limit"))
+        ))
+        val client = client(http, SpeechSettings(provider = "OpenAI", apiKey = "sk", model = "whisper-1"))
+        val result = client.transcribe(SpeechRecognitionRequest(clip))
+
+        assertTrue(result.getError() != null)
+        assertEquals(1, http.requests.size, "Non-format 400 error must not trigger a retry")
     }
 
     @Test

@@ -37,4 +37,43 @@ class SpeechSettingsTest {
         val labelInstalled = settings.voskBuiltinModelDisplayLabel("vosk-model-small-en-us-0.15")
         kotlin.test.assertEquals("English (US) small ~40MB ✓ (installed)", labelInstalled)
     }
+
+    @Test
+    fun `effectiveLiveApiKey only falls back to accurate apiKey when vendors match`() {
+        // OpenAI accurate + OpenAI Realtime live -> matches vendor -> fallback permitted
+        val openAiSettings = SpeechSettings(
+            provider = "OpenAI",
+            apiKey = "openai-key",
+            liveEngine = LIVE_OPENAI,
+            liveApiKey = ""
+        )
+        kotlin.test.assertEquals("openai-key", openAiSettings.effectiveLiveApiKey)
+
+        // Groq accurate + Deepgram live -> vendors differ -> NO fallback
+        val mixedSettings = SpeechSettings(
+            provider = "Groq",
+            apiKey = "groq-key",
+            liveEngine = LIVE_DEEPGRAM,
+            liveApiKey = ""
+        )
+        kotlin.test.assertEquals("", mixedSettings.effectiveLiveApiKey)
+
+        // Deepgram accurate + Deepgram live -> matches vendor -> fallback permitted
+        val deepgramSettings = SpeechSettings(
+            provider = "Deepgram",
+            apiKey = "dg-key",
+            liveEngine = LIVE_DEEPGRAM,
+            liveApiKey = ""
+        )
+        kotlin.test.assertEquals("dg-key", deepgramSettings.effectiveLiveApiKey)
+
+        // Explicit liveApiKey always takes precedence regardless of vendor
+        val explicitSettings = SpeechSettings(
+            provider = "Groq",
+            apiKey = "groq-key",
+            liveEngine = LIVE_DEEPGRAM,
+            liveApiKey = "explicit-dg-key"
+        )
+        kotlin.test.assertEquals("explicit-dg-key", explicitSettings.effectiveLiveApiKey)
+    }
 }
