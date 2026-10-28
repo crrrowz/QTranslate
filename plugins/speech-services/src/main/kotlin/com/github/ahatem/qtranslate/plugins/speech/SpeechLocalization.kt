@@ -26,7 +26,14 @@ internal object SpeechLocalization {
         "disk_space_error" to "Not enough free disk space to download and extract '%s'. Required: ~%s, available: %s.",
         "installed_marker" to "%s ✓ (installed)",
         "download_model_button" to "Download Model",
-        "downloading_model_label" to "Downloading (%s)..."
+        "downloading_model_label" to "Downloading (%s)...",
+        "test_success" to "Connection test succeeded.",
+        "test_key_rejected" to "API key was rejected by the server.",
+        "test_model_unknown" to "The model '%s' is not recognized by the server.",
+        "test_model_not_audio" to "The model '%s' does not accept audio input.",
+        "test_server_unreachable" to "Could not reach server: %s",
+        "deepgram_unsupported_language" to "Deepgram model '%s' does not support language '%s'.",
+        "deepgram_unsupported_multi" to "Deepgram model '%s' does not support multilingual detection (auto)."
     )
 
     private val arabicStrings = mapOf(
@@ -49,7 +56,14 @@ internal object SpeechLocalization {
         "disk_space_error" to "لا توجد مساحة كافية على القرص لتنزيل وفك ضغط '%s'. المطلوب: ~%s، المتوفر: %s.",
         "installed_marker" to "%s ✓ (منصّب)",
         "download_model_button" to "تنزيل النموذج",
-        "downloading_model_label" to "جارٍ التنزيل (%s)..."
+        "downloading_model_label" to "جارٍ التنزيل (%s)...",
+        "test_success" to "نجح اختبار الاتصال.",
+        "test_key_rejected" to "تم رفض مفتاح API من قبل الخادم.",
+        "test_model_unknown" to "النموذج '%s' غير معروف لدى الخادم.",
+        "test_model_not_audio" to "النموذج '%s' لا يقبل المدخلات الصوتية.",
+        "test_server_unreachable" to "تعذر الوصول إلى الخادم: %s",
+        "deepgram_unsupported_language" to "نموذج Deepgram '%s' لا يدعم اللغة '%s'.",
+        "deepgram_unsupported_multi" to "نموذج Deepgram '%s' لا يدعم الكشف التلقائي المتعدد للغات."
     )
 
     fun get(key: String): String {

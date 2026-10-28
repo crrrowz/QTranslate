@@ -78,17 +78,26 @@ class SpeechClientTest {
     }
 
     @Test
-    fun `a server that refuses the verbose format is asked again in plain json`() = runBlocking {
+    fun `a server that refuses the verbose format is asked again in plain json and remembers capability`() = runBlocking {
         val http = FakeUploads(listOf(
-            Err(ServiceError.InvalidInputError("response_format verbose_json is not supported")),
-            Ok("""{"text":"plain"}""")
+            Err(ServiceError.InvalidResponseError("response_format verbose_json is not supported")),
+            Ok("""{"text":"plain"}"""),
+            Ok("""{"text":"second"}""")
         ))
-        val result = client(http, SpeechSettings(provider = "Local Whisper server")).transcribe(SpeechRecognitionRequest(clip))
+        val client = client(http, SpeechSettings(provider = "Local Whisper server"))
+        val result = client.transcribe(SpeechRecognitionRequest(clip))
 
         assertEquals(listOf("verbose_json", "json"), http.requests.map { it.fields["response_format"] })
         assertEquals("http://localhost:8000/v1/audio/transcriptions", http.requests.first().url)
         assertTrue(http.requests.first().headers.isEmpty(), "no key, no Authorization header")
         assertEquals("plain", result.get()?.text)
+        assertEquals(2, http.requests.size)
+
+        // Subsequent call skips verbose_json and directly requests json
+        val secondResult = client.transcribe(SpeechRecognitionRequest(clip))
+        assertEquals("second", secondResult.get()?.text)
+        assertEquals(3, http.requests.size)
+        assertEquals("json", http.requests.last().fields["response_format"])
     }
 
     @Test
@@ -150,22 +159,39 @@ class SpeechClientTest {
     }
 
     @Test
-    fun `the connection test checks the model list instead of transcribing`() = runBlocking {
+    fun `the connection test checks the model list and sends silent clip`() = runBlocking {
         val listing = Ok("""{"data":[{"id":"antigravity/gemini-3.8-flash-tiered"},{"id":"groq/whisper-large-v3-turbo"}]}""")
+        val chatResponse = Ok("""{"choices":[{"message":{"content":"silence"}}]}""")
         val settings = SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://gw:20128/v1", apiKey = "k",
             model = "antigravity/gemini-3.8-flash-tiered")
-        val http = FakeUploads(listOf(listing))
+        val http = FakeUploads(listOf(listing, chatResponse))
         assertTrue(client(http, settings).testConnection().isOk)
-        assertEquals("http://gw:20128/v1/models", http.requests.single().url)
-        assertEquals("Bearer k", http.requests.single().headers["Authorization"])
+        assertEquals("http://gw:20128/v1/models", http.requests[0].url)
+        assertEquals("Bearer k", http.requests[0].headers["Authorization"])
+        assertEquals("http://gw:20128/v1/chat/completions", http.requests[1].url)
 
         val wrong = client(FakeUploads(listOf(listing)), settings.copy(model = "gemini-typo")).testConnection().getError()
         assertTrue(wrong is ServiceError.ConfigurationError && "groq/whisper-large-v3-turbo" in wrong.message, "lists what is offered")
     }
 
     @Test
+    fun `audio chat model response strips wrappers and refuses excuses`() = runBlocking {
+        val http = FakeUploads(listOf(Ok("""{"choices":[{"message":{"content":"Transcript: ```Hello world```"}}]}""")))
+        val client = client(http, SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://x/v1", model = "m"))
+        val result = client.transcribe(SpeechRecognitionRequest(clip)).get()
+        assertEquals("Hello world", result?.text)
+
+        val excuseHttp = FakeUploads(listOf(Ok("""{"choices":[{"message":{"content":"I cannot transcribe audio files as an AI."}}]}""")))
+        val excuseClient = client(excuseHttp, SpeechSettings(provider = "Audio chat model (OpenAI-compatible)", baseUrl = "http://x/v1", model = "m"))
+        val excuseError = excuseClient.transcribe(SpeechRecognitionRequest(clip)).getError()
+        assertTrue(excuseError is ServiceError.ValidationError)
+    }
+
+    @Test
     fun `a server without a model list still passes the connection test`() = runBlocking {
-        val http = FakeUploads(listOf(Err(ServiceError.ServiceUnavailableError("HTTP 404 for http://localhost:8000/v1/models"))))
+        val listingErr = Err(ServiceError.ServiceUnavailableError("HTTP 404 for http://localhost:8000/v1/models"))
+        val transcribeOk = Ok("""{"text":"hello"}""")
+        val http = FakeUploads(listOf(listingErr, transcribeOk))
         assertTrue(client(http, SpeechSettings(provider = "Local Whisper server")).testConnection().isOk)
     }
 

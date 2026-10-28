@@ -95,4 +95,14 @@ class DeepgramLiveTest {
         assertTrue(explicitQuery.contains("model=nova-2-general"))
         assertTrue(explicitQuery.contains("language=ar"))
     }
+
+    @Test
+    fun `deepgram live warns when multi language is unsupported by model`() = runBlocking {
+        val service = DeepgramLiveService {
+            SpeechSettings(apiKey = "key", liveApiKey = "key", liveModel = "enhanced")
+        }
+        val err = service.openSession(LanguageCode.AUTO).getError()
+        assertNotNull(err)
+        assertTrue(err.message.contains("enhanced") && err.message.contains("multi"))
+    }
 }

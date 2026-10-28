@@ -63,7 +63,14 @@ class DeepgramLiveService(
         }
         val lang = SpeechClient.primaryTag(language)
         val model = current.liveModel.trim().ifEmpty { "nova-3" }
-        return DeepgramLiveSession.open(key, lang, model)
+
+        // P7: Verify model supports language or multi
+        validateLanguageForModel(lang, model)?.let { return Err(it) }
+
+        val serverHost = current.baseUrl.trim().takeIf { it.isNotBlank() }?.let { url ->
+            runCatching { URI(url).host }.getOrNull()
+        }
+        return DeepgramLiveSession.open(key, lang, model, host = serverHost)
     }
 
     override suspend fun validate(): Result<Unit, ServiceError> {
@@ -73,7 +80,24 @@ class DeepgramLiveService(
             return Err(ServiceError.ConfigurationError("Deepgram live requires an API key. Set it in Settings > Plugins > Speech Recognition."))
         }
         val model = current.liveModel.trim().ifEmpty { "nova-3" }
-        return DeepgramLiveSession.ping(key, model)
+        val serverHost = current.baseUrl.trim().takeIf { it.isNotBlank() }?.let { url ->
+            runCatching { URI(url).host }.getOrNull()
+        }
+        return DeepgramLiveSession.ping(key, model, host = serverHost)
+    }
+
+    companion object {
+        private val MULTI_SUPPORTED_MODELS = setOf("nova-3", "nova-3-general", "nova-3-medical", "nova-2", "nova-2-general", "flux-general-multi")
+
+        fun validateLanguageForModel(lang: String?, model: String): ServiceError? {
+            val normalizedModel = model.lowercase()
+            if (lang == null || lang == "auto") {
+                if (MULTI_SUPPORTED_MODELS.none { normalizedModel.startsWith(it) }) {
+                    return ServiceError.ConfigurationError(SpeechLocalization.get("deepgram_unsupported_multi", model))
+                }
+            }
+            return null
+        }
     }
 }
 
@@ -172,9 +196,10 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
         }
     }
 
-    private suspend fun connect(apiKey: String, lang: String?, model: String): Result<Unit, ServiceError> {
+    private suspend fun connect(apiKey: String, lang: String?, model: String, host: String? = null): Result<Unit, ServiceError> {
         val query = buildDeepgramQuery(lang, model)
-        val uri = URI("wss://api.deepgram.com/v1/listen?$query")
+        val endpointHost = host?.takeIf { it.isNotBlank() } ?: "api.deepgram.com"
+        val uri = URI("wss://$endpointHost/v1/listen?$query")
         return try {
             socket = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
                 .newWebSocketBuilder()
@@ -183,20 +208,38 @@ class DeepgramLiveSession private constructor() : WebSocketLiveSession("Deepgram
                 .buildAsync(uri, listener).await()
             ready.await()
         } catch (e: Exception) {
-            Err(ServiceError.NetworkError("Could not connect to Deepgram live: ${e.cause?.message ?: e.message}", e))
+            val status = extractHttpStatus(e)
+            val errorMsg = when (status) {
+                401 -> "Deepgram live rejected API key (HTTP 401 Unauthorized)"
+                400 -> "Deepgram live rejected parameters or model '$model' (HTTP 400 Bad Request)"
+                else -> "Could not connect to Deepgram live: ${e.cause?.message ?: e.message}"
+            }
+            if (status == 401) {
+                Err(ServiceError.AuthenticationError(errorMsg))
+            } else {
+                Err(ServiceError.NetworkError(errorMsg, e))
+            }
         }
     }
 
+    private fun extractHttpStatus(e: Throwable): Int? {
+        val msg = e.message ?: e.cause?.message ?: return null
+        val match = Regex("""HTTP status code:? (\d{3})""", RegexOption.IGNORE_CASE).find(msg)
+            ?: Regex("""status:? (\d{3})""", RegexOption.IGNORE_CASE).find(msg)
+            ?: Regex("""\b(400|401|403|404|500|502|503)\b""").find(msg)
+        return match?.groupValues?.get(1)?.toIntOrNull()
+    }
+
     companion object {
-        suspend fun open(apiKey: String, lang: String?, model: String): Result<LiveSpeechSession, ServiceError> {
+        suspend fun open(apiKey: String, lang: String?, model: String, host: String? = null): Result<LiveSpeechSession, ServiceError> {
             val session = DeepgramLiveSession()
-            session.connect(apiKey, lang, model).getError()?.let { return Err(it) }
+            session.connect(apiKey, lang, model, host).getError()?.let { return Err(it) }
             return Ok(session)
         }
 
-        suspend fun ping(apiKey: String, model: String): Result<Unit, ServiceError> {
+        suspend fun ping(apiKey: String, model: String, host: String? = null): Result<Unit, ServiceError> {
             val session = DeepgramLiveSession()
-            val connectResult = session.connect(apiKey, "en", model)
+            val connectResult = session.connect(apiKey, "en", model, host)
             session.cancel()
             return connectResult
         }

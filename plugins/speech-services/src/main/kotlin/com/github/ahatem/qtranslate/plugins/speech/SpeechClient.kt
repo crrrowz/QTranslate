@@ -6,6 +6,7 @@ import com.github.ahatem.qtranslate.api.plugin.MultipartHttpClient
 import com.github.ahatem.qtranslate.api.plugin.MultipartPart
 import com.github.ahatem.qtranslate.api.plugin.PluginContext
 import com.github.ahatem.qtranslate.api.plugin.ServiceError
+import com.github.ahatem.qtranslate.api.speech.AudioEncoding
 import com.github.ahatem.qtranslate.api.speech.RecognizedWord
 import com.github.ahatem.qtranslate.api.speech.SpeechAudio
 import com.github.ahatem.qtranslate.api.speech.SpeechRecognitionRequest
@@ -65,28 +66,73 @@ class SpeechClient(
         val current = settings()
         if (current.speechProvider == SpeechProvider.NONE) return Ok(Unit)
         current.configurationError()?.let { return Err(it) }
-        if (current.speechProvider.protocol == SpeechProtocol.DEEPGRAM) {
-            return http.get("${current.effectiveBaseUrl}/projects", authorization(current, "Token")).map { }
+
+        // Step A: Fast /models or /projects check
+        val listingError = if (current.speechProvider.protocol == SpeechProtocol.DEEPGRAM) {
+            http.get("${current.effectiveBaseUrl}/projects", authorization(current, "Token")).getError()
+        } else {
+            val listing = http.get("${current.effectiveBaseUrl}/models", authorization(current, "Bearer"))
+            val err = listing.getError()
+            if (err != null) {
+                // Reachable without /models endpoint (e.g. self-hosted whisper servers)
+                if (err is ServiceError.InvalidResponseError || err.message.contains("404")) null else err
+            } else {
+                val ids = listing.get()?.let { body -> runCatching { modelIds(body) }.getOrNull() }.orEmpty()
+                if (ids.isNotEmpty() && current.effectiveModel !in ids) {
+                    ServiceError.ConfigurationError(
+                        SpeechLocalization.get("test_model_unknown", current.effectiveModel) +
+                            " (Offers: ${ids.take(8).joinToString()}${if (ids.size > 8) ", ..." else ""})"
+                    )
+                } else null
+            }
         }
-        val listing = http.get("${current.effectiveBaseUrl}/models", authorization(current, "Bearer"))
-        val error = listing.getError()
-        if (error != null) {
-            // Reachable but without a model list (some Whisper servers): nothing more to check.
-            return if (error is ServiceError.InvalidResponseError || error.message.startsWith("HTTP 404")) Ok(Unit) else Err(error)
+
+        if (listingError != null) {
+            return Err(classifyDiagnosticError(listingError, current.effectiveModel))
         }
-        val ids = listing.get()?.let { body -> runCatching { modelIds(body) }.getOrNull() }.orEmpty()
-        if (ids.isNotEmpty() && current.effectiveModel !in ids) {
-            return Err(ServiceError.ConfigurationError(
-                "Connected, but the server does not offer the model \"${current.effectiveModel}\". " +
-                    "It offers: ${ids.take(8).joinToString()}${if (ids.size > 8) ", ..." else ""}"
-            ))
+
+        // Step B: Send 1-second silent clip to verify model accepts audio
+        val uploads = http as? MultipartHttpClient
+            ?: return Ok(Unit) // If uploads not available, listing check is best effort
+
+        val silentAudio = SpeechAudio(silentWav(1000), AudioEncoding.WAV)
+        val testRequest = SpeechRecognitionRequest(audio = silentAudio, language = LanguageCode("en"))
+
+        val transcriptionResult = when (current.speechProvider.protocol) {
+            SpeechProtocol.OPENAI_COMPATIBLE -> openAi(uploads, current, testRequest, "en")
+            SpeechProtocol.DEEPGRAM -> deepgram(uploads, current, silentAudio, "en")
+            SpeechProtocol.CHAT_AUDIO -> chatAudio(uploads, current, testRequest, "en")
         }
+
+        val clipError = transcriptionResult.getError()
+        if (clipError != null) {
+            return Err(classifyDiagnosticError(clipError, current.effectiveModel))
+        }
+
         return Ok(Unit)
+    }
+
+    private fun classifyDiagnosticError(error: ServiceError, model: String): ServiceError {
+        val msg = error.message.lowercase()
+        return when {
+            error is ServiceError.AuthenticationError || msg.contains("401") || msg.contains("unauthorized") || msg.contains("invalid api key") ->
+                ServiceError.AuthenticationError(SpeechLocalization.get("test_key_rejected"))
+            msg.contains("model") && (msg.contains("not found") || msg.contains("does not exist") || msg.contains("unknown") || msg.contains("404")) ->
+                ServiceError.ConfigurationError(SpeechLocalization.get("test_model_unknown", model))
+            msg.contains("audio") || msg.contains("modality") || msg.contains("does not support") || msg.contains("invalid media") ->
+                ServiceError.ConfigurationError(SpeechLocalization.get("test_model_not_audio", model))
+            error is ServiceError.NetworkError || error is ServiceError.TimeoutError ->
+                ServiceError.NetworkError(SpeechLocalization.get("test_server_unreachable", error.message))
+            else -> error
+        }
     }
 
     // -------------------------------------------------------------------------------------------
     // OpenAI-compatible
     // -------------------------------------------------------------------------------------------
+
+    // Capability cache per (baseUrl, model) to remember if verbose_json was refused (P3)
+    private val verboseSupportedCache = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, Boolean>()
 
     private suspend fun openAi(
         uploads: MultipartHttpClient,
@@ -94,16 +140,26 @@ class SpeechClient(
         request: SpeechRecognitionRequest,
         language: String?
     ): Result<SpeechRecognitionResponse, ServiceError> {
-        // Word timings let the host replay a single word, but not every server offers the verbose
-        // format (gpt-4o-transcribe and some local servers reject it). One retry in the plain
-        // format keeps those working, just without timings.
+        val cacheKey = Pair(settings.effectiveBaseUrl, settings.effectiveModel)
+        val supportsVerbose = verboseSupportedCache[cacheKey] ?: true
+
+        if (!supportsVerbose) {
+            return openAiRequest(uploads, settings, request, language, verbose = false)
+        }
+
         val verbose = openAiRequest(uploads, settings, request, language, verbose = true)
         val error = verbose.getError() ?: return verbose
-        if (error is ServiceError.AuthenticationError || error is ServiceError.NetworkError ||
-            error is ServiceError.RateLimitError || error is ServiceError.TimeoutError
-        ) return verbose
-        logger.debug("Verbose transcription refused (${error.message}); retrying in plain JSON")
-        return openAiRequest(uploads, settings, request, language, verbose = false)
+        // Retry in plain JSON only for a "format not supported" 400 error, not for auth, not found, or server errors
+        val isFormatUnsupported = error is ServiceError.InvalidResponseError ||
+            (error is ServiceError.ValidationError && (error.message.contains("format", ignoreCase = true) || error.message.contains("verbose_json", ignoreCase = true))) ||
+            error.message.contains("400") && (error.message.contains("format", ignoreCase = true) || error.message.contains("response_format", ignoreCase = true) || error.message.contains("verbose", ignoreCase = true))
+
+        if (isFormatUnsupported) {
+            verboseSupportedCache[cacheKey] = false
+            logger.debug("Verbose transcription refused (${error.message}); cached and retrying in plain JSON")
+            return openAiRequest(uploads, settings, request, language, verbose = false)
+        }
+        return verbose
     }
 
     private suspend fun openAiRequest(
@@ -210,7 +266,38 @@ class SpeechClient(
             headers = authorization(settings, "Bearer")
         ).andThen { chatParser.parse(it) }.andThen { reply ->
             reply.error?.let { return@andThen Err(ServiceError.InvalidResponseError(it.message)) }
-            val text = reply.choices.firstOrNull()?.message?.content.orEmpty().trim().trim('"', '“', '”').trim()
+            var text = reply.choices.firstOrNull()?.message?.content.orEmpty().trim()
+
+            // P13: Strip markdown code fences if wrapped in ``` ... ```
+            if (text.startsWith("```") && text.endsWith("```")) {
+                text = text.removeSurrounding("```").substringAfter('\n').substringBeforeLast('\n').trim()
+            }
+
+            // Strip common conversational preamble labels
+            val prefixes = listOf(
+                "transcript:", "transcription:", "audio transcript:",
+                "here is the transcript:", "the transcript is:"
+            )
+            for (prefix in prefixes) {
+                if (text.startsWith(prefix, ignoreCase = true)) {
+                    text = text.substring(prefix.length).trim()
+                    break
+                }
+            }
+
+            // Strip surrounding quotes
+            text = text.trim('"', '“', '”', '\'', '`').trim()
+
+            // Refuse obvious non-transcripts (model apologizing or explaining instead of transcribing)
+            val nonTranscriptPatterns = listOf(
+                "i cannot transcribe", "i can't transcribe", "i am unable to transcribe",
+                "i'm unable to transcribe", "as an ai", "i cannot hear", "i can't hear",
+                "cannot process audio", "unable to process audio"
+            )
+            if (nonTranscriptPatterns.any { text.startsWith(it, ignoreCase = true) }) {
+                return@andThen Err(ServiceError.ValidationError("Model returned an explanation instead of a transcript: '$text'"))
+            }
+
             Ok(SpeechRecognitionResponse(text = text))
         }
     }

@@ -24,7 +24,7 @@ class VoskLiveService(
 ) : LiveSpeechRecognizer {
     constructor(settings: () -> SpeechSettings) : this(settings, null, null, null)
 
-    override val metadata = ServiceMetadata()
+    override val metadata: ServiceMetadata get() = ServiceMetadata(requiresConfiguration = true)
     override val key: String = "vosk-live"
     override val name: String
         get() = when (settings().liveEngine) {

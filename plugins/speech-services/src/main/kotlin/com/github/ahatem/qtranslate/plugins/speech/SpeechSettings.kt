@@ -255,7 +255,18 @@ data class SpeechSettings(
     val speechProvider: SpeechProvider
         get() = if (speechMode == SpeechMode.LOCAL) SpeechProvider.NONE else SpeechProvider.fromLabel(provider)
 
-    val effectiveLiveApiKey: String get() = liveApiKey.trim().ifEmpty { apiKey.trim() }
+    val effectiveLiveApiKey: String
+        get() {
+            val key = liveApiKey.trim()
+            if (key.isNotEmpty()) return key
+            // P5: only fall back to accurate apiKey if vendors match
+            val accurateMatchesVendor = when (liveEngine) {
+                LIVE_OPENAI -> speechProvider == SpeechProvider.OPENAI
+                LIVE_DEEPGRAM -> speechProvider == SpeechProvider.DEEPGRAM
+                else -> false
+            }
+            return if (accurateMatchesVendor) apiKey.trim() else ""
+        }
 
     val liveEnabled: Boolean
         get() = when (speechMode) {
@@ -298,7 +309,8 @@ data class SpeechSettings(
             )
         }
         urlError()?.let { return it }
-        if (effectiveModel.isEmpty()) {
+        // P9: Custom and Audio chat model require a model name
+        if (effectiveModel.isEmpty() || ((speechProvider == SpeechProvider.CUSTOM || speechProvider == SpeechProvider.CHAT_MODEL) && model.isBlank())) {
             return ServiceError.ConfigurationError(
                 "Speech Recognition needs a Model for ${speechProvider.label}. Set it in Settings > Plugins > Speech Recognition."
             )
