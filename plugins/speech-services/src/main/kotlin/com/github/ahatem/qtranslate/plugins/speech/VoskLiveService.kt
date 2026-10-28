@@ -55,28 +55,28 @@ class VoskLiveService(
     override suspend fun openSession(language: LanguageCode): Result<LiveSpeechSession, ServiceError> {
         val current = settings()
         if (current.mode == MODE_CLOUD) {
-            return Err(ServiceError.ConfigurationError("Live text is off in Cloud only mode.", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
+            return Err(ServiceError.ConfigurationError("Live text is off in Cloud only mode.", null, ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
         }
         if (current.mode == MODE_LOCAL && current.liveEngine != LIVE_VOSK_BUILTIN) {
-            return Err(ServiceError.ConfigurationError("Only local engines are allowed in Local only mode.", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
+            return Err(ServiceError.ConfigurationError("Only local engines are allowed in Local only mode.", null, ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
         }
         return when (current.liveEngine) {
             LIVE_VOSK_BUILTIN -> {
                 val builtin = builtinService
-                    ?: return Err(ServiceError.ConfigurationError("Built-in Vosk engine is not available.", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
+                    ?: return Err(ServiceError.ConfigurationError("Built-in Vosk engine is not available.", null, ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
                 builtin.openSession(language)
             }
             LIVE_DEEPGRAM -> {
                 val deepgram = deepgramService
-                    ?: return Err(ServiceError.ConfigurationError("Deepgram live engine is not available.", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
+                    ?: return Err(ServiceError.ConfigurationError("Deepgram live engine is not available.", null, ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
                 deepgram.openSession(language)
             }
             LIVE_OPENAI -> {
                 val openAi = openAiService
-                    ?: return Err(ServiceError.ConfigurationError("OpenAI Realtime engine is not available.", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
+                    ?: return Err(ServiceError.ConfigurationError("OpenAI Realtime engine is not available.", null, ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
                 openAi.openSession(language)
             }
-            else -> Err(ServiceError.ConfigurationError("Live text is off in Settings > Plugins > Speech Recognition.", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
+            else -> Err(ServiceError.ConfigurationError("Live text is off in Settings > Plugins > Speech Recognition.", null, ServiceError.ConfigurationError.Reason.FEATURE_DISABLED))
         }
     }
 

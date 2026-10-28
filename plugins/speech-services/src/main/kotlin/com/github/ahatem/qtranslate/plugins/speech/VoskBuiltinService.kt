@@ -202,7 +202,8 @@ override fun isModelInstalled(language: LanguageCode): Boolean =
                 ServiceError.ConfigurationError(
                     "No built-in Vosk model found for language '$lang' (${current.voskBuiltinModel}). " +
                         "Please download it in Settings > Plugins > Speech Recognition.",
-                    reason = ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
+                    null,
+                    ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
                 )
             )
 
@@ -248,7 +249,8 @@ override fun isModelInstalled(language: LanguageCode): Boolean =
                 ServiceError.ConfigurationError(
                     "No built-in Vosk model found for language '$lang' (${current.voskBuiltinModel}). " +
                         "Please download it in Settings > Plugins > Speech Recognition.",
-                    reason = ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
+                    null,
+                    ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
                 )
             )
 

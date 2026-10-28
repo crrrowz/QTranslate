@@ -203,7 +203,7 @@ class ConversationRecorderTest {
     fun `an unconfigured live recognizer falls back to cutting at pauses, silently`() = runBlocking {
         val mic = ScriptedDevice()
         val recorder = recorder(mic, ScriptedDevice(),
-            openLive = { Err(ServiceError.ConfigurationError("Live text is off in Settings", reason = ServiceError.ConfigurationError.Reason.FEATURE_DISABLED)) }) {
+            openLive = { Err(ServiceError.ConfigurationError("Live text is off in Settings", null, ServiceError.ConfigurationError.Reason.FEATURE_DISABLED)) }) {
             Ok(SpeechRecognitionResponse("clip text"))
         }
         recorder.start(options().copy(systemOutput = null))
@@ -222,8 +222,9 @@ class ConversationRecorderTest {
             openLive = {
                 Err(
                     ServiceError.ConfigurationError(
-                        message = arabicMessage,
-                        reason = ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
+                        arabicMessage,
+                        null,
+                        ServiceError.ConfigurationError.Reason.MODEL_NOT_INSTALLED
                     )
                 )
             }) {

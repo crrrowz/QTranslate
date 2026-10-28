@@ -94,9 +94,15 @@ public sealed class ServiceError {
      */
     public data class ConfigurationError(
         override val message: String,
-        override val cause: Throwable? = null,
-        val reason: Reason = Reason.GENERIC
+        override val cause: Throwable?,
+        val reason: Reason
     ) : ServiceError() {
+        /**
+         * Preserves binary compatibility for plugins compiled against older API versions
+         * that construct `ConfigurationError(message, cause)`.
+         */
+        public constructor(message: String, cause: Throwable? = null) : this(message, cause, Reason.GENERIC)
+
         override val isRetryable: Boolean = false
 
         /** Typed reason categorising configuration failures without parsing human-readable text. */
